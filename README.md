@@ -67,6 +67,7 @@ docker compose run --rm launcher up \
 ### docker run
 
 ```bash
+export IMAGE=ghcr.io/tomusdrw/github-deploy-bot:latest
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v deploybot-config:/config \
@@ -74,10 +75,37 @@ docker run --rm -it \
   up --image ghcr.io/tomusdrw/github-deploy-bot:latest
 ```
 
-Use `--data-volume`, `--config-volume`, `--container-name`, or repeat `--port`
-on first boot to change the defaults. The launcher stores a human-editable
+Use `--data-volume`, `--config-volume`, `--container-name`, repeat `--port`,
+`--no-port`, `--network`, or repeat `--env` at first boot to change the
+defaults. The port, network, and environment options can also intentionally
+update an existing launch configuration. The launcher stores a human-editable
 `run.json` and `deploybot.env` on the config volume; `deploybot.env` contains
 plaintext secrets, so it has the same sensitive trust boundary as `docker.sock`.
+
+### Reverse proxy
+
+If a Docker-aware reverse proxy routes containers using `VIRTUAL_HOST` and
+`VIRTUAL_PORT`, let it own external port exposure. For an nginx-proxy
+certificate companion, also set `LETSENCRYPT_HOST`. On first boot, omit the host
+port mapping and persist the proxy variables with the launcher:
+
+```bash
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v deploybot-config:/config \
+  "$IMAGE" up \
+  --image "$IMAGE" \
+  --no-port \
+  --env VIRTUAL_HOST=deploybot.example.com \
+  --env VIRTUAL_PORT=8080 \
+  --env LETSENCRYPT_HOST=deploybot.example.com
+```
+
+Add `--network your-proxy-network` when the proxy requires deploybot to join a
+specific Docker network. The `--env`, `--port`/`--no-port`, and `--network`
+options also update an existing launcher configuration without regenerating its
+secrets, so the same command repairs a first boot that failed because port 8080
+was already in use. These settings are retained for every self-update.
 
 The image ships `bash`, `tmux`, and the `docker` CLI so your deploy scripts,
 launcher, and browser terminal can call Docker against the host daemon through
