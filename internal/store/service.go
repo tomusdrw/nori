@@ -31,6 +31,28 @@ func (s *Store) GetService(ctx context.Context, id int64) (*Service, error) {
 	return scanService(row)
 }
 
+func (s *Store) GetServiceByName(ctx context.Context, name string) (*Service, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,created_at,updated_at
+		 FROM service WHERE name=?`, name)
+	return scanService(row)
+}
+
+func (s *Store) UpdateService(ctx context.Context, svc *Service) error {
+	svc.UpdatedAt = time.Now().UTC()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE service SET name=?, watched_image=?, policy=?, cron_expr=?, deploy_script=?, updated_at=?
+		 WHERE id=?`,
+		svc.Name, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript,
+		svc.UpdatedAt.Unix(), svc.ID)
+	return err
+}
+
+func (s *Store) DeleteService(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM service WHERE id=?`, id)
+	return err
+}
+
 func (s *Store) ListServices(ctx context.Context) ([]*Service, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,created_at,updated_at
