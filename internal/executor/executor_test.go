@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,27 @@ import (
 
 	"deploybot/internal/store"
 )
+
+// crlfScript is a valid Bash script carrying Windows (CRLF) line endings,
+// as a browser submits a <textarea>. Bash rejects the stray carriage
+// return before "do" unless newlines are normalized first.
+const crlfScript = "echo start\r\nfor i in 1 2 3; do\r\n  echo \"line $i\"\r\ndone\r\n"
+
+func TestValidateScript_AcceptsCRLFLineEndings(t *testing.T) {
+	if err := ValidateScript(context.Background(), crlfScript); err != nil {
+		t.Fatalf("CRLF script must validate after normalization: %v", err)
+	}
+}
+
+func TestOSRunner_RunsCRLFScript(t *testing.T) {
+	var out bytes.Buffer
+	if err := (OSRunner{}).Run(context.Background(), crlfScript, nil, &out, &out); err != nil {
+		t.Fatalf("Run CRLF script: %v (output=%q)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "line 2") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
 
 type fakeRunner struct {
 	err    error
