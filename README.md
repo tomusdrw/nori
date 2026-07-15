@@ -22,19 +22,48 @@ make build
 
 Open http://localhost:8080 and log in with your password.
 
-## Docker
+## Docker (recommended)
+
+The published image talks to the **host Docker daemon** via a mounted socket. This is
+intentional — deploybot orchestrates containers on the host by running your bash scripts
+(which call `docker`). The socket mount makes deploybot root-equivalent on that host, so
+keep auth enabled and put Cloudflare Access (or similar) in front.
+
+### Pull from GHCR
 
 ```bash
-docker build -t deploybot .
-docker run -d \
+docker pull ghcr.io/tomusdrw/github-deploy-bot:latest
+```
+
+### docker compose
+
+```bash
+cp .env.example .env
+# fill in DEPLOYBOT_KEY, DEPLOYBOT_SESSION_KEY, DEPLOYBOT_ADMIN_HASH
+docker compose up -d
+```
+
+Generate the admin password hash without a local Go install:
+
+```bash
+docker run --rm ghcr.io/tomusdrw/github-deploy-bot:latest hash-password 'your-password'
+```
+
+### docker run
+
+```bash
+docker run -d --name deploybot \
   -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v deploybot-data:/data \
   -e DEPLOYBOT_KEY \
   -e DEPLOYBOT_SESSION_KEY \
   -e DEPLOYBOT_ADMIN_HASH \
-  deploybot
+  ghcr.io/tomusdrw/github-deploy-bot:latest
 ```
+
+The image ships `bash` and the `docker` CLI so your deploy scripts can call `docker pull`,
+`docker run`, etc. against the host daemon through the mounted socket.
 
 ## Per-service contract
 

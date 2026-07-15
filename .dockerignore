@@ -1,0 +1,8 @@
+.git
+.github
+.context
+.superpowers
+bin/
+*.db
+*_templ.go
+docs/

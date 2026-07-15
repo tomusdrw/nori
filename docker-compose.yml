@@ -1,0 +1,22 @@
+services:
+  deploybot:
+    image: ghcr.io/tomusdrw/github-deploy-bot:latest
+    build: .
+    ports:
+      - "${DEPLOYBOT_PORT:-8080}:8080"
+    volumes:
+      # Required: gives deploybot root-equivalent control over host containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent SQLite DB and encrypted secrets.
+      - deploybot-data:/data
+    environment:
+      DEPLOYBOT_KEY: ${DEPLOYBOT_KEY:?set DEPLOYBOT_KEY}
+      DEPLOYBOT_SESSION_KEY: ${DEPLOYBOT_SESSION_KEY:?set DEPLOYBOT_SESSION_KEY}
+      DEPLOYBOT_ADMIN_HASH: ${DEPLOYBOT_ADMIN_HASH:?set DEPLOYBOT_ADMIN_HASH}
+      DEPLOYBOT_DB: /data/deploybot.db
+      DEPLOYBOT_LISTEN: ":8080"
+      DEPLOYBOT_POLL_INTERVAL: ${DEPLOYBOT_POLL_INTERVAL:-60s}
+    restart: unless-stopped
+
+volumes:
+  deploybot-data:
