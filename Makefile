@@ -1,4 +1,7 @@
-.PHONY: generate build test run tidy
+.PHONY: assets generate build test run tidy
+assets:
+	bun install --frozen-lockfile
+	bun run build:editor
 generate:
 	go run github.com/a-h/templ/cmd/templ@latest generate
 tidy: generate

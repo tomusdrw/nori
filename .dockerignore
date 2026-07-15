@@ -3,6 +3,7 @@
 .context
 .superpowers
 bin/
+node_modules/
 *.db
 *_templ.go
 docs/

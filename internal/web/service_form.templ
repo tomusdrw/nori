@@ -12,53 +12,120 @@ func formTitle(isEdit bool) string {
 }
 
 templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action string, errMsg string) {
-	<h1>{ formTitle(isEdit) }</h1>
-	if errMsg != "" {
-		<p style="color:#b00020">{ errMsg }</p>
-	}
-	<form method="post" action={ templ.SafeURL(action) }>
-		<input type="hidden" name="csrf_token" value={ csrf }/>
-		<label>Name</label>
-		if isEdit {
-			<input name="name" value={ form.Name } required readonly/>
-		} else {
-			<input name="name" value={ form.Name } required/>
-		}
-		<label>Watched image</label>
-		<input name="watched_image" value={ form.WatchedImage } required placeholder="ghcr.io/user/app:latest"/>
-		<label>Auto-deploy policy</label>
-		<select name="policy">
-			<option value="manual" selected?={ form.Policy == "manual" }>Manual</option>
-			<option value="immediate" selected?={ form.Policy == "immediate" }>Immediate</option>
-			<option value="scheduled" selected?={ form.Policy == "scheduled" }>Scheduled</option>
-		</select>
-		<label>Cron expression (for scheduled)</label>
-		<input name="cron_expr" value={ form.CronExpr } placeholder="0 3 * * *"/>
-		<label>Deploy script</label>
-		<textarea name="deploy_script" rows="12">{ form.DeployScript }</textarea>
-		<h3>Environment variables</h3>
-		for i, ev := range form.EnvVars {
-			<div>
-				<input name={ "env_key_" + itoa(i) } value={ ev.Key } placeholder="KEY"/>
-				<input name={ "env_val_" + itoa(i) } value={ ev.Value } placeholder="value"/>
-				<label><input type="checkbox" name={ "env_secret_" + itoa(i) } checked?={ ev.IsSecret }/> secret</label>
-			</div>
-		}
+	<div class="breadcrumb"><a href={ serviceBackURL(form, isEdit) }>← Back</a></div>
+	<section class="page-heading form-heading">
 		<div>
-			<input name={ "env_key_" + itoa(len(form.EnvVars)) } placeholder="KEY (new)"/>
-			<input name={ "env_val_" + itoa(len(form.EnvVars)) } placeholder="value (new)"/>
-			<label><input type="checkbox" name={ "env_secret_" + itoa(len(form.EnvVars)) }/> secret</label>
+			<p class="eyebrow">Configuration</p>
+			<h1>{ formTitle(isEdit) }</h1>
+			<p class="page-subtitle">Define what to watch and exactly how this service is deployed.</p>
 		</div>
-		<button type="submit">Save</button>
+	</section>
+	if errMsg != "" {
+		<div class="alert alert-error" role="alert">
+			<strong>Couldn’t save the service</strong>
+			<span>{ errMsg }</span>
+		</div>
+	}
+	<form id="service-form" method="post" action={ templ.SafeURL(action) } class="service-form">
+		<input type="hidden" name="csrf_token" value={ csrf }/>
+		<section class="panel form-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Service details</h2>
+					<p>The image and policy Deploy Bot should track.</p>
+				</div>
+				<span class="step-number">01</span>
+			</div>
+			<div class="form-grid">
+				<div class="field">
+					<label for="name">Service name</label>
+					if isEdit {
+						<input id="name" name="name" value={ form.Name } required readonly/>
+					} else {
+						<input id="name" name="name" value={ form.Name } required placeholder="analytics-api" pattern="[A-Za-z0-9][A-Za-z0-9._-]*"/>
+					}
+					<span class="field-help">Used for the <code>deploybot.service</code> container label.</span>
+				</div>
+				<div class="field">
+					<label for="watched-image">Watched image</label>
+					<input id="watched-image" name="watched_image" value={ form.WatchedImage } required placeholder="ghcr.io/you/app:latest"/>
+					<span class="field-help">The tag checked for newly published digests.</span>
+				</div>
+				<div class="field">
+					<label for="policy">Deployment policy</label>
+					<select id="policy" name="policy" data-policy-select>
+						<option value="manual" selected?={ form.Policy == "manual" }>Manual only</option>
+						<option value="immediate" selected?={ form.Policy == "immediate" }>Deploy immediately</option>
+						<option value="scheduled" selected?={ form.Policy == "scheduled" }>On a schedule</option>
+					</select>
+					<span class="field-help">Controls what happens when a new digest is found.</span>
+				</div>
+				<div class="field" data-cron-field>
+					<label for="cron-expr">Cron expression</label>
+					<input id="cron-expr" name="cron_expr" value={ form.CronExpr } placeholder="0 3 * * *"/>
+					<span class="field-help">For example, <code>0 3 * * *</code> deploys daily at 03:00.</span>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel editor-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Deployment script</h2>
+					<p>Runs verbatim with <code>$SERVICE</code> and <code>$TARGET_DIGEST</code> injected.</p>
+				</div>
+				<div class="panel-heading-actions">
+					<div class="editor-health" data-validation-status="bash"><span class="validation-dot"></span><span data-validation-message>Checking Bash…</span></div>
+					<span class="step-number">02</span>
+				</div>
+			</div>
+			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Pull, back up, and replace your containers here">{ form.DeployScript }</textarea>
+			<div class="editor-footer">
+				<span>Bash · syntax checked before save and deploy</span>
+				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>
+			</div>
+		</section>
+
+		<section class="panel editor-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Environment file</h2>
+					<p>Paste the complete contents of the service’s <code>.env</code> file.</p>
+				</div>
+				<div class="panel-heading-actions">
+					<div class="editor-health" data-validation-status="dotenv"><span class="validation-dot"></span><span data-validation-message>Checking .env…</span></div>
+					<span class="step-number">03</span>
+				</div>
+			</div>
+			<textarea class="code-editor" name="env_file" data-editor="dotenv" aria-label="Dotenv environment file" spellcheck="false" placeholder="# One complete .env file&#10;DATABASE_URL=postgres://...&#10;LOG_LEVEL=info">{ form.EnvFile }</textarea>
+			<div class="editor-footer">
+				<span class="secure-note">◆ The complete file is encrypted at rest</span>
+				<span>Dotenv syntax</span>
+			</div>
+		</section>
+
+		<div class="form-actions">
+			<a class="button button-secondary" href={ serviceBackURL(form, isEdit) }>Cancel</a>
+			<button class="button button-primary" type="submit">Save service</button>
+		</div>
 	</form>
 	if isEdit {
-		<form method="post" action={ templ.SafeURL("/services/" + form.Name + "/delete") } style="margin-top:1rem">
-			<input type="hidden" name="csrf_token" value={ csrf }/>
-			<button type="submit" onclick="return confirm('Delete this service?')">Delete service</button>
-		</form>
+		<section class="danger-zone">
+			<div>
+				<h2>Delete service</h2>
+				<p>Remove its configuration and deployment history from Deploy Bot.</p>
+			</div>
+			<form method="post" action={ templ.SafeURL("/services/" + form.Name + "/delete") }>
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<button class="button button-danger" type="submit" onclick="return confirm('Delete this service and its history?')">Delete service</button>
+			</form>
+		</section>
 	}
 }
 
-func itoa(i int) string {
-	return strconvItoa(i)
+func serviceBackURL(form ServiceFormData, isEdit bool) templ.SafeURL {
+	if isEdit {
+		return templ.SafeURL("/services/" + form.Name)
+	}
+	return "/"
 }

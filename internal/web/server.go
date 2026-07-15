@@ -3,9 +3,12 @@ package web
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +17,7 @@ import (
 
 	"deploybot/internal/auth"
 	"deploybot/internal/docker"
+	"deploybot/internal/envfile"
 	"deploybot/internal/executor"
 	"deploybot/internal/poller"
 	"deploybot/internal/store"
@@ -42,6 +46,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Get("/", s.handleDashboard)
 		r.Get("/partials/services", s.handleServicesPartial)
 		r.Get("/services/new", s.handleServiceNew)
+		r.Post("/validate/editor", s.handleEditorValidate)
 		r.Post("/services", s.handleServiceCreate)
 		r.Get("/services/{name}", s.handleServiceDetail)
 		r.Get("/services/{name}/edit", s.handleServiceEdit)
@@ -142,6 +147,10 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := parseServiceForm(r)
+	if err := validateServiceForm(r.Context(), form); err != nil {
+		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
+		return
+	}
 	svc := &store.Service{
 		Name:         form.Name,
 		WatchedImage: form.WatchedImage,
@@ -153,7 +162,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
 		return
 	}
-	if err := s.saveEnvVars(r.Context(), svc.ID, form.EnvVars); err != nil {
+	if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -183,6 +192,10 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := parseServiceForm(r)
+	if err := validateServiceForm(r.Context(), form); err != nil {
+		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+		return
+	}
 	svc.WatchedImage = form.WatchedImage
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
@@ -191,7 +204,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
 	}
-	if err := s.saveEnvVars(r.Context(), svc.ID, form.EnvVars); err != nil {
+	if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -280,7 +293,7 @@ func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, d.Log)
+	fmt.Fprint(w, html.EscapeString(d.Log))
 	if d.Status == store.DeployRunning || d.Status == store.DeployPending {
 		w.Header().Set("HX-Trigger", "continue")
 	}
@@ -312,7 +325,7 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		rc.Close()
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, b.String())
+	fmt.Fprint(w, html.EscapeString(b.String()))
 }
 
 func (s *Server) getServiceByName(w http.ResponseWriter, r *http.Request) (*store.Service, error) {
@@ -355,54 +368,71 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	return ServiceDetailData{
 		Service: form, State: state, Running: running, Latest: shortDigest(latest),
 		UpdateAvail: running != "" && latest != "" && running != latest,
-		Containers: cviews, Deployments: dviews,
+		Containers:  cviews, Deployments: dviews,
 	}, nil
 }
 
 func (s *Server) serviceToForm(ctx context.Context, svc *store.Service) (ServiceFormData, error) {
-	vars, err := s.store.ListEnvVars(ctx, svc.ID)
+	content, err := s.store.GetEnvFile(ctx, svc.ID)
 	if err != nil {
 		return ServiceFormData{}, err
 	}
-	var evs []EnvVarFormData
-	for _, v := range vars {
-		evs = append(evs, EnvVarFormData{Key: v.Key, Value: v.Value, IsSecret: v.IsSecret})
-	}
 	return ServiceFormData{
 		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
-		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvVars: evs,
+		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content,
 	}, nil
 }
 
-func (s *Server) saveEnvVars(ctx context.Context, serviceID int64, vars []EnvVarFormData) error {
-	for _, ev := range vars {
-		if ev.Key == "" {
-			continue
-		}
-		if err := s.store.SetEnvVar(ctx, &store.EnvVar{
-			ServiceID: serviceID, Key: ev.Key, Value: ev.Value, IsSecret: ev.IsSecret,
-		}); err != nil {
-			return err
-		}
+func parseServiceForm(r *http.Request) ServiceFormData {
+	return ServiceFormData{
+		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
+		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"),
+		DeployScript: r.FormValue("deploy_script"), EnvFile: r.FormValue("env_file"),
+	}
+}
+
+func validateServiceForm(ctx context.Context, form ServiceFormData) error {
+	if _, err := envfile.Parse(form.EnvFile); err != nil {
+		return fmt.Errorf("environment file: %w", err)
+	}
+	if err := executor.ValidateScript(ctx, form.DeployScript); err != nil {
+		return fmt.Errorf("deploy script: %w", err)
 	}
 	return nil
 }
 
-func parseServiceForm(r *http.Request) ServiceFormData {
-	form := ServiceFormData{
-		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
-		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"),
-		DeployScript: r.FormValue("deploy_script"),
+type editorValidation struct {
+	Valid   bool   `json:"valid"`
+	Message string `json:"message,omitempty"`
+	Line    int    `json:"line,omitempty"`
+}
+
+var validationLinePattern = regexp.MustCompile(`(?i)line[ :]+([0-9]+)`)
+
+func (s *Server) handleEditorValidate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	for i := 0; i < 50; i++ {
-		key := r.FormValue("env_key_" + strconv.Itoa(i))
-		if key == "" {
-			continue
+
+	var err error
+	switch r.FormValue("kind") {
+	case "bash":
+		err = executor.ValidateScript(r.Context(), r.FormValue("content"))
+	case "dotenv":
+		_, err = envfile.Parse(r.FormValue("content"))
+	default:
+		http.Error(w, "unknown editor kind", http.StatusBadRequest)
+		return
+	}
+
+	result := editorValidation{Valid: err == nil}
+	if err != nil {
+		result.Message = err.Error()
+		if match := validationLinePattern.FindStringSubmatch(result.Message); len(match) == 2 {
+			result.Line, _ = strconv.Atoi(match[1])
 		}
-		form.EnvVars = append(form.EnvVars, EnvVarFormData{
-			Key: key, Value: r.FormValue("env_val_" + strconv.Itoa(i)),
-			IsSecret: r.FormValue("env_secret_"+strconv.Itoa(i)) == "on",
-		})
 	}
-	return form
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,72 @@ func TestEnvVar_NonSecretPlaintext(t *testing.T) {
 	st.db.QueryRowContext(ctx, `SELECT value FROM env_var WHERE key='PORT'`).Scan(&raw)
 	if string(raw) != "8080" {
 		t.Fatalf("non-secret should be plaintext, got %q", raw)
+	}
+}
+
+func TestEnvFile_EncryptedAtRestAndRoundTrips(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	svc := &Service{Name: "app", WatchedImage: "x", Policy: PolicyManual}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+
+	content := "# production\nDB_PASSWORD=very-secret\nPORT=8080\n"
+	if err := st.SetEnvFile(ctx, svc.ID, content); err != nil {
+		t.Fatal(err)
+	}
+
+	var raw []byte
+	if err := st.db.QueryRowContext(ctx, `SELECT content FROM service_env WHERE service_id=?`, svc.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "very-secret") {
+		t.Fatal("env file stored in plaintext")
+	}
+
+	got, err := st.GetEnvFile(ctx, svc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != content {
+		t.Fatalf("GetEnvFile() = %q, want %q", got, content)
+	}
+}
+
+func TestEnvFile_ReadsLegacyPerVariableRows(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	svc := &Service{Name: "legacy", WatchedImage: "x", Policy: PolicyManual}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []*EnvVar{
+		{ServiceID: svc.ID, Key: "PORT", Value: "8080"},
+		{ServiceID: svc.ID, Key: "DB_PASSWORD", Value: "secret value", IsSecret: true},
+	} {
+		if err := st.SetEnvVar(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	content, err := st.GetEnvFile(ctx, svc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"PORT=8080", "DB_PASSWORD=\"secret value\""} {
+		if !strings.Contains(content, want) {
+			t.Errorf("converted dotenv file missing %q: %q", want, content)
+		}
+	}
+	if err := st.SetEnvFile(ctx, svc.ID, content); err != nil {
+		t.Fatal(err)
+	}
+	var legacyCount int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM env_var WHERE service_id=?`, svc.ID).Scan(&legacyCount); err != nil {
+		t.Fatal(err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("legacy env rows were not removed: %d", legacyCount)
 	}
 }

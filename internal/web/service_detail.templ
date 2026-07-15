@@ -5,58 +5,115 @@ templ ServiceDetailPage(data ServiceDetailData, csrf string) {
 }
 
 templ serviceDetailContent(data ServiceDetailData, csrf string) {
-	<h1>{ data.Service.Name }</h1>
-	<p>
-		State: <strong>{ data.State }</strong> |
-		Running: { data.Running } |
-		Latest: { data.Latest }
-		if data.UpdateAvail {
-			<span class="badge">update available</span>
-		}
-	</p>
-	<p>
-		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } style="display:inline">
-			<input type="hidden" name="csrf_token" value={ csrf }/>
-			<button type="submit">Deploy</button>
-		</form>
-		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/start") } style="display:inline">
-			<input type="hidden" name="csrf_token" value={ csrf }/>
-			<button type="submit">Start</button>
-		</form>
-		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/stop") } style="display:inline">
-			<input type="hidden" name="csrf_token" value={ csrf }/>
-			<button type="submit">Stop</button>
-		</form>
-		<a href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Edit</a>
-	</p>
-	<h2>Containers</h2>
-	<table>
-		<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
-		<tbody>
-			for _, c := range data.Containers {
-				<tr><td>{ c.Name }</td><td>{ c.Image }</td><td>{ c.State }</td></tr>
-			}
-		</tbody>
-	</table>
-	<h2>Container logs</h2>
-	<div class="log-box" hx-get={ templ.SafeURL("/services/" + data.Service.Name + "/logs/stream") } hx-trigger="load" hx-swap="innerHTML">
-		Loading logs...
+	<div class="breadcrumb"><a href="/">← All services</a></div>
+	<section class="detail-heading">
+		<div class="detail-title">
+			<div class="service-avatar service-avatar-large">{ serviceInitial(data.Service.Name) }</div>
+			<div>
+				<div class="detail-title-row">
+					<h1>{ data.Service.Name }</h1>
+					<span class={ "badge badge-state badge-state-" + data.State }><span class={ "status-dot status-" + data.State }></span>{ data.State }</span>
+				</div>
+				<p class="page-subtitle">{ data.Service.WatchedImage }</p>
+			</div>
+		</div>
+		<div class="action-row">
+			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/start") } class="inline-form">
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<button class="button button-secondary" type="submit">Start</button>
+			</form>
+			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/stop") } class="inline-form">
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<button class="button button-secondary" type="submit">Stop</button>
+			</form>
+			<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Configure</a>
+			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } class="inline-form">
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<button class="button button-primary" type="submit">Deploy latest</button>
+			</form>
+		</div>
+	</section>
+
+	if data.UpdateAvail {
+		<div class="update-banner">
+			<div><span class="update-icon">↗</span><strong>A newer image is ready</strong><span>The registry digest differs from the running version.</span></div>
+			<span class="badge badge-update">Update available</span>
+		</div>
+	}
+
+	<section class="stats-grid">
+		<div class="stat-card">
+			<span class="metric-label">Service state</span>
+			<strong><span class={ "status-dot status-" + data.State }></span>{ data.State }</strong>
+			<span class="stat-caption">Across all containers</span>
+		</div>
+		<div class="stat-card">
+			<span class="metric-label">Running digest</span>
+			<strong><code>{ data.Running }</code></strong>
+			<span class="stat-caption">Currently on the host</span>
+		</div>
+		<div class="stat-card">
+			<span class="metric-label">Latest digest</span>
+			<strong><code>{ data.Latest }</code></strong>
+			<span class="stat-caption">Published to the registry</span>
+		</div>
+	</section>
+
+	<div class="detail-grid">
+		<section class="panel detail-panel">
+			<div class="panel-heading compact-heading">
+				<div><h2>Containers</h2><p>Discovered through the service label.</p></div>
+				<span class="count-pill">{ strconvItoa(len(data.Containers)) }</span>
+			</div>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
+					<tbody>
+						if len(data.Containers) == 0 {
+							<tr><td colspan="3" class="empty-cell">No labeled containers found.</td></tr>
+						}
+						for _, c := range data.Containers {
+							<tr><td class="table-primary">{ c.Name }</td><td><code>{ c.Image }</code></td><td><span class={ "badge badge-state badge-state-" + c.State }><span class={ "status-dot status-" + c.State }></span>{ c.State }</span></td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</section>
+
+		<section class="panel detail-panel log-panel">
+			<div class="panel-heading compact-heading">
+				<div><h2>Container logs</h2><p>The latest 100 lines from each container.</p></div>
+				<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+			</div>
+			<pre class="log-box" hx-get={ templ.SafeURL("/services/" + data.Service.Name + "/logs/stream") } hx-trigger="load" hx-swap="innerHTML">Loading logs…</pre>
+		</section>
 	</div>
-	<h2>Deploy history</h2>
-	<table>
-		<thead><tr><th>ID</th><th>Trigger</th><th>Digest</th><th>Status</th><th>Started</th></tr></thead>
-		<tbody>
-			for _, d := range data.Deployments {
-				<tr>
-					<td><a href={ templ.SafeURL("/deployments/" + strconvItoa64(d.ID)) }>{ strconvItoa64(d.ID) }</a></td>
-					<td>{ d.Trigger }</td>
-					<td>{ shortDigest(d.TargetDigest) }</td>
-					<td>{ d.Status }</td>
-					<td>{ d.StartedAt }</td>
-				</tr>
-			}
-		</tbody>
-	</table>
+
+	<section class="panel detail-panel history-panel">
+		<div class="panel-heading compact-heading">
+			<div><h2>Deployment history</h2><p>Recent deploy attempts and their results.</p></div>
+			<span class="count-pill">{ strconvItoa(len(data.Deployments)) }</span>
+		</div>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Deployment</th><th>Trigger</th><th>Target</th><th>Status</th><th>Started</th></tr></thead>
+				<tbody>
+					if len(data.Deployments) == 0 {
+						<tr><td colspan="5" class="empty-cell">No deployments yet.</td></tr>
+					}
+					for _, d := range data.Deployments {
+						<tr>
+							<td class="table-primary"><a href={ templ.SafeURL("/deployments/" + strconvItoa64(d.ID)) }>#{ strconvItoa64(d.ID) }</a></td>
+							<td>{ d.Trigger }</td>
+							<td><code>{ shortDigest(d.TargetDigest) }</code></td>
+							<td><span class={ "badge badge-deploy badge-deploy-" + d.Status }>{ d.Status }</span></td>
+							<td>{ d.StartedAt }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	</section>
 }
 
 func strconvItoa64(i int64) string {
@@ -68,9 +125,17 @@ templ DeploymentPage(id int64, status string, log string, csrf string) {
 }
 
 templ deploymentContent(id int64, status string, log string) {
-	<h1>Deployment #{ strconvItoa64(id) }</h1>
-	<p>Status: <strong>{ status }</strong></p>
-	<div class="log-box" id="deploy-log" hx-get={ templ.SafeURL("/deployments/" + strconvItoa64(id) + "/stream") } hx-trigger="every 2s" hx-swap="innerHTML">
-		{ log }
-	</div>
+	<div class="breadcrumb"><a href="/">← Dashboard</a></div>
+	<section class="page-heading">
+		<div>
+			<p class="eyebrow">Deployment run</p>
+			<h1>Deployment #{ strconvItoa64(id) }</h1>
+			<p class="page-subtitle">Combined output from the deployment script.</p>
+		</div>
+		<span class={ "badge badge-deploy badge-deploy-" + status }>{ status }</span>
+	</section>
+	<section class="panel detail-panel log-panel deployment-log-panel">
+		<div class="panel-heading compact-heading"><div><h2>Output</h2><p>Refreshes automatically while the deployment is active.</p></div></div>
+		<pre class="log-box log-box-large" id="deploy-log" hx-get={ templ.SafeURL("/deployments/" + strconvItoa64(id) + "/stream") } hx-trigger="every 2s" hx-swap="innerHTML">{ log }</pre>
+	</section>
 }
