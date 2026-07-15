@@ -3,6 +3,8 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -22,6 +24,9 @@ type Container struct {
 
 type Client interface {
 	ListByService(ctx context.Context, service string) ([]Container, error)
+	Logs(ctx context.Context, containerID string, tail int) (io.ReadCloser, error)
+	StartByService(ctx context.Context, service string) error
+	StopByService(ctx context.Context, service string) error
 }
 
 type realClient struct{ cli *client.Client }
@@ -59,4 +64,42 @@ func (r *realClient) ListByService(ctx context.Context, service string) ([]Conta
 		out = append(out, Container{ID: c.ID, Name: name, Image: c.Image, Digest: digest, State: c.State})
 	}
 	return out, nil
+}
+
+func (r *realClient) Logs(ctx context.Context, containerID string, tail int) (io.ReadCloser, error) {
+	return r.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       strconv.Itoa(tail),
+	})
+}
+
+func (r *realClient) StartByService(ctx context.Context, service string) error {
+	cs, err := r.ListByService(ctx, service)
+	if err != nil {
+		return err
+	}
+	for _, c := range cs {
+		if c.State != "running" {
+			if err := r.cli.ContainerStart(ctx, c.ID, container.StartOptions{}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *realClient) StopByService(ctx context.Context, service string) error {
+	cs, err := r.ListByService(ctx, service)
+	if err != nil {
+		return err
+	}
+	for _, c := range cs {
+		if c.State == "running" {
+			if err := r.cli.ContainerStop(ctx, c.ID, container.StopOptions{}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
