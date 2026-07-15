@@ -21,6 +21,27 @@ func TestParseServiceFormReadsCompleteEnvFile(t *testing.T) {
 	}
 }
 
+func TestParseServiceFormNormalizesCRLFDeployScript(t *testing.T) {
+	// Browsers submit <textarea> content with CRLF newlines; the server
+	// must store LF so Bash can parse the script.
+	body := "name=app&watched_image=img&policy=manual&deploy_script=echo+ok%0D%0Afor+i+in+1+2%3B+do%0D%0A++echo+%24i%0D%0Adone&env_file=PORT%3D8080%0D%0A"
+	req := httptest.NewRequest("POST", "/services", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := req.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form := parseServiceForm(req)
+	if strings.Contains(form.DeployScript, "\r") {
+		t.Fatalf("DeployScript still contains CR: %q", form.DeployScript)
+	}
+	if form.DeployScript != "echo ok\nfor i in 1 2; do\n  echo $i\ndone" {
+		t.Fatalf("DeployScript = %q", form.DeployScript)
+	}
+	if strings.Contains(form.EnvFile, "\r") {
+		t.Fatalf("EnvFile still contains CR: %q", form.EnvFile)
+	}
+}
+
 func TestValidateServiceFormRejectsInvalidBash(t *testing.T) {
 	form := ServiceFormData{EnvFile: "PORT=8080\n", DeployScript: "if true; then\n  echo broken"}
 	err := validateServiceForm(context.Background(), form)

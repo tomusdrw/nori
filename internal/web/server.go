@@ -497,10 +497,14 @@ func (s *Server) serviceToForm(ctx context.Context, svc *store.Service) (Service
 }
 
 func parseServiceForm(r *http.Request) ServiceFormData {
+	// Browsers submit <textarea> content with CRLF newlines; normalize to
+	// LF so the stored script/env matches what was validated and what Bash
+	// can parse.
 	return ServiceFormData{
 		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
 		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"),
-		DeployScript: r.FormValue("deploy_script"), EnvFile: r.FormValue("env_file"),
+		DeployScript: executor.NormalizeNewlines(r.FormValue("deploy_script")),
+		EnvFile:      executor.NormalizeNewlines(r.FormValue("env_file")),
 	}
 }
 

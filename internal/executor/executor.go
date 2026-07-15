@@ -22,10 +22,20 @@ type CommandRunner interface {
 
 type OSRunner struct{}
 
+// NormalizeNewlines converts Windows (CRLF) and classic-Mac (CR) line
+// endings to Unix (LF). Browsers submit <textarea> content with CRLF
+// newlines, and Bash rejects a stray carriage return inside compound
+// commands (e.g. "do\r"), so scripts must be normalized before Bash
+// parses or runs them.
+func NormalizeNewlines(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
 // ValidateScript asks Bash to parse the script without executing it.
 func ValidateScript(ctx context.Context, script string) error {
 	cmd := exec.CommandContext(ctx, "bash", "-n")
-	cmd.Stdin = strings.NewReader(script)
+	cmd.Stdin = strings.NewReader(NormalizeNewlines(script))
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -38,7 +48,7 @@ func ValidateScript(ctx context.Context, script string) error {
 }
 
 func (OSRunner) Run(ctx context.Context, script string, env []string, stdout, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, "bash", "-c", NormalizeNewlines(script))
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
