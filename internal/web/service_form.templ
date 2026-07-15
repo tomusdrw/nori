@@ -1,7 +1,7 @@
 package web
 
-templ ServiceFormPage(form ServiceFormData, csrf string, isEdit bool, errMsg string) {
-	@Layout(formTitle(isEdit), csrf, serviceFormContent(form, csrf, isEdit, errMsg))
+templ ServiceFormPage(form ServiceFormData, csrf string, isEdit bool, action string, errMsg string) {
+	@Layout(formTitle(isEdit), csrf, serviceFormContent(form, csrf, isEdit, action, errMsg))
 }
 
 func formTitle(isEdit bool) string {
@@ -11,12 +11,12 @@ func formTitle(isEdit bool) string {
 	return "New service"
 }
 
-templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, errMsg string) {
+templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action string, errMsg string) {
 	<h1>{ formTitle(isEdit) }</h1>
 	if errMsg != "" {
 		<p style="color:#b00020">{ errMsg }</p>
 	}
-	<form method="post">
+	<form method="post" action={ templ.SafeURL(action) }>
 		<input type="hidden" name="csrf_token" value={ csrf }/>
 		<label>Name</label>
 		if isEdit {
@@ -51,6 +51,12 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, errMsg 
 		</div>
 		<button type="submit">Save</button>
 	</form>
+	if isEdit {
+		<form method="post" action={ templ.SafeURL("/services/" + form.Name + "/delete") } style="margin-top:1rem">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<button type="submit" onclick="return confirm('Delete this service?')">Delete service</button>
+		</form>
+	}
 }
 
 func itoa(i int) string {

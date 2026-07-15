@@ -133,7 +133,7 @@ func (s *Server) handleServicesPartial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceNew(w http.ResponseWriter, r *http.Request) {
-	_ = ServiceFormPage(ServiceFormData{Policy: "manual"}, s.csrf(r), false, "").Render(r.Context(), w)
+	_ = ServiceFormPage(ServiceFormData{Policy: "manual"}, s.csrf(r), false, "/services", "").Render(r.Context(), w)
 }
 
 func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +150,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		DeployScript: form.DeployScript,
 	}
 	if err := s.store.CreateService(r.Context(), svc); err != nil {
-		_ = ServiceFormPage(form, s.csrf(r), false, err.Error()).Render(r.Context(), w)
+		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
 		return
 	}
 	if err := s.saveEnvVars(r.Context(), svc.ID, form.EnvVars); err != nil {
@@ -170,7 +170,7 @@ func (s *Server) handleServiceEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = ServiceFormPage(form, s.csrf(r), true, "").Render(r.Context(), w)
+	_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, "").Render(r.Context(), w)
 }
 
 func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +188,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript
 	if err := s.store.UpdateService(r.Context(), svc); err != nil {
-		_ = ServiceFormPage(form, s.csrf(r), true, err.Error()).Render(r.Context(), w)
+		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
 	}
 	if err := s.saveEnvVars(r.Context(), svc.ID, form.EnvVars); err != nil {
