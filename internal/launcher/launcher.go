@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -32,6 +33,8 @@ const (
 	DefaultPort         = "8080:8080"
 )
 
+var validEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // RunSpec is the launcher-owned, persistent description of the deploybot
 // container. The corresponding dotenv file contains the application config
 // and secrets, rather than putting them in this JSON document.
@@ -42,19 +45,23 @@ type RunSpec struct {
 	Volumes             []string          `json:"volumes"`
 	Labels              map[string]string `json:"labels"`
 	Restart             string            `json:"restart"`
+	Network             string            `json:"network,omitempty"`
 	ConfigVolume        string            `json:"config_volume"`
 	CurrentImageDigest  string            `json:"current_image_digest,omitempty"`
 	PreviousImageDigest string            `json:"previous_image_digest,omitempty"`
 }
 
-// UpOptions are consulted only when no launcher configuration exists yet.
-// Once bootstrapped, the persisted RunSpec is authoritative.
+// UpOptions describe bootstrap settings plus explicit persistent overrides.
+// Existing launcher config remains authoritative unless an override is supplied.
 type UpOptions struct {
 	Image             string
 	ConfigVolume      string
 	ContainerName     string
 	DataVolume        string
 	Ports             []string
+	NoPort            bool
+	Network           string
+	Environment       []string
 	EncryptionKey     string
 	SessionKey        string
 	AdminPasswordHash string
@@ -138,7 +145,8 @@ func (l *Launcher) envPath() string     { return filepath.Join(l.configDir(), En
 
 // Up starts deploybot from existing launcher configuration, or performs the
 // interactive first bootstrap before starting it. Existing config is never
-// regenerated, because DEPLOYBOT_KEY encrypts the persistent database.
+// regenerated; explicit override flags may update non-secret launch settings.
+// DEPLOYBOT_KEY must stay stable because it encrypts the persistent database.
 func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 	exists, err := l.configExists()
 	if err != nil {
@@ -150,6 +158,9 @@ func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 		if err != nil {
 			return err
 		}
+		if err := l.applyOverrides(&spec, opts); err != nil {
+			return err
+		}
 	} else {
 		spec, err = l.bootstrap(opts)
 		if err != nil {
@@ -157,10 +168,11 @@ func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 		}
 	}
 
-	// docker rm -f is intentionally best-effort here. On a first boot there is
-	// no container; if an existing container cannot be removed, docker run will
-	// still fail with the useful name-conflict error.
-	_ = l.runner().Run(ctx, "docker", "rm", "-f", spec.ContainerName)
+	// Removing an existing container is best-effort. Checking first avoids a
+	// misleading "No such container" message during a normal first boot.
+	if _, err := l.runner().Output(ctx, "docker", "container", "inspect", "--format", "{{.Id}}", spec.ContainerName); err == nil {
+		_ = l.runner().Run(ctx, "docker", "rm", "-f", spec.ContainerName)
+	}
 	return l.runContainer(ctx, spec, spec.Image)
 }
 
@@ -268,7 +280,10 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 	if opts.ContainerName == "" {
 		opts.ContainerName = DefaultContainer
 	}
-	if len(opts.Ports) == 0 {
+	if opts.NoPort && len(opts.Ports) > 0 {
+		return RunSpec{}, errors.New("--no-port cannot be combined with --port")
+	}
+	if len(opts.Ports) == 0 && !opts.NoPort {
 		opts.Ports = []string{DefaultPort}
 	}
 
@@ -308,6 +323,7 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 			"deploybot.service": "deploybot",
 		},
 		Restart:      "unless-stopped",
+		Network:      opts.Network,
 		ConfigVolume: opts.ConfigVolume,
 	}
 	if err := validateSpec(spec); err != nil {
@@ -316,8 +332,22 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 	if err := os.MkdirAll(l.configDir(), 0o700); err != nil {
 		return RunSpec{}, err
 	}
-	env := fmt.Sprintf("DEPLOYBOT_KEY=%s\nDEPLOYBOT_SESSION_KEY=%s\nDEPLOYBOT_ADMIN_HASH=%s\nDEPLOYBOT_DB=/data/deploybot.db\nDEPLOYBOT_LISTEN=:8080\nDEPLOYBOT_POLL_INTERVAL=60s\n", key, sessionKey, adminHash)
-	if err := writeAtomic(l.envPath(), []byte(env), 0o600); err != nil {
+	values := map[string]string{
+		"DEPLOYBOT_KEY":           key,
+		"DEPLOYBOT_SESSION_KEY":   sessionKey,
+		"DEPLOYBOT_ADMIN_HASH":    adminHash,
+		"DEPLOYBOT_DB":            "/data/deploybot.db",
+		"DEPLOYBOT_LISTEN":        ":8080",
+		"DEPLOYBOT_POLL_INTERVAL": "60s",
+	}
+	if err := mergeEnvironment(values, opts.Environment); err != nil {
+		return RunSpec{}, err
+	}
+	env, err := marshalEnvironment(values)
+	if err != nil {
+		return RunSpec{}, fmt.Errorf("encode launcher environment: %w", err)
+	}
+	if err := writeAtomic(l.envPath(), env, 0o600); err != nil {
 		return RunSpec{}, fmt.Errorf("write launcher environment: %w", err)
 	}
 	if err := l.writeSpec(spec); err != nil {
@@ -333,6 +363,9 @@ func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string)
 	}
 	for _, volume := range spec.Volumes {
 		args = append(args, "-v", volume)
+	}
+	if spec.Network != "" {
+		args = append(args, "--network", spec.Network)
 	}
 	keys := make([]string, 0, len(spec.Labels))
 	for key := range spec.Labels {
@@ -398,9 +431,6 @@ func validateSpec(spec RunSpec) error {
 	if strings.TrimSpace(spec.Restart) == "" {
 		return errors.New("launcher run spec restart is required")
 	}
-	if len(spec.Ports) == 0 {
-		return errors.New("launcher run spec requires at least one port")
-	}
 	if !contains(spec.Volumes, "/var/run/docker.sock:/var/run/docker.sock") {
 		return errors.New("launcher run spec must mount /var/run/docker.sock")
 	}
@@ -411,6 +441,144 @@ func validateSpec(spec RunSpec) error {
 		return errors.New("launcher run spec must label deploybot.service=deploybot")
 	}
 	return nil
+}
+
+// applyOverrides updates only explicit first-class configuration flags. It is
+// useful for repairing a failed first boot (for example, when a reverse proxy
+// owns port 8080) without ever regenerating the persistent secret material.
+func (l *Launcher) applyOverrides(spec *RunSpec, opts UpOptions) error {
+	if opts.NoPort && len(opts.Ports) > 0 {
+		return errors.New("--no-port cannot be combined with --port")
+	}
+	changed := false
+	if opts.NoPort {
+		spec.Ports = nil
+		changed = true
+	} else if len(opts.Ports) > 0 {
+		spec.Ports = append([]string(nil), opts.Ports...)
+		changed = true
+	}
+	if opts.Network != "" {
+		spec.Network = opts.Network
+		changed = true
+	}
+	if len(opts.Environment) > 0 {
+		if err := l.mergeEnvironment(opts.Environment); err != nil {
+			return err
+		}
+	}
+	if changed {
+		if err := l.writeSpec(*spec); err != nil {
+			return fmt.Errorf("save launcher configuration: %w", err)
+		}
+	}
+	return nil
+}
+
+func (l *Launcher) mergeEnvironment(entries []string) error {
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		return fmt.Errorf("read launcher environment: %w", err)
+	}
+	values, err := parseEnvironment(string(data))
+	if err != nil {
+		return fmt.Errorf("parse launcher environment: %w", err)
+	}
+	if err := mergeEnvironment(values, entries); err != nil {
+		return err
+	}
+	encoded, err := marshalEnvironment(values)
+	if err != nil {
+		return fmt.Errorf("encode launcher environment: %w", err)
+	}
+	return writeAtomic(l.envPath(), encoded, 0o600)
+}
+
+func mergeEnvironment(values map[string]string, entries []string) error {
+	for _, entry := range entries {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			return fmt.Errorf("invalid --env value %q: expected KEY=VALUE", entry)
+		}
+		if !validEnvironmentName.MatchString(key) {
+			return fmt.Errorf("invalid --env variable name %q", key)
+		}
+		if err := validateEnvironmentValue(value); err != nil {
+			return fmt.Errorf("invalid --env value for %s: %w", key, err)
+		}
+		if isProtectedEnvironmentKey(key) {
+			return fmt.Errorf("%s is launcher-managed and cannot be set with --env", key)
+		}
+		values[key] = value
+	}
+	return nil
+}
+
+// parseEnvironment reads Docker's simple KEY=VALUE env-file format. Values
+// deliberately remain raw: unlike shell dotenv parsers, Docker neither expands
+// dollar signs nor strips quotes. That preserves existing bcrypt hashes.
+func parseEnvironment(content string) (map[string]string, error) {
+	values := make(map[string]string)
+	for lineNumber, line := range strings.Split(content, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			return nil, fmt.Errorf("line %d: expected KEY=VALUE", lineNumber+1)
+		}
+		key = strings.TrimSpace(key)
+		if !validEnvironmentName.MatchString(key) {
+			return nil, fmt.Errorf("line %d: invalid environment variable name %q", lineNumber+1, key)
+		}
+		if err := validateEnvironmentValue(value); err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNumber+1, err)
+		}
+		values[key] = value
+	}
+	return values, nil
+}
+
+func marshalEnvironment(values map[string]string) ([]byte, error) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if !validEnvironmentName.MatchString(key) {
+			return nil, fmt.Errorf("invalid environment variable name %q", key)
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var content strings.Builder
+	for _, key := range keys {
+		value := values[key]
+		if err := validateEnvironmentValue(value); err != nil {
+			return nil, fmt.Errorf("invalid value for %s: %w", key, err)
+		}
+		content.WriteString(key)
+		content.WriteByte('=')
+		content.WriteString(value)
+		content.WriteByte('\n')
+	}
+	return []byte(content.String()), nil
+}
+
+func validateEnvironmentValue(value string) error {
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return errors.New("environment variable values cannot contain NUL, carriage return, or newline")
+	}
+	return nil
+}
+
+func isProtectedEnvironmentKey(key string) bool {
+	switch key {
+	case "DEPLOYBOT_KEY", "DEPLOYBOT_SESSION_KEY", "DEPLOYBOT_ADMIN_HASH", "DEPLOYBOT_CONFIG_VOLUME", "DEPLOYBOT_SELF_CONTAINER", "DEPLOYBOT_SELF_IMAGE":
+		return true
+	default:
+		return false
+	}
 }
 
 func contains(items []string, want string) bool {

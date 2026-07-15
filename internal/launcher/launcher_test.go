@@ -186,6 +186,147 @@ func TestUpPreservesExplicitMigrationKeys(t *testing.T) {
 	}
 }
 
+func TestUpSupportsAndPersistsReverseProxyConfiguration(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	sessionKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner, Random: strings.NewReader("")}
+	if err := l.Up(context.Background(), UpOptions{
+		Image:             "ghcr.io/acme/deploybot:latest",
+		NoPort:            true,
+		Network:           "proxy",
+		Environment:       []string{"VIRTUAL_HOST=deploy.example.com", "VIRTUAL_PORT=8080"},
+		EncryptionKey:     key,
+		SessionKey:        sessionKey,
+		AdminPasswordHash: "already-hashed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Ports) != 0 || spec.Network != "proxy" {
+		t.Fatalf("proxy run spec = %+v", spec)
+	}
+	assertContainsArgs(t, runner.calls[1], "--network")
+	assertContainsArgs(t, runner.calls[1], "proxy")
+	for _, arg := range runner.calls[1] {
+		if arg == "-p" {
+			t.Fatalf("reverse-proxy deployment must not publish a host port: %v", runner.calls[1])
+		}
+	}
+	env, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(env))
+	if values["VIRTUAL_HOST"] != "deploy.example.com" || values["VIRTUAL_PORT"] != "8080" {
+		t.Fatalf("reverse-proxy environment = %+v", values)
+	}
+}
+
+func TestUpRepairsExistingConfigurationWithoutRegeneratingSecrets(t *testing.T) {
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	spec := testRunSpec()
+	writeTestConfig(t, l, spec)
+	adminHash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\nDEPLOYBOT_ADMIN_HASH="+string(adminHash)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Up(context.Background(), UpOptions{
+		NoPort:      true,
+		Network:     "proxy",
+		Environment: []string{"VIRTUAL_HOST=deploy.example.com", "VIRTUAL_PORT=8080"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterSpec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterSpec.Ports) != 0 || afterSpec.Network != "proxy" {
+		t.Fatalf("updated run spec = %+v", afterSpec)
+	}
+	env, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(env))
+	if values["DEPLOYBOT_KEY"] != "test" || values["DEPLOYBOT_ADMIN_HASH"] != string(adminHash) || values["VIRTUAL_HOST"] != "deploy.example.com" || values["VIRTUAL_PORT"] != "8080" {
+		t.Fatalf("updated environment = %+v", values)
+	}
+	if string(before) == string(env) {
+		t.Fatal("expected reverse-proxy settings to be added")
+	}
+}
+
+func TestUpRejectsPortAndNoPortTogether(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}}
+	err := l.Up(context.Background(), UpOptions{
+		Image:  "ghcr.io/acme/deploybot:latest",
+		Ports:  []string{"8080:8080"},
+		NoPort: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "--no-port cannot be combined with --port") {
+		t.Fatalf("Up error = %v, want conflicting port options error", err)
+	}
+	if _, err := os.Stat(l.runSpecPath()); !os.IsNotExist(err) {
+		t.Fatalf("run spec must not be written after rejected options: %v", err)
+	}
+}
+
+func TestUpdateKeepsReverseProxyConfiguration(t *testing.T) {
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	spec := testRunSpec()
+	spec.Ports = nil
+	spec.Network = "proxy"
+	spec.CurrentImageDigest = "sha256:old"
+	writeTestConfig(t, l, spec)
+	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\nVIRTUAL_HOST=deploy.example.com\nVIRTUAL_PORT=8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.Update(context.Background(), "sha256:new"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("docker calls = %v", runner.calls)
+	}
+	run := runner.calls[3]
+	assertContainsArgs(t, run, "--network")
+	assertContainsArgs(t, run, "proxy")
+	for _, arg := range run {
+		if arg == "-p" {
+			t.Fatalf("self-update must preserve no host-port publishing: %v", run)
+		}
+	}
+	after, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("self-update must not modify the persisted proxy environment")
+	}
+	values := dotenvValues(t, string(after))
+	if values["VIRTUAL_HOST"] != "deploy.example.com" || values["VIRTUAL_PORT"] != "8080" {
+		t.Fatalf("self-update proxy environment = %+v", values)
+	}
+}
+
 func testRunSpec() RunSpec {
 	return RunSpec{
 		Image:         "ghcr.io/acme/deploybot:latest",
@@ -210,13 +351,9 @@ func writeTestConfig(t *testing.T, l *Launcher, spec RunSpec) {
 
 func dotenvValues(t *testing.T, content string) map[string]string {
 	t.Helper()
-	values := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			t.Fatalf("invalid dotenv line %q", line)
-		}
-		values[parts[0]] = parts[1]
+	values, err := parseEnvironment(content)
+	if err != nil {
+		t.Fatalf("parse dotenv: %v", err)
 	}
 	return values
 }

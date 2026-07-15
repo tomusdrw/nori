@@ -42,11 +42,15 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 	configVolume := fs.String("config-volume", envOr("DEPLOYBOT_CONFIG_VOLUME", launcher.DefaultConfigVolume), "external Docker volume mounted at /config")
 	containerName := fs.String("container-name", envOr("DEPLOYBOT_SELF_CONTAINER", launcher.DefaultContainer), "deploybot container name")
 	dataVolume := fs.String("data-volume", envOr("DEPLOYBOT_DATA_VOLUME", launcher.DefaultDataVolume), "external Docker volume mounted at /data")
+	noPort := fs.Bool("no-port", false, "do not publish a host port (for reverse proxies)")
+	network := fs.String("network", "", "Docker network for the deploybot container")
 	encryptionKey := fs.String("key", os.Getenv("DEPLOYBOT_KEY"), "existing base64 encryption key (migration only)")
 	sessionKey := fs.String("session-key", os.Getenv("DEPLOYBOT_SESSION_KEY"), "existing base64 session key (migration only)")
 	adminHash := fs.String("admin-password-hash", os.Getenv("DEPLOYBOT_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
 	var ports stringList
 	fs.Var(&ports, "port", "host:container port mapping (repeatable)")
+	var environment stringList
+	fs.Var(&environment, "env", "environment variable for deploybot (KEY=VALUE, repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,6 +63,9 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 		ContainerName:     *containerName,
 		DataVolume:        *dataVolume,
 		Ports:             ports,
+		NoPort:            *noPort,
+		Network:           *network,
+		Environment:       environment,
 		EncryptionKey:     *encryptionKey,
 		SessionKey:        *sessionKey,
 		AdminPasswordHash: *adminHash,
