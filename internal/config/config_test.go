@@ -3,14 +3,27 @@ package config
 import (
 	"encoding/base64"
 	"testing"
+
+	"deploybot/internal/auth"
 )
 
 func validKey() string {
 	return base64.StdEncoding.EncodeToString(make([]byte, 32))
 }
 
-func TestLoad_Defaults(t *testing.T) {
+func setRequiredEnv(t *testing.T) {
+	t.Helper()
 	t.Setenv("DEPLOYBOT_KEY", validKey())
+	t.Setenv("DEPLOYBOT_SESSION_KEY", validKey())
+	hash, err := auth.HashPassword("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEPLOYBOT_ADMIN_HASH", hash)
+}
+
+func TestLoad_Defaults(t *testing.T) {
+	setRequiredEnv(t)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -24,6 +37,7 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_MissingKey(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("DEPLOYBOT_KEY", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for missing DEPLOYBOT_KEY")
@@ -31,6 +45,7 @@ func TestLoad_MissingKey(t *testing.T) {
 }
 
 func TestLoad_BadKeyLength(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("DEPLOYBOT_KEY", base64.StdEncoding.EncodeToString(make([]byte, 16)))
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for 16-byte key")

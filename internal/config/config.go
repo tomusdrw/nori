@@ -8,11 +8,13 @@ import (
 )
 
 type Config struct {
-	ListenAddr    string
-	DBPath        string
-	EncryptionKey []byte
-	DockerHost    string
-	PollInterval  time.Duration
+	ListenAddr        string
+	DBPath            string
+	EncryptionKey     []byte
+	SessionKey        []byte
+	AdminPasswordHash string
+	DockerHost        string
+	PollInterval      time.Duration
 }
 
 func Load() (Config, error) {
@@ -34,6 +36,25 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DEPLOYBOT_KEY must decode to 32 bytes, got %d", len(key))
 	}
 	c.EncryptionKey = key
+
+	sessionB64 := os.Getenv("DEPLOYBOT_SESSION_KEY")
+	if sessionB64 == "" {
+		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY is required (base64-encoded 32 bytes)")
+	}
+	sessionKey, err := base64.StdEncoding.DecodeString(sessionB64)
+	if err != nil {
+		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY: %w", err)
+	}
+	if len(sessionKey) < 32 {
+		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY must decode to at least 32 bytes, got %d", len(sessionKey))
+	}
+	c.SessionKey = sessionKey
+
+	c.AdminPasswordHash = os.Getenv("DEPLOYBOT_ADMIN_HASH")
+	if c.AdminPasswordHash == "" {
+		return Config{}, fmt.Errorf("DEPLOYBOT_ADMIN_HASH is required (bcrypt hash of admin password)")
+	}
+
 	if v := os.Getenv("DEPLOYBOT_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
