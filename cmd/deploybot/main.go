@@ -17,6 +17,7 @@ import (
 	"deploybot/internal/registry"
 	"deploybot/internal/scheduler"
 	"deploybot/internal/store"
+	terminalsession "deploybot/internal/terminal"
 	"deploybot/internal/web"
 )
 
@@ -78,7 +79,8 @@ func main() {
 	}
 	defer sched.Stop()
 
-	srv := web.NewServer(st, dk, ex, pl, a)
+	term := terminalsession.New("deploybot", cfg.TerminalDir)
+	srv := web.NewServer(st, dk, ex, pl, a, term)
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
 
 	go func() {

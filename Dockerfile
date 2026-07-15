@@ -10,9 +10,11 @@ RUN CGO_ENABLED=0 go build -o /deploybot ./cmd/deploybot
 
 # Runtime stage
 FROM alpine:3.21
-RUN apk add --no-cache bash ca-certificates docker-cli
+RUN apk add --no-cache bash ca-certificates docker-cli tmux
 COPY --from=build /deploybot /usr/local/bin/deploybot
 EXPOSE 8080
 VOLUME ["/data"]
 ENV DEPLOYBOT_DB=/data/deploybot.db
+ENV DEPLOYBOT_TERMINAL_DIR=/data
+WORKDIR /data
 ENTRYPOINT ["deploybot"]

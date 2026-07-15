@@ -8,12 +8,14 @@ import (
 	"html"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
 
 	"deploybot/internal/auth"
 	"deploybot/internal/docker"
@@ -21,6 +23,7 @@ import (
 	"deploybot/internal/executor"
 	"deploybot/internal/poller"
 	"deploybot/internal/store"
+	terminalsession "deploybot/internal/terminal"
 )
 
 type Server struct {
@@ -29,11 +32,16 @@ type Server struct {
 	executor *executor.Executor
 	poller   *poller.Poller
 	auth     *auth.Auth
+	terminal terminalsession.Attacher
 	router   chi.Router
 }
 
-func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth) *Server {
-	s := &Server{store: st, docker: dk, executor: ex, poller: pl, auth: a}
+func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, terminals ...terminalsession.Attacher) *Server {
+	term := terminalsession.Attacher(terminalsession.New("deploybot", "."))
+	if len(terminals) > 0 && terminals[0] != nil {
+		term = terminals[0]
+	}
+	s := &Server{store: st, docker: dk, executor: ex, poller: pl, auth: a, terminal: term}
 	r := chi.NewRouter()
 	r.Get("/login", s.handleLoginGet)
 	r.Post("/login", s.handleLoginPost)
@@ -44,6 +52,8 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Use(s.auth.CSRFMiddleware)
 
 		r.Get("/", s.handleDashboard)
+		r.Get("/terminal", s.handleTerminal)
+		r.Get("/terminal/ws", s.handleTerminalWebSocket)
 		r.Get("/partials/services", s.handleServicesPartial)
 		r.Get("/services/new", s.handleServiceNew)
 		r.Post("/validate/editor", s.handleEditorValidate)
@@ -69,6 +79,109 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.ServeHTTP(w, r) }
 
 func (s *Server) csrf(r *http.Request) string { return s.auth.CSRFToken(r) }
+
+func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
+	unavailable := ""
+	if err := s.terminal.Available(); err != nil {
+		unavailable = err.Error()
+	}
+	_ = TerminalPage(s.csrf(r), unavailable).Render(r.Context(), w)
+}
+
+type terminalClientMessage struct {
+	Type string `json:"type"`
+	Data string `json:"data,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
+}
+
+var terminalUpgrader = websocket.Upgrader{
+	HandshakeTimeout: 5 * time.Second,
+	CheckOrigin:      terminalOriginAllowed,
+}
+
+func terminalOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
+	if err := s.terminal.Available(); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	ws, err := terminalUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer ws.Close()
+	ws.SetReadLimit(1 << 20)
+
+	client, err := s.terminal.Attach(r.Context(), 24, 80)
+	if err != nil {
+		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, err.Error()), time.Now().Add(time.Second))
+		return
+	}
+	defer client.Close()
+
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		buffer := make([]byte, 32<<10)
+		for {
+			n, readErr := client.Read(buffer)
+			if n > 0 {
+				if writeErr := ws.WriteMessage(websocket.BinaryMessage, buffer[:n]); writeErr != nil {
+					return
+				}
+			}
+			if readErr != nil {
+				_ = ws.Close()
+				return
+			}
+		}
+	}()
+
+	for {
+		_, payload, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		var message terminalClientMessage
+		if err := json.Unmarshal(payload, &message); err != nil {
+			continue
+		}
+		switch message.Type {
+		case "input":
+			if message.Data != "" {
+				if _, err := client.Write([]byte(message.Data)); err != nil {
+					return
+				}
+			}
+		case "resize":
+			rows, cols := terminalDimensions(message.Rows, message.Cols)
+			_ = client.Resize(rows, cols)
+		case "ping":
+			// Application-level keepalive. Receiving the frame is sufficient.
+		}
+	}
+
+	_ = client.Close()
+	select {
+	case <-outputDone:
+	case <-time.After(time.Second):
+	}
+}
+
+func terminalDimensions(rows, cols uint16) (uint16, uint16) {
+	rows = min(max(rows, 2), 500)
+	cols = min(max(cols, 2), 500)
+	return rows, cols
+}
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
 	_ = LoginPage("", "").Render(r.Context(), w)

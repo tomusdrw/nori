@@ -1,0 +1,54 @@
+package web
+
+templ TerminalPage(csrf string, unavailable string) {
+	@Layout("Terminal", csrf, TerminalContent(unavailable))
+}
+
+templ TerminalContent(unavailable string) {
+	<section class="terminal-page" data-terminal-page>
+		<div class="page-heading terminal-heading">
+			<div>
+				<p class="eyebrow">Persistent workspace</p>
+				<h1>Terminal</h1>
+				<p class="page-subtitle">A full Bash shell that keeps running after you close this browser.</p>
+			</div>
+			<div class="terminal-session-meta">
+				if unavailable != "" {
+					<span class="terminal-connection" data-state="disconnected">
+						<span class="status-dot"></span>
+						<span>Unavailable</span>
+					</span>
+				} else {
+					<span class="terminal-connection" data-terminal-status data-state="connecting">
+						<span class="status-dot"></span>
+						<span data-terminal-status-label>Connecting</span>
+					</span>
+					<button class="button button-secondary button-small" type="button" data-terminal-reconnect>Reconnect</button>
+				}
+			</div>
+		</div>
+		<div class="terminal-warning" role="note">
+			<span class="terminal-warning-icon" aria-hidden="true">!</span>
+			<div>
+				<strong>Privileged shell</strong>
+				<span>Commands run inside Deploy Bot with access to its files and Docker socket. The tmux session survives browser disconnects; type <code>exit</code> to end it.</span>
+			</div>
+		</div>
+		<div class="panel terminal-panel">
+			<div class="terminal-chrome">
+				<div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+				<span class="terminal-title">deploybot · tmux</span>
+				<button class="terminal-clear" type="button" data-terminal-clear>Clear display</button>
+			</div>
+			if unavailable != "" {
+				<div class="terminal-unavailable">
+					<strong>Terminal unavailable</strong>
+					<span>{ unavailable }</span>
+				</div>
+			} else {
+				<div id="terminal" class="terminal-host" data-terminal tabindex="0" aria-label="Interactive terminal"></div>
+			}
+		</div>
+		<p class="terminal-footnote">Closing this page only detaches your browser. Long-running commands continue in the server-side tmux session.</p>
+	</section>
+}
