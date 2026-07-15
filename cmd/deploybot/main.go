@@ -2,18 +2,37 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"deploybot/internal/auth"
 	"deploybot/internal/config"
 	"deploybot/internal/docker"
+	"deploybot/internal/executor"
+	"deploybot/internal/poller"
 	"deploybot/internal/registry"
+	"deploybot/internal/scheduler"
 	"deploybot/internal/store"
 	"deploybot/internal/web"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		if len(os.Args) < 3 {
+			log.Fatal("usage: deploybot hash-password <password>")
+		}
+		hash, err := auth.HashPassword(os.Args[2])
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(hash)
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -42,7 +61,36 @@ func main() {
 		return registry.LatestDigest(image)
 	}
 
-	srv := web.NewServer(st, dk, latest)
-	log.Printf("listening on %s", cfg.ListenAddr)
-	log.Fatal(http.ListenAndServe(cfg.ListenAddr, srv))
+	ex := executor.New(st, executor.OSRunner{}, latest, 0)
+	pl := poller.New(st, latest, ex, cfg.PollInterval)
+	sched := scheduler.New(st, ex)
+
+	a, err := auth.New(cfg.AdminPasswordHash, cfg.SessionKey)
+	if err != nil {
+		log.Fatalf("auth: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pl.Run(ctx)
+	if err := sched.Start(ctx); err != nil {
+		log.Fatalf("scheduler: %v", err)
+	}
+	defer sched.Stop()
+
+	srv := web.NewServer(st, dk, ex, pl, a)
+	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
+
+	go func() {
+		log.Printf("listening on %s", cfg.ListenAddr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server: %v", err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	cancel()
+	_ = httpSrv.Shutdown(context.Background())
 }

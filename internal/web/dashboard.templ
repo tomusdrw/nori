@@ -1,37 +1,36 @@
 package web
 
-templ Page(views []ServiceView) {
-	<!DOCTYPE html>
-	<html lang="en">
-		<head>
-			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>Deploy Bot</title>
-			<script src="/static/htmx.min.js"></script>
-		</head>
-		<body>
-			<h1>Services</h1>
-			@ServicesTable(views)
-		</body>
-	</html>
+templ Page(views []ServiceView, csrf string) {
+	@Layout("Deploy Bot", csrf, dashboardContent(views, csrf))
 }
 
-templ ServicesTable(views []ServiceView) {
+templ dashboardContent(views []ServiceView, csrf string) {
+	<h1>Services</h1>
+	@ServicesTablePartial(views, csrf)
+}
+
+templ ServicesTablePartial(views []ServiceView, csrf string) {
 	<table id="services" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
 		<thead>
-			<tr><th>Name</th><th>State</th><th>Running</th><th>Latest</th><th>Update</th></tr>
+			<tr><th>Name</th><th>State</th><th>Running</th><th>Latest</th><th>Update</th><th>Actions</th></tr>
 		</thead>
 		<tbody>
 			for _, v := range views {
 				<tr>
-					<td>{ v.Name }</td>
+					<td><a href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a></td>
 					<td>{ v.State }</td>
 					<td>{ v.RunningVersion }</td>
 					<td>{ v.LatestVersion }</td>
 					<td>
 						if v.UpdateAvailable {
-							<span>update available</span>
+							<span class="badge">update available</span>
 						}
+					</td>
+					<td>
+						<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } style="display:inline">
+							<input type="hidden" name="csrf_token" value={ csrf }/>
+							<button type="submit">Deploy</button>
+						</form>
 					</td>
 				</tr>
 			}

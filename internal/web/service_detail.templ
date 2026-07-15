@@ -1,0 +1,76 @@
+package web
+
+templ ServiceDetailPage(data ServiceDetailData, csrf string) {
+	@Layout(data.Service.Name, csrf, serviceDetailContent(data, csrf))
+}
+
+templ serviceDetailContent(data ServiceDetailData, csrf string) {
+	<h1>{ data.Service.Name }</h1>
+	<p>
+		State: <strong>{ data.State }</strong> |
+		Running: { data.Running } |
+		Latest: { data.Latest }
+		if data.UpdateAvail {
+			<span class="badge">update available</span>
+		}
+	</p>
+	<p>
+		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } style="display:inline">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<button type="submit">Deploy</button>
+		</form>
+		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/start") } style="display:inline">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<button type="submit">Start</button>
+		</form>
+		<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/stop") } style="display:inline">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<button type="submit">Stop</button>
+		</form>
+		<a href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Edit</a>
+	</p>
+	<h2>Containers</h2>
+	<table>
+		<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
+		<tbody>
+			for _, c := range data.Containers {
+				<tr><td>{ c.Name }</td><td>{ c.Image }</td><td>{ c.State }</td></tr>
+			}
+		</tbody>
+	</table>
+	<h2>Container logs</h2>
+	<div class="log-box" hx-get={ templ.SafeURL("/services/" + data.Service.Name + "/logs/stream") } hx-trigger="load" hx-swap="innerHTML">
+		Loading logs...
+	</div>
+	<h2>Deploy history</h2>
+	<table>
+		<thead><tr><th>ID</th><th>Trigger</th><th>Digest</th><th>Status</th><th>Started</th></tr></thead>
+		<tbody>
+			for _, d := range data.Deployments {
+				<tr>
+					<td><a href={ templ.SafeURL("/deployments/" + strconvItoa64(d.ID)) }>{ strconvItoa64(d.ID) }</a></td>
+					<td>{ d.Trigger }</td>
+					<td>{ shortDigest(d.TargetDigest) }</td>
+					<td>{ d.Status }</td>
+					<td>{ d.StartedAt }</td>
+				</tr>
+			}
+		</tbody>
+	</table>
+}
+
+func strconvItoa64(i int64) string {
+	return strconvItoa(int(i))
+}
+
+templ DeploymentPage(id int64, status string, log string, csrf string) {
+	@Layout("Deployment", csrf, deploymentContent(id, status, log))
+}
+
+templ deploymentContent(id int64, status string, log string) {
+	<h1>Deployment #{ strconvItoa64(id) }</h1>
+	<p>Status: <strong>{ status }</strong></p>
+	<div class="log-box" id="deploy-log" hx-get={ templ.SafeURL("/deployments/" + strconvItoa64(id) + "/stream") } hx-trigger="every 2s" hx-swap="innerHTML">
+		{ log }
+	</div>
+}
