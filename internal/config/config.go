@@ -14,6 +14,7 @@ type Config struct {
 	SessionKey        []byte
 	AdminPasswordHash string
 	DockerHost        string
+	TerminalDir       string
 	PollInterval      time.Duration
 }
 
@@ -22,6 +23,7 @@ func Load() (Config, error) {
 		ListenAddr:   getenv("DEPLOYBOT_LISTEN", ":8080"),
 		DBPath:       getenv("DEPLOYBOT_DB", "deploybot.db"),
 		DockerHost:   os.Getenv("DEPLOYBOT_DOCKER_HOST"),
+		TerminalDir:  getenv("DEPLOYBOT_TERMINAL_DIR", "."),
 		PollInterval: 60 * time.Second,
 	}
 	keyB64 := os.Getenv("DEPLOYBOT_KEY")

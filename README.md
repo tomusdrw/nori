@@ -6,7 +6,8 @@ images, runs your bash deploy scripts, and provides a dashboard to manage servic
 ## Requirements
 
 - Docker socket access (`/var/run/docker.sock`)
-- Go 1.23+ (for building from source)
+- Go 1.25+ (for building from source)
+- Bash and tmux (for the browser terminal)
 
 ## Quick start
 
@@ -62,8 +63,26 @@ docker run -d --name deploybot \
   ghcr.io/tomusdrw/github-deploy-bot:latest
 ```
 
-The image ships `bash` and the `docker` CLI so your deploy scripts can call `docker pull`,
-`docker run`, etc. against the host daemon through the mounted socket.
+The image ships `bash`, `tmux`, and the `docker` CLI so your deploy scripts and browser
+terminal can call `docker pull`, `docker run`, etc. against the host daemon through the
+mounted socket.
+
+## Browser terminal
+
+The **Terminal** link opens an interactive Bash shell in the app container. It is backed
+by one named tmux session, so closing the tab or losing the WebSocket connection only
+detaches the browser: commands keep running and the next connection reattaches to the
+same shell. Type `exit` when you intentionally want to end the session. Restarting or
+replacing the container ends the shell process, while files written under `/data` remain
+on the persistent volume.
+
+The shell starts in `DEPLOYBOT_TERMINAL_DIR` (`.` by default and `/data` in the supplied
+Docker image). Reverse proxies must support WebSocket upgrades for `/terminal/ws`.
+
+The terminal is protected by the same admin session as the rest of the app and rejects
+cross-origin WebSocket connections. It can run arbitrary commands with the app's
+permissions, including use of the mounted Docker socket, so treat terminal access as
+root access to the Docker host.
 
 ## Per-service configuration
 
@@ -113,6 +132,7 @@ docker run -d --name myapp \
 | `DEPLOYBOT_DB` | no | SQLite path (default: `deploybot.db`) |
 | `DEPLOYBOT_LISTEN` | no | Listen address (default: `:8080`) |
 | `DEPLOYBOT_DOCKER_HOST` | no | Docker host override |
+| `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
 | `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
 
 ## Security
@@ -122,6 +142,7 @@ This app mounts `docker.sock`, making it **root-equivalent on the host**. Requir
 - Always use authentication (enabled by default)
 - Put **Cloudflare Access** (or similar) in front as a second layer
 - Never expose without TLS in production
+- Treat browser terminal access as unrestricted administrator access to the host
 
 ## CI recommendation
 
@@ -142,8 +163,9 @@ deploybot hash-password PWD  # generate bcrypt hash for DEPLOYBOT_ADMIN_HASH
 deploybot seed-demo          # insert a demo service row
 ```
 
-The browser editor bundle is committed, so building the Go binary does not require a
-JavaScript toolchain. If you change `internal/web/editor.js`, rebuild it with Bun:
+The browser editor and terminal bundles are committed, so building the Go binary does
+not require a JavaScript toolchain. If you change `internal/web/editor.js` or
+`internal/web/terminal.js`, rebuild them with Bun:
 
 ```bash
 make assets

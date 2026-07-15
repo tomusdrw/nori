@@ -4,9 +4,11 @@ go 1.25.0
 
 require (
 	github.com/a-h/templ v0.3.1020
+	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/google/go-containerregistry v0.21.7
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.54.0

@@ -34,6 +34,21 @@ func TestLoad_Defaults(t *testing.T) {
 	if len(cfg.EncryptionKey) != 32 {
 		t.Errorf("key len = %d, want 32", len(cfg.EncryptionKey))
 	}
+	if cfg.TerminalDir != "." {
+		t.Errorf("TerminalDir = %q, want .", cfg.TerminalDir)
+	}
+}
+
+func TestLoad_TerminalDir(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TERMINAL_DIR", "/srv/deploybot")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TerminalDir != "/srv/deploybot" {
+		t.Errorf("TerminalDir = %q", cfg.TerminalDir)
+	}
 }
 
 func TestLoad_MissingKey(t *testing.T) {

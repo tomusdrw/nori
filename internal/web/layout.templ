@@ -11,6 +11,10 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/htmx.min.js" defer></script>
 			<script src="/static/editor.js" type="module"></script>
+			if title == "Terminal" {
+				<link rel="stylesheet" href="/static/terminal.css"/>
+				<script src="/static/terminal.js" type="module"></script>
+			}
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 				<script>
@@ -34,6 +38,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 					</a>
 					<nav class="nav-links" aria-label="Main navigation">
 						<a href="/">Services</a>
+						<a class="nav-terminal" href="/terminal"><span class="nav-terminal-icon" aria-hidden="true">&gt;_</span><span>Terminal</span></a>
 						<a class="button button-primary button-small" href="/services/new">
 							<span aria-hidden="true">+</span> New service
 						</a>
