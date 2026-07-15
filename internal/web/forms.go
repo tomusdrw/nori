@@ -13,6 +13,7 @@ type ServiceFormData struct {
 	CronExpr     string
 	DeployScript string
 	EnvFile      string
+	IsSelf       bool
 }
 
 type ServiceDetailData struct {

@@ -17,6 +17,7 @@ type Service struct {
 	Policy       Policy
 	CronExpr     string
 	DeployScript string
+	IsSelf       bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

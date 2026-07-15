@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -130,6 +131,13 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 	}
 
 	e.clearFailure(svc.ID)
+	if svc.IsSelf {
+		// The detached updater has only been handed off at this point. The
+		// launcher will stop this process next, so the newly booted instance
+		// resolves this record from its actual running digest.
+		_ = e.store.UpdateDeployment(ctx, deploy)
+		return
+	}
 	e.finish(ctx, deploy, store.DeploySuccess, "")
 }
 
@@ -145,6 +153,15 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 	env := []string{
 		fmt.Sprintf("SERVICE=%s", svc.Name),
 		fmt.Sprintf("TARGET_DIGEST=%s", digest),
+	}
+	if svc.IsSelf {
+		for _, key := range []string{"DEPLOYBOT_CONFIG_VOLUME", "DEPLOYBOT_SELF_IMAGE"} {
+			value := os.Getenv(key)
+			if value == "" {
+				return nil, fmt.Errorf("self-update requires %s", key)
+			}
+			env = append(env, key+"="+value)
+		}
 	}
 	env = append(env, fileEnv...)
 	return env, nil

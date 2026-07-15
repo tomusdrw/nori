@@ -72,6 +72,50 @@ func (s *Store) ListDeployments(ctx context.Context, serviceID int64, limit int)
 	return out, rows.Err()
 }
 
+// ReconcileSelfDeployments resolves handoffs that were intentionally left
+// running while the old deploybot process was replaced. A deployment is only
+// successful when the newly running container reports its target digest.
+func (s *Store) ReconcileSelfDeployments(ctx context.Context, runningDigest string) error {
+	self, err := s.GetSelfService(ctx)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, service_id, trigger, target_digest, status, started_at, finished_at, log
+		 FROM deployment WHERE service_id=? AND status=?`, self.ID, DeployRunning)
+	if err != nil {
+		return err
+	}
+	deployed := make([]*Deployment, 0)
+	for rows.Next() {
+		d, err := scanDeployment(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		deployed = append(deployed, d)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, d := range deployed {
+		if runningDigest != "" && d.TargetDigest == runningDigest {
+			d.Status = DeploySuccess
+		} else {
+			d.Status = DeployFailed
+		}
+		d.FinishedAt = &now
+		if err := s.UpdateDeployment(ctx, d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func scanDeployment(sc rowScanner) (*Deployment, error) {
 	var d Deployment
 	var finished sql.NullInt64

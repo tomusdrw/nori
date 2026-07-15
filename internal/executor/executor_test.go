@@ -39,6 +39,12 @@ type fakeRunner struct {
 	called bool
 }
 
+type runnerFunc func(ctx context.Context, script string, env []string, stdout, stderr io.Writer) error
+
+func (f runnerFunc) Run(ctx context.Context, script string, env []string, stdout, stderr io.Writer) error {
+	return f(ctx, script, env, stdout, stderr)
+}
+
 func (f *fakeRunner) Run(ctx context.Context, script string, env []string, stdout, stderr io.Writer) error {
 	f.called = true
 	if f.log != "" {
@@ -172,6 +178,91 @@ func TestDeploy_FailureCooldown(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if _, err := ex.Deploy(ctx, svc.ID, store.TriggerAuto); err == nil {
 		t.Fatal("expected cooldown block")
+	}
+}
+
+func TestDeploy_SelfHandoffStaysRunningAndGetsLauncherEnv(t *testing.T) {
+	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
+	t.Setenv("DEPLOYBOT_SELF_IMAGE", "ghcr.io/acme/deploybot:latest")
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:         store.SelfServiceName,
+		WatchedImage: "ghcr.io/acme/deploybot:latest",
+		Policy:       store.PolicyManual,
+		DeployScript: store.SelfDeployScript,
+		IsSelf:       true,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []string, 1)
+	runner := runnerFunc(func(_ context.Context, _ string, env []string, stdout, _ io.Writer) error {
+		io.WriteString(stdout, "updater launched\n")
+		done <- env
+		return nil
+	})
+	ex := New(st, runner, func(context.Context, string) (string, error) {
+		return "sha256:new", nil
+	}, 0)
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env []string
+	select {
+	case env = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("self handoff was not executed")
+	}
+	// The runner has returned; give the asynchronous executor a moment to
+	// persist its intentionally-running handoff record before reading SQLite.
+	time.Sleep(20 * time.Millisecond)
+	d, err := st.GetDeployment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != store.DeployRunning || d.FinishedAt != nil {
+		t.Fatalf("self deployment was finalized before replacement: %+v", d)
+	}
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{"DEPLOYBOT_CONFIG_VOLUME=deploybot-config", "DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/deploybot:latest"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q from handoff environment: %v", want, env)
+		}
+	}
+}
+
+func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
+	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
+	t.Setenv("DEPLOYBOT_SELF_IMAGE", "image")
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: store.SelfServiceName, WatchedImage: "image", Policy: store.PolicyManual, DeployScript: "exit 1", IsSelf: true}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{}, 1)
+	ex := New(st, runnerFunc(func(_ context.Context, _ string, _ []string, _ io.Writer, _ io.Writer) error {
+		done <- struct{}{}
+		return errors.New("handoff failed")
+	}), func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("self handoff did not execute")
+	}
+	time.Sleep(20 * time.Millisecond)
+	d, err := st.GetDeployment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != store.DeployFailed || d.FinishedAt == nil {
+		t.Fatalf("failed self handoff was not finalized: %+v", d)
 	}
 }
 

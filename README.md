@@ -11,6 +11,8 @@ images, runs your bash deploy scripts, and provides a dashboard to manage servic
 
 ## Quick start
 
+For a local binary, set the application secrets yourself:
+
 ```bash
 # Generate secrets
 export DEPLOYBOT_KEY=$(head -c 32 /dev/urandom | base64)
@@ -39,33 +41,57 @@ docker pull ghcr.io/tomusdrw/github-deploy-bot:latest
 ### docker compose
 
 ```bash
-cp .env.example .env
-# fill in DEPLOYBOT_KEY, DEPLOYBOT_SESSION_KEY, DEPLOYBOT_ADMIN_HASH
-docker compose up -d
+export DEPLOYBOT_IMAGE=ghcr.io/tomusdrw/github-deploy-bot:latest
+docker compose run --rm -it launcher up \
+  --image "$DEPLOYBOT_IMAGE" \
+  --port "${DEPLOYBOT_PORT:-8080}:8080"
 ```
 
-Generate the admin password hash without a local Go install:
+The first run asks for an admin password, generates the encryption and session
+keys, writes them to the `deploybot-config` volume, and creates the long-running
+`deploybot` container. Later `up` invocations read that saved configuration and
+recreate the container without prompting or changing any secrets.
+
+For a scripted first boot, generate the admin password hash without a local Go
+install and pass it to `up`:
 
 ```bash
-docker run --rm ghcr.io/tomusdrw/github-deploy-bot:latest hash-password 'your-password'
+export DEPLOYBOT_ADMIN_HASH=$(docker run --rm ghcr.io/tomusdrw/github-deploy-bot:latest \
+  hash-password 'your-password')
+docker compose run --rm launcher up \
+  --image "$DEPLOYBOT_IMAGE" \
+  --port "${DEPLOYBOT_PORT:-8080}:8080" \
+  --admin-password-hash "$DEPLOYBOT_ADMIN_HASH"
 ```
 
 ### docker run
 
 ```bash
-docker run -d --name deploybot \
-  -p 8080:8080 \
+docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v deploybot-data:/data \
-  -e DEPLOYBOT_KEY \
-  -e DEPLOYBOT_SESSION_KEY \
-  -e DEPLOYBOT_ADMIN_HASH \
-  ghcr.io/tomusdrw/github-deploy-bot:latest
+  -v deploybot-config:/config \
+  ghcr.io/tomusdrw/github-deploy-bot:latest \
+  up --image ghcr.io/tomusdrw/github-deploy-bot:latest
 ```
 
-The image ships `bash`, `tmux`, and the `docker` CLI so your deploy scripts and browser
-terminal can call `docker pull`, `docker run`, etc. against the host daemon through the
-mounted socket.
+Use `--data-volume`, `--config-volume`, `--container-name`, or repeat `--port`
+on first boot to change the defaults. The launcher stores a human-editable
+`run.json` and `deploybot.env` on the config volume; `deploybot.env` contains
+plaintext secrets, so it has the same sensitive trust boundary as `docker.sock`.
+
+The image ships `bash`, `tmux`, and the `docker` CLI so your deploy scripts,
+launcher, and browser terminal can call Docker against the host daemon through
+the mounted socket.
+
+### Existing installations
+
+An existing container started directly with `docker run` has no launcher config
+volume and therefore cannot safely self-update yet. Re-bootstrap through `up`
+once, passing the old `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
+`DEPLOYBOT_ADMIN_HASH` as `--key`, `--session-key`, and
+`--admin-password-hash` on that first run if you need to keep the existing
+encrypted service environment values. The migration is deliberate; the launcher
+never guesses a container's run configuration.
 
 ## Browser terminal
 
@@ -135,6 +161,64 @@ docker run -d --name myapp \
 | `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
 | `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
 
+When started by the launcher, `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
+`DEPLOYBOT_ADMIN_HASH` are generated once and read from `/config/deploybot.env`.
+The launcher also sets `DEPLOYBOT_CONFIG_VOLUME`, `DEPLOYBOT_SELF_CONTAINER`,
+and `DEPLOYBOT_SELF_IMAGE`; do not set only some of these manually.
+
+## Self-updates
+
+Launcher-managed installations automatically add a protected **deploybot**
+service to the dashboard. Its policy defaults to manual, so a newly published
+image appears as an update that you deploy while watching. The normal deploy
+history is used: after the handoff starts, the row remains `running` until the
+new instance starts and verifies its own digest.
+
+Deploying this service deliberately interrupts the browser connection, including
+any browser terminal session. Wait for deploybot to return at the same address,
+then refresh its deployment history; that is when the handoff is resolved to
+`success` or `failed`.
+
+### Launcher configuration
+
+The `deploybot-config` volume is the source of truth for a launcher-managed
+installation:
+
+| File | Purpose | Editing guidance |
+|---|---|---|
+| `/config/run.json` | Image, container name, ports, volumes, labels, restart policy, and current/previous digests | Edit only to intentionally change the launcher-owned container configuration; then run `deploybot up` from a detached launcher to apply it. |
+| `/config/deploybot.env` | Application configuration and generated secrets | Treat as a secret. Do not regenerate `DEPLOYBOT_KEY` after the first start, or encrypted service environments become unreadable. |
+
+Do not replace the managed self-service script or its launcher identity
+variables. The launcher must remain outside deploybot's container so it can
+survive the container swap.
+
+There is intentionally no health check or automatic rollback. If a self-update
+leaves deploybot unavailable, run a detached launcher manually with the saved
+config volume, for example:
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v deploybot-config:/config \
+  ghcr.io/tomusdrw/github-deploy-bot:latest rollback
+```
+
+## Maintainer notes
+
+Start with the [approved self-update design](docs/superpowers/specs/2026-07-15-deploybot-self-update-design.md)
+before changing this feature. The implementation is intentionally split as follows:
+
+- `internal/launcher`: persistent config, first boot, Docker CLI swap, and rollback.
+- `internal/store`: the managed `is_self` service and startup reconciliation.
+- `internal/executor`: handoff-only success for the self-service; it must leave the deployment `running`.
+- `cmd/deploybot/self.go`: startup seeding and the final digest comparison.
+
+The non-negotiable invariants are that the launcher config remains canonical,
+`DEPLOYBOT_KEY` is never regenerated after bootstrap, and only the replacement
+instance may resolve a successful self-deployment. Keep tests around these
+boundaries when extending the feature.
+
 ## Security
 
 This app mounts `docker.sock`, making it **root-equivalent on the host**. Requirements:
@@ -161,6 +245,9 @@ Or set the OCI label `org.opencontainers.image.version`.
 deploybot                    # start server
 deploybot hash-password PWD  # generate bcrypt hash for DEPLOYBOT_ADMIN_HASH
 deploybot seed-demo          # insert a demo service row
+deploybot up --image IMAGE   # bootstrap/recreate from launcher config
+deploybot update --target-digest sha256:...  # swap to an image digest
+deploybot rollback            # swap to the previous recorded digest
 ```
 
 The browser editor and terminal bundles are committed, so building the Go binary does

@@ -13,6 +13,7 @@ type ServiceView struct {
 	RunningVersion  string
 	LatestVersion   string
 	UpdateAvailable bool
+	Managed         bool
 }
 
 func repoOf(ref string) string {

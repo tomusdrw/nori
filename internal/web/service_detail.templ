@@ -12,6 +12,9 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			<div>
 				<div class="detail-title-row">
 					<h1>{ data.Service.Name }</h1>
+					if data.Service.IsSelf {
+						<span class="badge badge-update">managed</span>
+					}
 					<span class={ "badge badge-state badge-state-" + data.State }><span class={ "status-dot status-" + data.State }></span>{ data.State }</span>
 				</div>
 				<p class="page-subtitle">{ data.Service.WatchedImage }</p>
