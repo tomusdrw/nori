@@ -13,7 +13,7 @@ FROM alpine:3.21
 RUN apk add --no-cache bash ca-certificates docker-cli tmux
 COPY --from=build /deploybot /usr/local/bin/deploybot
 EXPOSE 8080
-VOLUME ["/data"]
+VOLUME ["/data", "/config"]
 ENV DEPLOYBOT_DB=/data/deploybot.db
 ENV DEPLOYBOT_TERMINAL_DIR=/data
 WORKDIR /data

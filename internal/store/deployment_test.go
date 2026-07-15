@@ -37,3 +37,30 @@ func TestDeploymentCRUD(t *testing.T) {
 		t.Fatalf("len = %d, want 1", len(list))
 	}
 }
+
+func TestReconcileSelfDeploymentsUsesRunningDigest(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/deploybot:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matching := &Deployment{ServiceID: self.ID, Trigger: TriggerManual, TargetDigest: "sha256:match", Status: DeployRunning}
+	mismatch := &Deployment{ServiceID: self.ID, Trigger: TriggerManual, TargetDigest: "sha256:old", Status: DeployRunning}
+	for _, d := range []*Deployment{matching, mismatch} {
+		if err := st.CreateDeployment(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.ReconcileSelfDeployments(ctx, "sha256:match"); err != nil {
+		t.Fatal(err)
+	}
+	gotMatch, _ := st.GetDeployment(ctx, matching.ID)
+	gotMismatch, _ := st.GetDeployment(ctx, mismatch.ID)
+	if gotMatch.Status != DeploySuccess || gotMatch.FinishedAt == nil {
+		t.Fatalf("matching deployment = %+v", gotMatch)
+	}
+	if gotMismatch.Status != DeployFailed || gotMismatch.FinishedAt == nil {
+		t.Fatalf("mismatched deployment = %+v", gotMismatch)
+	}
+}

@@ -1,23 +1,22 @@
 services:
-  deploybot:
-    image: ghcr.io/tomusdrw/github-deploy-bot:latest
+  launcher:
+    # Run this one-shot service with `docker compose run --rm -it launcher up …`.
+    # It creates the long-running deploybot container from its persistent config.
+    image: ${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/github-deploy-bot:latest}
     build: .
-    ports:
-      - "${DEPLOYBOT_PORT:-8080}:8080"
     volumes:
-      # Required: gives deploybot root-equivalent control over host containers.
+      # Required: gives both the launcher and resulting bot root-equivalent
+      # control over host containers.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persistent SQLite DB and encrypted secrets.
       - deploybot-data:/data
+      - deploybot-config:/config
     environment:
-      DEPLOYBOT_KEY: ${DEPLOYBOT_KEY:?set DEPLOYBOT_KEY}
-      DEPLOYBOT_SESSION_KEY: ${DEPLOYBOT_SESSION_KEY:?set DEPLOYBOT_SESSION_KEY}
-      DEPLOYBOT_ADMIN_HASH: ${DEPLOYBOT_ADMIN_HASH:?set DEPLOYBOT_ADMIN_HASH}
-      DEPLOYBOT_DB: /data/deploybot.db
-      DEPLOYBOT_TERMINAL_DIR: /data
-      DEPLOYBOT_LISTEN: ":8080"
-      DEPLOYBOT_POLL_INTERVAL: ${DEPLOYBOT_POLL_INTERVAL:-60s}
-    restart: unless-stopped
+      DEPLOYBOT_CONFIG_VOLUME: ${DEPLOYBOT_CONFIG_VOLUME:-deploybot-config}
+      DEPLOYBOT_DATA_VOLUME: ${DEPLOYBOT_DATA_VOLUME:-deploybot-data}
+    profiles: ["launcher"]
 
 volumes:
   deploybot-data:
+    name: ${DEPLOYBOT_DATA_VOLUME:-deploybot-data}
+  deploybot-config:
+    name: ${DEPLOYBOT_CONFIG_VOLUME:-deploybot-config}

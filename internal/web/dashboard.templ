@@ -44,6 +44,9 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 							<div class="service-state"><span class={ "status-dot status-" + v.State }></span>{ v.State }</div>
 						</div>
 					</div>
+					if v.Managed {
+						<span class="badge badge-update">managed</span>
+					}
 					if v.UpdateAvailable {
 						<span class="badge badge-update">update available</span>
 					}

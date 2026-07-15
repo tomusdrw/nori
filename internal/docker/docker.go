@@ -22,6 +22,31 @@ type Container struct {
 	State  string
 }
 
+// DigestForImage returns the digest for the container that runs the same
+// repository as image. Tags are intentionally ignored: a digest is the only
+// stable comparison between the registry and a running container.
+func DigestForImage(containers []Container, image string) string {
+	want := repository(image)
+	for _, container := range containers {
+		if repository(container.Image) == want {
+			return container.Digest
+		}
+	}
+	return ""
+}
+
+func repository(ref string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	}
+	slash := strings.LastIndexByte(ref, '/')
+	colon := strings.LastIndexByte(ref, ':')
+	if colon > slash {
+		return ref[:colon]
+	}
+	return ref
+}
+
 type Client interface {
 	ListByService(ctx context.Context, service string) ([]Container, error)
 	Logs(ctx context.Context, containerID string, tail int) (io.ReadCloser, error)

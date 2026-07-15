@@ -225,6 +225,7 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 			State:          state,
 			RunningVersion: shortDigest(runningDigest),
 			LatestVersion:  shortDigest(latest),
+			Managed:        svc.IsSelf,
 		}
 		v.UpdateAvailable = runningDigest != "" && latest != "" && runningDigest != latest
 		views = append(views, v)
@@ -305,6 +306,16 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := parseServiceForm(r)
+	if svc.IsSelf {
+		// The launcher owns the self image and handoff command. Policy remains
+		// editable, but a POST cannot turn the managed service into an arbitrary
+		// privileged Docker script.
+		form.Name = svc.Name
+		form.WatchedImage = svc.WatchedImage
+		form.DeployScript = store.SelfDeployScript
+		form.EnvFile = ""
+		form.IsSelf = true
+	}
 	if err := validateServiceForm(r.Context(), form); err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
@@ -317,9 +328,11 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
 	}
-	if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if !svc.IsSelf {
+		if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	http.Redirect(w, r, "/services/"+svc.Name, http.StatusSeeOther)
 }
@@ -327,6 +340,10 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 	svc, err := s.getServiceByName(w, r)
 	if err != nil {
+		return
+	}
+	if svc.IsSelf {
+		http.Error(w, "the managed self-service cannot be deleted", http.StatusForbidden)
 		return
 	}
 	if err := s.store.DeleteService(r.Context(), svc.ID); err != nil {
@@ -492,7 +509,7 @@ func (s *Server) serviceToForm(ctx context.Context, svc *store.Service) (Service
 	}
 	return ServiceFormData{
 		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
-		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content,
+		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content, IsSelf: svc.IsSelf,
 	}, nil
 }
 

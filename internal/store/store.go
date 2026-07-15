@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS service (
 	policy TEXT NOT NULL,
 	cron_expr TEXT NOT NULL DEFAULT '',
 	deploy_script TEXT NOT NULL DEFAULT '',
+	is_self INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -55,7 +56,15 @@ func Open(path string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -63,3 +72,34 @@ func Open(path string, key []byte) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(service)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasSelf := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "is_self" {
+			hasSelf = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasSelf {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS service_one_self ON service(is_self) WHERE is_self=1`)
+	return err
+}

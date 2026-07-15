@@ -22,6 +22,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "up" || os.Args[1] == "update" || os.Args[1] == "rollback") {
+		if err := runLauncherCommand(context.Background(), os.Args[1:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
 		if len(os.Args) < 3 {
 			log.Fatal("usage: deploybot hash-password <password>")
@@ -56,6 +63,9 @@ func main() {
 	dk, err := docker.New(cfg.DockerHost)
 	if err != nil {
 		log.Fatalf("docker: %v", err)
+	}
+	if err := initializeSelfService(context.Background(), st, dk); err != nil {
+		log.Printf("self-update: %v", err)
 	}
 
 	latest := func(ctx context.Context, image string) (string, error) {

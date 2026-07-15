@@ -86,6 +86,7 @@ async function validate(kind, view) {
 function setupEditor(textarea) {
   const kind = textarea.dataset.editor;
   const form = textarea.closest("form");
+  const readOnly = textarea.readOnly;
   const language = kind === "bash" ? StreamLanguage.define(shell) : dotenv;
   const saveKeymap = keymap.of([{
     key: "Mod-s",
@@ -106,6 +107,7 @@ function setupEditor(textarea) {
       placeholder(textarea.placeholder || ""),
       EditorView.lineWrapping,
       saveKeymap,
+      ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           textarea.value = update.state.doc.toString();
