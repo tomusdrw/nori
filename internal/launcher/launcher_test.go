@@ -132,6 +132,72 @@ func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
 	}
 }
 
+func TestUpdateDiscoversPreviousDigestOnFirstSwap(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string]string{
+		"docker inspect --format {{.Image}} deploybot":                           "sha256:image-id\n",
+		"docker image inspect --format {{index .RepoDigests 0}} sha256:image-id": "ghcr.io/acme/deploybot@sha256:old\n",
+	}}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	writeTestConfig(t, l, testRunSpec())
+
+	if err := l.Update(context.Background(), "sha256:new"); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.CurrentImageDigest != "sha256:new" || spec.PreviousImageDigest != "sha256:old" {
+		t.Fatalf("digest state = current %q, previous %q", spec.CurrentImageDigest, spec.PreviousImageDigest)
+	}
+}
+
+func TestUpPreservesExplicitMigrationKeys(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	sessionKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &Launcher{
+		ConfigDir: t.TempDir(),
+		Runner:    &fakeRunner{},
+		Random:    strings.NewReader(""), // supplied keys must avoid random generation
+		PromptPassword: func() (string, error) {
+			t.Fatal("a supplied password hash must avoid prompting")
+			return "", nil
+		},
+	}
+	if err := l.Up(context.Background(), UpOptions{
+		Image:             "ghcr.io/acme/deploybot:latest",
+		EncryptionKey:     key,
+		SessionKey:        sessionKey,
+		AdminPasswordHash: string(hash),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(env))
+	if values["DEPLOYBOT_KEY"] != key || values["DEPLOYBOT_SESSION_KEY"] != sessionKey || values["DEPLOYBOT_ADMIN_HASH"] != string(hash) {
+		t.Fatalf("migration values were not preserved: %+v", values)
+	}
+}
+
+func testRunSpec() RunSpec {
+	return RunSpec{
+		Image:         "ghcr.io/acme/deploybot:latest",
+		ContainerName: "deploybot",
+		Ports:         []string{"8080:8080"},
+		Volumes:       []string{"/var/run/docker.sock:/var/run/docker.sock", "deploybot-data:/data", "deploybot-config:/config"},
+		Labels:        map[string]string{"deploybot.service": "deploybot"},
+		Restart:       "unless-stopped",
+		ConfigVolume:  "deploybot-config",
+	}
+}
+
 func writeTestConfig(t *testing.T, l *Launcher, spec RunSpec) {
 	t.Helper()
 	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\n"), 0o600); err != nil {

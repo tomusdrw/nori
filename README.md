@@ -174,6 +174,25 @@ image appears as an update that you deploy while watching. The normal deploy
 history is used: after the handoff starts, the row remains `running` until the
 new instance starts and verifies its own digest.
 
+Deploying this service deliberately interrupts the browser connection, including
+any browser terminal session. Wait for deploybot to return at the same address,
+then refresh its deployment history; that is when the handoff is resolved to
+`success` or `failed`.
+
+### Launcher configuration
+
+The `deploybot-config` volume is the source of truth for a launcher-managed
+installation:
+
+| File | Purpose | Editing guidance |
+|---|---|---|
+| `/config/run.json` | Image, container name, ports, volumes, labels, restart policy, and current/previous digests | Edit only to intentionally change the launcher-owned container configuration; then run `deploybot up` from a detached launcher to apply it. |
+| `/config/deploybot.env` | Application configuration and generated secrets | Treat as a secret. Do not regenerate `DEPLOYBOT_KEY` after the first start, or encrypted service environments become unreadable. |
+
+Do not replace the managed self-service script or its launcher identity
+variables. The launcher must remain outside deploybot's container so it can
+survive the container swap.
+
 There is intentionally no health check or automatic rollback. If a self-update
 leaves deploybot unavailable, run a detached launcher manually with the saved
 config volume, for example:
@@ -184,6 +203,21 @@ docker run --rm \
   -v deploybot-config:/config \
   ghcr.io/tomusdrw/github-deploy-bot:latest rollback
 ```
+
+## Maintainer notes
+
+Start with the [approved self-update design](docs/superpowers/specs/2026-07-15-deploybot-self-update-design.md)
+before changing this feature. The implementation is intentionally split as follows:
+
+- `internal/launcher`: persistent config, first boot, Docker CLI swap, and rollback.
+- `internal/store`: the managed `is_self` service and startup reconciliation.
+- `internal/executor`: handoff-only success for the self-service; it must leave the deployment `running`.
+- `cmd/deploybot/self.go`: startup seeding and the final digest comparison.
+
+The non-negotiable invariants are that the launcher config remains canonical,
+`DEPLOYBOT_KEY` is never regenerated after bootstrap, and only the replacement
+instance may resolve a successful self-deployment. Keep tests around these
+boundaries when extending the feature.
 
 ## Security
 
