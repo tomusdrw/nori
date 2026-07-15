@@ -85,7 +85,8 @@ plaintext secrets, so it has the same sensitive trust boundary as `docker.sock`.
 ### Reverse proxy
 
 If a Docker-aware reverse proxy routes containers using `VIRTUAL_HOST` and
-`VIRTUAL_PORT`, let it own external port exposure. On first boot, omit the host
+`VIRTUAL_PORT`, let it own external port exposure. For an nginx-proxy
+certificate companion, also set `LETSENCRYPT_HOST`. On first boot, omit the host
 port mapping and persist the proxy variables with the launcher:
 
 ```bash
@@ -96,7 +97,8 @@ docker run --rm -it \
   --image "$IMAGE" \
   --no-port \
   --env VIRTUAL_HOST=deploybot.example.com \
-  --env VIRTUAL_PORT=8080
+  --env VIRTUAL_PORT=8080 \
+  --env LETSENCRYPT_HOST=deploybot.example.com
 ```
 
 Add `--network your-proxy-network` when the proxy requires deploybot to join a
