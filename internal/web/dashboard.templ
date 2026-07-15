@@ -1,39 +1,86 @@
 package web
 
+import (
+	"fmt"
+	"strings"
+)
+
 templ Page(views []ServiceView, csrf string) {
-	@Layout("Deploy Bot", csrf, dashboardContent(views, csrf))
+	@Layout("Services", csrf, dashboardContent(views, csrf))
 }
 
 templ dashboardContent(views []ServiceView, csrf string) {
-	<h1>Services</h1>
+	<section class="page-heading">
+		<div>
+			<p class="eyebrow">Overview</p>
+			<h1>Your services</h1>
+			<p class="page-subtitle">Live health, image versions, and deployments in one place.</p>
+		</div>
+		<div class="heading-meta">
+			<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+			<span>{ serviceCountLabel(len(views)) }</span>
+		</div>
+	</section>
 	@ServicesTablePartial(views, csrf)
 }
 
 templ ServicesTablePartial(views []ServiceView, csrf string) {
-	<table id="services" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
-		<thead>
-			<tr><th>Name</th><th>State</th><th>Running</th><th>Latest</th><th>Update</th><th>Actions</th></tr>
-		</thead>
-		<tbody>
-			for _, v := range views {
-				<tr>
-					<td><a href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a></td>
-					<td>{ v.State }</td>
-					<td>{ v.RunningVersion }</td>
-					<td>{ v.LatestVersion }</td>
-					<td>
-						if v.UpdateAvailable {
-							<span class="badge">update available</span>
-						}
-					</td>
-					<td>
-						<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } style="display:inline">
-							<input type="hidden" name="csrf_token" value={ csrf }/>
-							<button type="submit">Deploy</button>
-						</form>
-					</td>
-				</tr>
-			}
-		</tbody>
-	</table>
+	<div id="services" class="service-grid" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
+		if len(views) == 0 {
+			<section class="empty-state panel">
+				<div class="empty-icon">+</div>
+				<h2>No services yet</h2>
+				<p>Add your first service to start watching images and deploying from the dashboard.</p>
+				<a class="button button-primary" href="/services/new">Create a service</a>
+			</section>
+		}
+		for _, v := range views {
+			<article class="service-card">
+				<div class="service-card-top">
+					<div class="service-identity">
+						<div class="service-avatar">{ serviceInitial(v.Name) }</div>
+						<div>
+							<a class="service-name" href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a>
+							<div class="service-state"><span class={ "status-dot status-" + v.State }></span>{ v.State }</div>
+						</div>
+					</div>
+					if v.UpdateAvailable {
+						<span class="badge badge-update">update available</span>
+					}
+				</div>
+				<div class="version-grid">
+					<div>
+						<span class="metric-label">Running</span>
+						<code>{ v.RunningVersion }</code>
+					</div>
+					<div>
+						<span class="metric-label">Latest</span>
+						<code>{ v.LatestVersion }</code>
+					</div>
+				</div>
+				<div class="service-card-actions">
+					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>View details</a>
+					<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
+						<input type="hidden" name="csrf_token" value={ csrf }/>
+						<button class="button button-primary button-small" type="submit">Deploy</button>
+					</form>
+				</div>
+			</article>
+		}
+	</div>
+}
+
+func serviceInitial(name string) string {
+	if name == "" {
+		return "?"
+	}
+	runes := []rune(name)
+	return strings.ToUpper(string(runes[0]))
+}
+
+func serviceCountLabel(count int) string {
+	if count == 1 {
+		return "1 service"
+	}
+	return fmt.Sprintf("%d services", count)
 }

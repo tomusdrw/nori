@@ -65,6 +65,16 @@ docker run -d --name deploybot \
 The image ships `bash` and the `docker` CLI so your deploy scripts can call `docker pull`,
 `docker run`, etc. against the host daemon through the mounted socket.
 
+## Per-service configuration
+
+Each service is configured with a watched image, one complete `.env` document, and a
+Bash deployment script. The form uses code editors with syntax highlighting, line
+numbers, and live validation. Invalid dotenv or Bash syntax cannot be saved, and Bash
+is checked again immediately before every deployment.
+
+The `.env` document is kept exactly as entered, including comments and blank lines. The
+complete document is encrypted at rest in SQLite because any value may be sensitive.
+
 ## Per-service contract
 
 Each service requires two declarations in your deploy script:
@@ -130,4 +140,11 @@ Or set the OCI label `org.opencontainers.image.version`.
 deploybot                    # start server
 deploybot hash-password PWD  # generate bcrypt hash for DEPLOYBOT_ADMIN_HASH
 deploybot seed-demo          # insert a demo service row
+```
+
+The browser editor bundle is committed, so building the Go binary does not require a
+JavaScript toolchain. If you change `internal/web/editor.js`, rebuild it with Bun:
+
+```bash
+make assets
 ```

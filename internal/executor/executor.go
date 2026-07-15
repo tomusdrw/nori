@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
+	"deploybot/internal/envfile"
 	"deploybot/internal/store"
 )
 
@@ -19,6 +21,21 @@ type CommandRunner interface {
 }
 
 type OSRunner struct{}
+
+// ValidateScript asks Bash to parse the script without executing it.
+func ValidateScript(ctx context.Context, script string) error {
+	cmd := exec.CommandContext(ctx, "bash", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		message = err.Error()
+	}
+	return fmt.Errorf("invalid bash syntax: %s", message)
+}
 
 func (OSRunner) Run(ctx context.Context, script string, env []string, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
@@ -59,10 +76,16 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 	if err != nil {
 		return 0, err
 	}
-
+	if err := ValidateScript(ctx, svc.DeployScript); err != nil {
+		return 0, err
+	}
 	digest, err := e.latest(ctx, svc.WatchedImage)
 	if err != nil {
 		return 0, fmt.Errorf("latest digest: %w", err)
+	}
+	env, err := e.buildEnv(ctx, svc, digest)
+	if err != nil {
+		return 0, fmt.Errorf("invalid environment file: %w", err)
 	}
 
 	if trigger == store.TriggerAuto && e.inCooldown(serviceID, digest) {
@@ -79,21 +102,15 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 		return 0, err
 	}
 
-	go e.runDeploy(svc, deploy)
+	go e.runDeploy(svc, deploy, env)
 	return deploy.ID, nil
 }
 
-func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment) {
+func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env []string) {
 	ctx := context.Background()
-	env, err := e.buildEnv(ctx, svc, deploy.TargetDigest)
-	if err != nil {
-		deploy.Log = fmt.Sprintf("env assembly: %v\n", err)
-		e.finish(ctx, deploy, store.DeployFailed, "")
-		return
-	}
 
 	var logBuf bytes.Buffer
-	err = e.runner.Run(ctx, svc.DeployScript, env, &logBuf, &logBuf)
+	err := e.runner.Run(ctx, svc.DeployScript, env, &logBuf, &logBuf)
 	deploy.Log = logBuf.String()
 
 	if err != nil {
@@ -107,7 +124,11 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment) {
 }
 
 func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest string) ([]string, error) {
-	vars, err := e.store.ListEnvVars(ctx, svc.ID)
+	content, err := e.store.GetEnvFile(ctx, svc.ID)
+	if err != nil {
+		return nil, err
+	}
+	fileEnv, err := envfile.Parse(content)
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +136,7 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 		fmt.Sprintf("SERVICE=%s", svc.Name),
 		fmt.Sprintf("TARGET_DIGEST=%s", digest),
 	}
-	for _, v := range vars {
-		env = append(env, fmt.Sprintf("%s=%s", v.Key, v.Value))
-	}
+	env = append(env, fileEnv...)
 	return env, nil
 }
 

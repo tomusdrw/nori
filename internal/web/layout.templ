@@ -6,38 +6,47 @@ templ Layout(title string, csrf string, content templ.Component) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>{ title }</title>
-			<script src="/static/htmx.min.js"></script>
+			<meta name="theme-color" content="#0b1020"/>
+			<title>{ title } · Deploy Bot</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js" defer></script>
+			<script src="/static/editor.js" type="module"></script>
 			if csrf != "" {
 				<meta name="csrf-token" content={ csrf }/>
 				<script>
-					document.body.addEventListener('htmx:configRequest', (e) => {
-						const token = document.querySelector('meta[name="csrf-token"]')?.content;
-						if (token) e.detail.headers['X-CSRF-Token'] = token;
+					document.addEventListener('DOMContentLoaded', () => {
+						document.body.addEventListener('htmx:configRequest', (event) => {
+							const token = document.querySelector('meta[name="csrf-token"]')?.content;
+							if (token) event.detail.headers['X-CSRF-Token'] = token;
+						});
 					});
 				</script>
 			}
-			<style>
-				body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 1100px; }
-				table { border-collapse: collapse; width: 100%; }
-				th, td { border: 1px solid #ccc; padding: 0.5rem; text-align: left; }
-				nav { margin-bottom: 1.5rem; }
-				nav a { margin-right: 1rem; }
-				textarea, input, select { width: 100%; margin-bottom: 0.5rem; }
-				.badge { background: #ffe08a; padding: 0.1rem 0.4rem; border-radius: 4px; }
-				.log-box { background: #111; color: #eee; padding: 1rem; font-family: monospace; white-space: pre-wrap; max-height: 400px; overflow: auto; }
-			</style>
 		</head>
 		<body>
-			<nav>
-				<a href="/">Dashboard</a>
-				<a href="/services/new">New service</a>
-				<form method="post" action="/logout" style="display:inline">
-					<input type="hidden" name="csrf_token" value={ csrf }/>
-					<button type="submit">Logout</button>
-				</form>
-			</nav>
-			@content
+			<div class="app-shell">
+				<header class="topbar">
+					<a class="brand" href="/" aria-label="Deploy Bot dashboard">
+						<span class="brand-mark" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+						</span>
+						<span>Deploy Bot</span>
+					</a>
+					<nav class="nav-links" aria-label="Main navigation">
+						<a href="/">Services</a>
+						<a class="button button-primary button-small" href="/services/new">
+							<span aria-hidden="true">+</span> New service
+						</a>
+						<form method="post" action="/logout" class="inline-form">
+							<input type="hidden" name="csrf_token" value={ csrf }/>
+							<button class="button button-ghost button-small" type="submit">Sign out</button>
+						</form>
+					</nav>
+				</header>
+				<main class="page-wrap">
+					@content
+				</main>
+			</div>
 		</body>
 	</html>
 }
@@ -47,23 +56,31 @@ templ LoginPage(csrf string, errMsg string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
-			<title>Login — Deploy Bot</title>
-			<style>
-				body { font-family: system-ui, sans-serif; max-width: 400px; margin: 4rem auto; }
-				input { width: 100%; margin-bottom: 1rem; padding: 0.5rem; }
-				.error { color: #b00020; }
-			</style>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="theme-color" content="#080c18"/>
+			<title>Sign in · Deploy Bot</title>
+			<link rel="stylesheet" href="/static/app.css"/>
 		</head>
-		<body>
-			<h1>Deploy Bot</h1>
-			if errMsg != "" {
-				<p class="error">{ errMsg }</p>
-			}
-			<form method="post" action="/login">
-				<label>Password</label>
-				<input type="password" name="password" required autofocus/>
-				<button type="submit">Login</button>
-			</form>
+		<body class="login-body">
+			<div class="login-glow login-glow-one"></div>
+			<div class="login-glow login-glow-two"></div>
+			<main class="login-card">
+				<div class="login-brand brand-mark" aria-hidden="true">
+					<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+				</div>
+				<p class="eyebrow">Deployment control plane</p>
+				<h1>Welcome back</h1>
+				<p class="login-copy">Sign in to monitor services and ship new versions.</p>
+				if errMsg != "" {
+					<div class="alert alert-error" role="alert">{ errMsg }</div>
+				}
+				<form method="post" action="/login" class="login-form">
+					<label for="password">Admin password</label>
+					<input id="password" type="password" name="password" required autofocus placeholder="Enter your password"/>
+					<button class="button button-primary button-full" type="submit">Sign in</button>
+				</form>
+				<p class="login-footnote"><span class="status-dot status-running"></span> Self-hosted and under your control</p>
+			</main>
 		</body>
 	</html>
 }
