@@ -1,0 +1,40 @@
+package web
+
+templ Page(views []ServiceView) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Deploy Bot</title>
+			<script src="/static/htmx.min.js"></script>
+		</head>
+		<body>
+			<h1>Services</h1>
+			@ServicesTable(views)
+		</body>
+	</html>
+}
+
+templ ServicesTable(views []ServiceView) {
+	<table id="services" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
+		<thead>
+			<tr><th>Name</th><th>State</th><th>Running</th><th>Latest</th><th>Update</th></tr>
+		</thead>
+		<tbody>
+			for _, v := range views {
+				<tr>
+					<td>{ v.Name }</td>
+					<td>{ v.State }</td>
+					<td>{ v.RunningVersion }</td>
+					<td>{ v.LatestVersion }</td>
+					<td>
+						if v.UpdateAvailable {
+							<span>update available</span>
+						}
+					</td>
+				</tr>
+			}
+		</tbody>
+	</table>
+}
