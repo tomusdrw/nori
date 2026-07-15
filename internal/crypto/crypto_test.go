@@ -38,3 +38,13 @@ func TestDecrypt_TooShort(t *testing.T) {
 		t.Fatal("expected error on short ciphertext")
 	}
 }
+
+func TestRejectsWrongKeyLength(t *testing.T) {
+	key16 := bytes.Repeat([]byte{1}, 16)
+	if _, err := Encrypt(key16, []byte("x")); err == nil {
+		t.Fatal("expected error from Encrypt with 16-byte key")
+	}
+	if _, err := Decrypt(key16, bytes.Repeat([]byte{0}, 32)); err == nil {
+		t.Fatal("expected error from Decrypt with 16-byte key")
+	}
+}

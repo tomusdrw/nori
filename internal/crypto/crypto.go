@@ -33,6 +33,9 @@ func Decrypt(key, ciphertext []byte) ([]byte, error) {
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {
+	if len(key) != 32 {
+		return nil, errors.New("crypto: key must be 32 bytes")
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
