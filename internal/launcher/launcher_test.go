@@ -269,6 +269,110 @@ func TestUpRepairsExistingConfigurationWithoutRegeneratingSecrets(t *testing.T) 
 	}
 }
 
+func TestUpBootstrapsWithExtraVolumes(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	sessionKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner, Random: strings.NewReader("")}
+	mount := "/home/me/.docker/config.json:/root/.docker/config.json:ro"
+	if err := l.Up(context.Background(), UpOptions{
+		Image:             "ghcr.io/acme/deploybot:latest",
+		Volumes:           []string{mount},
+		EncryptionKey:     key,
+		SessionKey:        sessionKey,
+		AdminPasswordHash: "already-hashed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(spec.Volumes, mount) {
+		t.Fatalf("extra volume not persisted: %+v", spec.Volumes)
+	}
+	if !contains(spec.Volumes, "/var/run/docker.sock:/var/run/docker.sock") ||
+		!contains(spec.Volumes, "deploybot-config:/config") ||
+		!contains(spec.Volumes, "deploybot-data:/data") {
+		t.Fatalf("mandatory mounts dropped: %+v", spec.Volumes)
+	}
+	assertContainsArgs(t, runner.calls[1], mount)
+}
+
+func TestUpAddsExtraVolumeToExistingConfig(t *testing.T) {
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	writeTestConfig(t, l, testRunSpec())
+	mount := "/etc/foo:/root/foo:ro"
+	if err := l.Up(context.Background(), UpOptions{Volumes: []string{mount}}); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(spec.Volumes, mount) {
+		t.Fatalf("extra volume not added to existing config: %+v", spec.Volumes)
+	}
+	if !contains(spec.Volumes, "deploybot-config:/config") {
+		t.Fatalf("mandatory config mount dropped: %+v", spec.Volumes)
+	}
+	assertContainsArgs(t, runner.calls[1], mount)
+}
+
+func TestUpDeduplicatesRepeatedVolumeOverride(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}}
+	writeTestConfig(t, l, testRunSpec())
+	mount := "/etc/foo:/root/foo:ro"
+	for i := 0; i < 2; i++ {
+		if err := l.Up(context.Background(), UpOptions{Volumes: []string{mount}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec, err := l.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, v := range spec.Volumes {
+		if v == mount {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("volume %q appears %d times, want 1: %+v", mount, count, spec.Volumes)
+	}
+}
+
+func TestUpdatePreservesExtraVolumes(t *testing.T) {
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	spec := testRunSpec()
+	mount := "/etc/foo:/root/foo:ro"
+	spec.Volumes = append(spec.Volumes, mount)
+	spec.CurrentImageDigest = "sha256:old"
+	writeTestConfig(t, l, spec)
+	if err := l.Update(context.Background(), "sha256:new"); err != nil {
+		t.Fatal(err)
+	}
+	assertContainsArgs(t, runner.calls[3], mount)
+}
+
+func TestUpRejectsInvalidVolume(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}, Random: strings.NewReader("")}
+	err := l.Up(context.Background(), UpOptions{
+		Image:             "ghcr.io/acme/deploybot:latest",
+		Volumes:           []string{"  "},
+		AdminPasswordHash: "already-hashed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "volume") {
+		t.Fatalf("Up error = %v, want invalid volume error", err)
+	}
+	if _, err := os.Stat(l.runSpecPath()); !os.IsNotExist(err) {
+		t.Fatalf("run spec must not be written after rejected volume: %v", err)
+	}
+}
+
 func TestUpRejectsPortAndNoPortTogether(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}}
 	err := l.Up(context.Background(), UpOptions{

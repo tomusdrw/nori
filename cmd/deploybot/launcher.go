@@ -49,6 +49,8 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 	adminHash := fs.String("admin-password-hash", os.Getenv("DEPLOYBOT_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
 	var ports stringList
 	fs.Var(&ports, "port", "host:container port mapping (repeatable)")
+	var volumes stringList
+	fs.Var(&volumes, "volume", "extra host bind or named volume mount (src:dst[:opts], repeatable)")
 	var environment stringList
 	fs.Var(&environment, "env", "environment variable for deploybot (KEY=VALUE, repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -65,6 +67,7 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 		Ports:             ports,
 		NoPort:            *noPort,
 		Network:           *network,
+		Volumes:           volumes,
 		Environment:       environment,
 		EncryptionKey:     *encryptionKey,
 		SessionKey:        *sessionKey,
@@ -93,7 +96,7 @@ type stringList []string
 func (s *stringList) String() string { return strings.Join(*s, ",") }
 func (s *stringList) Set(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return errors.New("port cannot be empty")
+		return errors.New("value cannot be empty")
 	}
 	*s = append(*s, value)
 	return nil
