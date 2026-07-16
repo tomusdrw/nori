@@ -33,10 +33,10 @@ func TestSettings_CustomBotNameInTitleAndBrand(t *testing.T) {
 
 	// Default name on dashboard
 	body := getAuthed(t, srv, cookies, "/")
-	if !strings.Contains(body, "<title>Services · Deploy Bot</title>") {
+	if !strings.Contains(body, "<title>Services · Nori</title>") {
 		t.Fatalf("expected default title, got:\n%s", body)
 	}
-	if !strings.Contains(body, ">Deploy Bot</span>") {
+	if !strings.Contains(body, ">Nori</span>") {
 		t.Fatalf("expected default brand, got:\n%s", body)
 	}
 

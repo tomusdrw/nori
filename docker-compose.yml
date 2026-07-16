@@ -2,7 +2,7 @@ services:
   launcher:
     # Run this one-shot service with `docker compose run --rm -it launcher up …`.
     # It creates the long-running deploybot container from its persistent config.
-    image: ${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/github-deploy-bot:latest}
+    image: ${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/nori:latest}
     build: .
     volumes:
       # Required: gives both the launcher and resulting bot root-equivalent

@@ -10,7 +10,7 @@ import (
 
 const (
 	SettingBotName = "bot_name"
-	DefaultBotName = "Deploy Bot"
+	DefaultBotName = "Nori"
 	MaxBotNameLen  = 64
 )
 

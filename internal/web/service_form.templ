@@ -36,7 +36,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<div class="panel-heading">
 				<div>
 					<h2>Service details</h2>
-					<p>The image and policy Deploy Bot should track.</p>
+					<p>The image and policy Nori should track.</p>
 				</div>
 				<span class="step-number">01</span>
 			</div>
@@ -119,7 +119,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 		<section class="danger-zone">
 			<div>
 				<h2>Delete service</h2>
-				<p>Remove its configuration and deployment history from Deploy Bot.</p>
+				<p>Remove its configuration and deployment history from Nori.</p>
 			</div>
 			<form method="post" action={ templ.SafeURL("/services/" + form.Name + "/delete") }>
 				<input type="hidden" name="csrf_token" value={ csrf }/>

@@ -1,7 +1,8 @@
-# Deploy Bot
+# Nori
 
-Self-hosted deployment control panel for Docker-based services. Watches GHCR for new
-images, runs your bash deploy scripts, and provides a dashboard to manage services.
+Self-hosted deployment control panel for Docker-based services. Watches container
+registries for new images, runs your bash deploy scripts, and provides a dashboard to
+manage services.
 
 ## Requirements
 
@@ -32,16 +33,16 @@ intentional — deploybot orchestrates containers on the host by running your ba
 (which call `docker`). The socket mount makes deploybot root-equivalent on that host, so
 keep auth enabled and put Cloudflare Access (or similar) in front.
 
-### Pull from GHCR
+### Choose an application image
 
 ```bash
-docker pull ghcr.io/tomusdrw/github-deploy-bot:latest
+export DEPLOYBOT_IMAGE=registry.example.com/your-org/deploybot:latest
+docker pull "$DEPLOYBOT_IMAGE"
 ```
 
 ### docker compose
 
 ```bash
-export DEPLOYBOT_IMAGE=ghcr.io/tomusdrw/github-deploy-bot:latest
 docker compose run --rm -it launcher up \
   --image "$DEPLOYBOT_IMAGE" \
   --port "${DEPLOYBOT_PORT:-8080}:8080"
@@ -56,7 +57,7 @@ For a scripted first boot, generate the admin password hash without a local Go
 install and pass it to `up`:
 
 ```bash
-export DEPLOYBOT_ADMIN_HASH=$(docker run --rm ghcr.io/tomusdrw/github-deploy-bot:latest \
+export DEPLOYBOT_ADMIN_HASH=$(docker run --rm "$DEPLOYBOT_IMAGE" \
   hash-password 'your-password')
 docker compose run --rm launcher up \
   --image "$DEPLOYBOT_IMAGE" \
@@ -67,12 +68,12 @@ docker compose run --rm launcher up \
 ### docker run
 
 ```bash
-export IMAGE=ghcr.io/tomusdrw/github-deploy-bot:latest
+export IMAGE=registry.example.com/your-org/deploybot:latest
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v deploybot-config:/config \
-  ghcr.io/tomusdrw/github-deploy-bot:latest \
-  up --image ghcr.io/tomusdrw/github-deploy-bot:latest
+  "$IMAGE" \
+  up --image "$IMAGE"
 ```
 
 Use `--data-volume`, `--config-volume`, `--container-name`, repeat `--port`,
@@ -83,7 +84,7 @@ human-editable `run.json` and `deploybot.env` on the config volume;
 `deploybot.env` contains plaintext secrets, so it has the same sensitive trust
 boundary as `docker.sock`.
 
-### Private images (GHCR authentication)
+### Private-image authentication
 
 Watching a **private** package needs registry credentials. Both the in-process
 digest poll and your deploy script's `docker pull` run *inside* the deploybot
@@ -100,8 +101,8 @@ docker run --rm -it \
 ```
 
 The mount is persisted in `run.json` and survives self-updates. This works when
-`~/.docker/config.json` holds an inline `auths` token (the default after
-`docker login ghcr.io` on a Linux host). It does **not** work if your host uses a
+`~/.docker/config.json` holds an inline `auths` token (the default after a `docker login`
+on a Linux host). It does **not** work if your host uses a
 credential *helper* (`credsStore`/`credHelpers`, e.g. Docker Desktop's
 `desktop`), because the mounted file only references a helper binary that is
 absent from the container — in that case generate a config with an inline token
@@ -178,7 +179,7 @@ complete document is encrypted at rest in SQLite because any value may be sensit
 
 Each service requires two declarations in your deploy script:
 
-1. **Watched image** — configured in the UI (e.g. `ghcr.io/you/app:latest`). This image's
+1. **Watched image** — configured in the UI (e.g. `registry.example.com/you/app:latest`). This image's
    digest drives "update available" and auto-deploy.
 2. **Container label** — add `--label deploybot.service=$SERVICE` to every `docker run`.
 
@@ -187,7 +188,7 @@ The app injects these variables into your script's environment on every deploy:
 | Variable | Value |
 |----------|-------|
 | `$SERVICE` | The service name. |
-| `$IMAGE` | The watched image reference, e.g. `ghcr.io/you/app:latest`. |
+| `$IMAGE` | The watched image reference, e.g. `registry.example.com/you/app:latest`. |
 | `$TARGET_DIGEST` | The digest being deployed, e.g. `sha256:…`. |
 | `$TARGET_IMAGE` | The digest-pinned reference `repo@sha256:…`. Pull this to deploy the exact digest. |
 | `$ENV_FILE` | Path to the service's `.env`, materialized for `docker run --env-file "$ENV_FILE"`. |
@@ -272,7 +273,7 @@ config volume, for example:
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v deploybot-config:/config \
-  ghcr.io/tomusdrw/github-deploy-bot:latest rollback
+  "$DEPLOYBOT_IMAGE" rollback
 ```
 
 ## Maintainer notes
@@ -304,7 +305,7 @@ This app mounts `docker.sock`, making it **root-equivalent on the host**. Requir
 Stamp images with a readable version for the dashboard:
 
 ```yaml
-- run: docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+- run: docker build -t registry.example.com/your-org/your-app:${VERSION} .
 - run: docker tag ... :latest
 ```
 
