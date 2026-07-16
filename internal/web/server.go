@@ -507,7 +507,7 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	running := ""
 	if err == nil {
 		state = summarizeState(cs)
-		running = shortDigest(watchedDigest(cs, svc.WatchedImage))
+		running = watchedDigest(cs, svc.WatchedImage)
 	}
 	latest := s.poller.CachedDigest(svc.Name)
 	deploys, err := s.store.ListDeployments(ctx, svc.ID, 20)
@@ -526,7 +526,7 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 		cviews = append(cviews, ContainerView{Name: c.Name, Image: c.Image, State: c.State})
 	}
 	return ServiceDetailData{
-		Service: form, State: state, Running: running, Latest: shortDigest(latest),
+		Service: form, State: state, Running: shortDigest(running), Latest: shortDigest(latest),
 		UpdateAvail: running != "" && latest != "" && running != latest,
 		Containers:  cviews, Deployments: dviews,
 	}, nil

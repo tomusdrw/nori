@@ -60,3 +60,49 @@ func TestDashboard_RendersServiceWithUpdate(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceDetail_NoUpdateWhenDigestsMatch(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	svc := &store.Service{Name: "blog", WatchedImage: "ghcr.io/me/blog:latest", Policy: store.PolicyManual}
+	if err := st.CreateService(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+
+	// The running container and the registry report the exact same digest, so
+	// no update should be advertised.
+	const digest = "sha256:bc3a491edb7d0000000000000000000000000000000000000000000000000000"
+	dk := &docker.Fake{Containers: map[string][]docker.Container{
+		"blog": {{Name: "blog-web", Image: "ghcr.io/me/blog:latest", Digest: digest, State: "running"}},
+	}}
+	latest := func(ctx context.Context, image string) (string, error) { return digest, nil }
+	ex := executor.New(st, &executor.OSRunner{}, latest, 0)
+	pl := poller.New(st, latest, ex, 0)
+	pl.Tick(context.Background())
+
+	hash, _ := auth.HashPassword("test")
+	a, _ := auth.New(hash, make([]byte, 32))
+	srv := NewServer(st, dk, ex, pl, a)
+
+	loginRR := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=test"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.ServeHTTP(loginRR, loginReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/services/blog", nil)
+	for _, c := range loginRR.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); strings.Contains(body, "Update available") {
+		t.Errorf("detail page advertises an update despite identical digests\n%s", body)
+	}
+}
