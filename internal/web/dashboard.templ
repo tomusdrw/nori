@@ -51,21 +51,32 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 						<span class="badge badge-update">update available</span>
 					}
 				</div>
-				<div class="version-grid">
+				<div class="service-metrics">
 					<div>
-						<span class="metric-label">Running</span>
-						<code>{ v.RunningVersion }</code>
+						<span class="metric-label">Running for</span>
+						<strong>{ v.RunningFor }</strong>
 					</div>
 					<div>
-						<span class="metric-label">Latest</span>
-						<code>{ v.LatestVersion }</code>
+						<span class="metric-label">Last deploy</span>
+						<strong>{ v.LastDeploy }</strong>
 					</div>
+				</div>
+				<div class="version-summary" title="Running and latest image digests">
+					<span>Image</span><code>{ v.RunningVersion }</code><span>→</span><code>{ v.LatestVersion }</code>
+				</div>
+				<div class="dashboard-log-preview">
+					<div class="log-preview-heading"><span class="metric-label">Recent logs</span><a href={ templ.SafeURL("/services/" + v.Name + "#logs") }>Open full logs</a></div>
+					<pre>{ v.RecentLogs }</pre>
 				</div>
 				<div class="service-card-actions">
 					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>View details</a>
 					<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
-						<button class="button button-primary button-small" type="submit">Deploy</button>
+						if v.UpdateAvailable {
+							<button class="button button-primary button-small" type="submit">Update</button>
+						} else {
+							<button class="button button-secondary button-redeploy button-small" type="submit">Re-deploy</button>
+						}
 					</form>
 				</div>
 			</article>

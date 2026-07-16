@@ -72,6 +72,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			</div>
 		</section>
 
+		<div class="editor-grid">
 		<section class="panel editor-panel">
 			<div class="panel-heading">
 				<div>
@@ -107,6 +108,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 				<span>Dotenv syntax</span>
 			</div>
 		</section>
+		</div>
 
 		<div class="form-actions">
 			<a class="button button-secondary" href={ serviceBackURL(form, isEdit) }>Cancel</a>

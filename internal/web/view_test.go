@@ -2,6 +2,7 @@ package web
 
 import (
 	"testing"
+	"time"
 
 	"deploybot/internal/docker"
 )
@@ -17,6 +18,17 @@ func TestRepoOf(t *testing.T) {
 		if got := repoOf(in); got != want {
 			t.Errorf("repoOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestRunningForAndDeployedAgo(t *testing.T) {
+	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	containers := []docker.Container{{State: "running", StartedAt: now.Add(-2*time.Hour - 20*time.Minute)}}
+	if got := runningFor(containers, now); got != "2h" {
+		t.Errorf("runningFor = %q", got)
+	}
+	if got := deployedAgo(now.Add(-5*time.Minute), now); got != "5m ago" {
+		t.Errorf("deployedAgo = %q", got)
 	}
 }
 

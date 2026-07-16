@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"deploybot/internal/auth"
 	"deploybot/internal/docker"
@@ -27,8 +28,8 @@ func TestDashboard_RendersServiceWithUpdate(t *testing.T) {
 	}
 
 	dk := &docker.Fake{Containers: map[string][]docker.Container{
-		"blog": {{Name: "blog-web", Image: "ghcr.io/me/blog:latest", Digest: "sha256:running0000", State: "running"}},
-	}}
+		"blog": {{ID: "blog-web", Name: "blog-web", Image: "ghcr.io/me/blog:latest", Digest: "sha256:running0000", State: "running", StartedAt: time.Now().Add(-2 * time.Hour)}},
+	}, LogData: map[string]string{"blog-web": "booted\nlistening on :8080\nrequest complete"}}
 	latest := func(ctx context.Context, image string) (string, error) { return "sha256:newer00000000", nil }
 	ex := executor.New(st, &executor.OSRunner{}, latest, 0)
 	pl := poller.New(st, latest, ex, 0)
@@ -54,7 +55,7 @@ func TestDashboard_RendersServiceWithUpdate(t *testing.T) {
 		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"blog", "running", "update available"} {
+	for _, want := range []string{"blog", "running", "update available", ">Update<", "Running for", "Last deploy", "Recent logs", "listening on :8080", "Open full logs"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\n%s", want, body)
 		}
@@ -104,5 +105,15 @@ func TestServiceDetail_NoUpdateWhenDigestsMatch(t *testing.T) {
 	}
 	if body := rr.Body.String(); strings.Contains(body, "Update available") {
 		t.Errorf("detail page advertises an update despite identical digests\n%s", body)
+	} else if !strings.Contains(body, ">Re-deploy<") {
+		t.Errorf("detail page should offer a subdued re-deploy action\n%s", body)
+	}
+}
+
+func TestRecentLogsLimitsDashboardPreview(t *testing.T) {
+	srv := &Server{docker: &docker.Fake{LogData: map[string]string{"one": "one\ntwo\nthree\nfour\nfive\nsix\nseven"}}}
+	logs := srv.recentLogs(context.Background(), []docker.Container{{ID: "one", State: "running"}}, 3)
+	if logs != "five\nsix\nseven" {
+		t.Fatalf("recent logs = %q", logs)
 	}
 }

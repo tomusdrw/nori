@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -240,6 +241,7 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 		return nil, err
 	}
 	views := make([]ServiceView, 0, len(svcs))
+	now := time.Now()
 	for _, svc := range svcs {
 		cs, err := s.docker.ListByService(ctx, svc.Name)
 		state := "unknown"
@@ -249,12 +251,23 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 			runningDigest = watchedDigest(cs, svc.WatchedImage)
 		}
 		latest := s.poller.CachedDigest(svc.Name)
+		deploys, err := s.store.ListDeployments(ctx, svc.ID, 1)
+		if err != nil {
+			return nil, err
+		}
+		lastDeploy := "No deployments yet"
+		if len(deploys) > 0 {
+			lastDeploy = deployedAgo(deploys[0].StartedAt, now)
+		}
 		v := ServiceView{
 			ID:             svc.ID,
 			Name:           svc.Name,
 			State:          state,
 			RunningVersion: shortDigest(runningDigest),
 			LatestVersion:  shortDigest(latest),
+			RunningFor:     runningFor(cs, now),
+			LastDeploy:     lastDeploy,
+			RecentLogs:     s.recentLogs(ctx, cs, 6),
 			Managed:        svc.IsSelf,
 		}
 		v.UpdateAvailable = runningDigest != "" && latest != "" && runningDigest != latest
@@ -466,26 +479,64 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, html.EscapeString(s.containerLogs(r.Context(), cs, 100, true)))
+}
+
+// recentLogs returns a compact, readable tail for dashboard cards. The full
+// per-container log output remains available from the service detail page.
+func (s *Server) recentLogs(ctx context.Context, cs []docker.Container, lineLimit int) string {
+	logs := s.containerLogs(ctx, cs, lineLimit, false)
+	if logs == "" {
+		return "No container logs yet."
+	}
+	lines := strings.Split(logs, "\n")
+	if len(lines) > lineLimit {
+		logs = strings.Join(lines[len(lines)-lineLimit:], "\n")
+	}
+	return logs
+}
+
+func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail int, includeContainerNames bool) string {
 	var b strings.Builder
 	for _, c := range cs {
-		rc, err := s.docker.Logs(r.Context(), c.ID, 100)
+		rc, err := s.docker.Logs(ctx, c.ID, tail)
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&b, "=== %s ===\n", c.Name)
-		scanner := bufio.NewScanner(rc)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if len(line) > 8 {
-				line = line[8:]
-			}
+		lines := readLogLines(rc)
+		rc.Close()
+		if len(lines) == 0 {
+			continue
+		}
+		if includeContainerNames {
+			fmt.Fprintf(&b, "=== %s ===\n", c.Name)
+		}
+		for _, line := range lines {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
-		rc.Close()
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, html.EscapeString(b.String()))
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+func readLogLines(rc io.Reader) []string {
+	scanner := bufio.NewScanner(rc)
+	// Container log lines are user-controlled and can be substantially longer
+	// than bufio.Scanner's default token limit.
+	scanner.Buffer(make([]byte, 4<<10), 1<<20)
+	var lines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Docker's non-TTY log stream prefixes each frame with an eight-byte
+		// multiplexing header. Fakes and TTY logs are plain text, so only remove
+		// it when it has the expected stream marker and zero padding.
+		if len(line) >= 8 && (line[0] == 1 || line[0] == 2) && line[1] == 0 && line[2] == 0 && line[3] == 0 {
+			line = line[8:]
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (s *Server) getServiceByName(w http.ResponseWriter, r *http.Request) (*store.Service, error) {
@@ -525,8 +576,13 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	for _, c := range cs {
 		cviews = append(cviews, ContainerView{Name: c.Name, Image: c.Image, State: c.State})
 	}
+	lastDeploy := "No deployments yet"
+	if len(deploys) > 0 {
+		lastDeploy = deployedAgo(deploys[0].StartedAt, time.Now())
+	}
 	return ServiceDetailData{
 		Service: form, State: state, Running: shortDigest(running), Latest: shortDigest(latest),
+		RunningFor: runningFor(cs, time.Now()), LastDeploy: lastDeploy,
 		UpdateAvail: running != "" && latest != "" && running != latest,
 		Containers:  cviews, Deployments: dviews,
 	}, nil

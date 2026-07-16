@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -20,6 +21,10 @@ type Container struct {
 	Image  string
 	Digest string
 	State  string
+	// StartedAt is the most recent time Docker started this container. It is
+	// intentionally distinct from the container creation timestamp: a
+	// restarted container should report its current uptime.
+	StartedAt time.Time
 }
 
 // DigestForImage returns the digest for the container that runs the same
@@ -86,7 +91,11 @@ func (r *realClient) ListByService(ctx context.Context, service string) ([]Conta
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
-		out = append(out, Container{ID: c.ID, Name: name, Image: c.Image, Digest: digest, State: c.State})
+		startedAt := time.Time{}
+		if inspect, err := r.cli.ContainerInspect(ctx, c.ID); err == nil && inspect.State != nil {
+			startedAt, _ = time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+		}
+		out = append(out, Container{ID: c.ID, Name: name, Image: c.Image, Digest: digest, State: c.State, StartedAt: startedAt})
 	}
 	return out, nil
 }
