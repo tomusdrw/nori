@@ -32,7 +32,11 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Configure</a>
 			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } class="inline-form">
 				<input type="hidden" name="csrf_token" value={ csrf }/>
-				<button class="button button-primary" type="submit">Deploy latest</button>
+				if data.UpdateAvail {
+					<button class="button button-primary" type="submit">Update</button>
+				} else {
+					<button class="button button-secondary button-redeploy" type="submit">Re-deploy</button>
+				}
 			</form>
 		</div>
 	</section>
@@ -51,46 +55,25 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			<span class="stat-caption">Across all containers</span>
 		</div>
 		<div class="stat-card">
-			<span class="metric-label">Running digest</span>
-			<strong><code>{ data.Running }</code></strong>
-			<span class="stat-caption">Currently on the host</span>
+			<span class="metric-label">Running for</span>
+			<strong>{ data.RunningFor }</strong>
+			<span class="stat-caption">Current container uptime</span>
 		</div>
 		<div class="stat-card">
-			<span class="metric-label">Latest digest</span>
-			<strong><code>{ data.Latest }</code></strong>
-			<span class="stat-caption">Published to the registry</span>
+			<span class="metric-label">Last deploy</span>
+			<strong>{ data.LastDeploy }</strong>
+			<span class="stat-caption">Most recent deployment attempt</span>
 		</div>
 	</section>
+	<div class="detail-version-summary" title="Running and latest image digests"><span>Image versions</span><code>{ data.Running }</code><span>→</span><code>{ data.Latest }</code></div>
 
-	<div class="detail-grid">
-		<section class="panel detail-panel">
-			<div class="panel-heading compact-heading">
-				<div><h2>Containers</h2><p>Discovered through the service label.</p></div>
-				<span class="count-pill">{ strconvItoa(len(data.Containers)) }</span>
-			</div>
-			<div class="table-wrap">
-				<table>
-					<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
-					<tbody>
-						if len(data.Containers) == 0 {
-							<tr><td colspan="3" class="empty-cell">No labeled containers found.</td></tr>
-						}
-						for _, c := range data.Containers {
-							<tr><td class="table-primary">{ c.Name }</td><td><code>{ c.Image }</code></td><td><span class={ "badge badge-state badge-state-" + c.State }><span class={ "status-dot status-" + c.State }></span>{ c.State }</span></td></tr>
-						}
-					</tbody>
-				</table>
-			</div>
-		</section>
-
-		<section class="panel detail-panel log-panel">
+	<section id="logs" class="panel detail-panel log-panel full-width-log-panel">
 			<div class="panel-heading compact-heading">
 				<div><h2>Container logs</h2><p>The latest 100 lines from each container.</p></div>
 				<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
 			</div>
 			<pre class="log-box" hx-get={ templ.SafeURL("/services/" + data.Service.Name + "/logs/stream") } hx-trigger="load" hx-swap="innerHTML">Loading logs…</pre>
-		</section>
-	</div>
+	</section>
 
 	<section class="panel detail-panel history-panel">
 		<div class="panel-heading compact-heading">
@@ -112,6 +95,26 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 							<td><span class={ "badge badge-deploy badge-deploy-" + d.Status }>{ d.Status }</span></td>
 							<td>{ d.StartedAt }</td>
 						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<section class="panel detail-panel containers-panel">
+		<div class="panel-heading compact-heading">
+			<div><h2>Containers</h2><p>Discovered through the service label.</p></div>
+			<span class="count-pill">{ strconvItoa(len(data.Containers)) }</span>
+		</div>
+		<div class="table-wrap">
+			<table>
+				<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
+				<tbody>
+					if len(data.Containers) == 0 {
+						<tr><td colspan="3" class="empty-cell">No labeled containers found.</td></tr>
+					}
+					for _, c := range data.Containers {
+						<tr><td class="table-primary">{ c.Name }</td><td><code>{ c.Image }</code></td><td><span class={ "badge badge-state badge-state-" + c.State }><span class={ "status-dot status-" + c.State }></span>{ c.State }</span></td></tr>
 					}
 				</tbody>
 			</table>

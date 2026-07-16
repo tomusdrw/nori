@@ -21,6 +21,8 @@ type ServiceDetailData struct {
 	State       string
 	Running     string
 	Latest      string
+	RunningFor  string
+	LastDeploy  string
 	UpdateAvail bool
 	Containers  []ContainerView
 	Deployments []DeploymentView
