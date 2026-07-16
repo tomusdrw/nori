@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -107,6 +108,7 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		_ = SettingsPage(name, s.csrf(r), err.Error(), false).Render(r.Context(), w)
 		return
 	}
+	log.Printf("settings: bot name set to %q", name)
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
 }
 
@@ -153,10 +155,12 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 
 	client, err := s.terminal.Attach(r.Context(), 24, 80)
 	if err != nil {
+		log.Printf("terminal: attach failed: %v", err)
 		_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, err.Error()), time.Now().Add(time.Second))
 		return
 	}
 	defer client.Close()
+	log.Printf("terminal: session attached from %s", r.RemoteAddr)
 
 	outputDone := make(chan struct{})
 	go func() {
@@ -223,13 +227,16 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.auth.Login(w, r, r.FormValue("password")); err != nil {
+		log.Printf("auth: login failed from %s", r.RemoteAddr)
 		_ = LoginPage("", "Invalid credentials").Render(r.Context(), w)
 		return
 	}
+	log.Printf("auth: login ok from %s", r.RemoteAddr)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	log.Printf("auth: logout from %s", r.RemoteAddr)
 	s.auth.Logout(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -310,6 +317,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("service: created %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
 	http.Redirect(w, r, "/services/"+svc.Name, http.StatusSeeOther)
 }
 
@@ -364,6 +372,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	log.Printf("service: updated %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
 	http.Redirect(w, r, "/services/"+svc.Name, http.StatusSeeOther)
 }
 
@@ -380,6 +389,7 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("service: deleted %q", svc.Name)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -390,6 +400,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.executor.Deploy(r.Context(), svc.ID, store.TriggerManual)
 	if err != nil {
+		log.Printf("deploy: manual %q failed: %v", svc.Name, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -399,18 +410,22 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if err := s.docker.StartByService(r.Context(), name); err != nil {
+		log.Printf("service: start %q failed: %v", name, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("service: started %q", name)
 	http.Redirect(w, r, "/services/"+name, http.StatusSeeOther)
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if err := s.docker.StopByService(r.Context(), name); err != nil {
+		log.Printf("service: stop %q failed: %v", name, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("service: stopped %q", name)
 	http.Redirect(w, r, "/services/"+name, http.StatusSeeOther)
 }
 
