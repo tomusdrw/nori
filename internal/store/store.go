@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS deployment (
 	finished_at INTEGER,
 	log TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS setting (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 func Open(path string, key []byte) (*Store, error) {

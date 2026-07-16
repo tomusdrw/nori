@@ -403,6 +403,8 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
 .alert strong { white-space: nowrap; }
 .alert-error { border-color: rgba(249, 112, 102, 0.24); background: rgba(249, 112, 102, 0.08); color: #ffaaa3; }
 .alert-error span { color: #d9a09c; }
+.alert-success { border-color: rgba(52, 211, 153, 0.24); background: rgba(52, 211, 153, 0.08); color: #86efac; }
+.alert-success span { color: #a7f3d0; }
 
 .login-body { display: grid; overflow: hidden; place-items: center; padding: 24px; background: #080c18; }
 .login-glow { position: fixed; border-radius: 50%; filter: blur(5px); pointer-events: none; }
