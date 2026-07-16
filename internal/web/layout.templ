@@ -7,6 +7,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#0b1020"/>
+			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
 			<title>{ title } · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/htmx.min.js" defer></script>
@@ -64,6 +65,7 @@ templ LoginPage(csrf string, errMsg string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#080c18"/>
+			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
 			<title>Sign in · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 		</head>
