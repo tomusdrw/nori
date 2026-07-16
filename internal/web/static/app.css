@@ -150,8 +150,8 @@ code { color: #c9c2ff; font-size: 0.88em; }
 .button-primary:hover { background: linear-gradient(135deg, #8979f2, #6d60dc); box-shadow: 0 10px 28px rgba(78, 65, 190, 0.34); }
 .button-secondary { border-color: var(--border-strong); background: rgba(255, 255, 255, 0.035); color: var(--text-soft); }
 .button-secondary:hover, .button-ghost:hover { border-color: rgba(155, 140, 255, 0.35); background: var(--primary-soft); color: var(--text); }
-.button-redeploy { border-color: transparent; background: transparent; color: var(--text-muted); }
-.button-redeploy:hover { border-color: transparent; background: transparent; color: #bdb4ff; }
+.button-redeploy { padding: 0; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; }
+.button-redeploy:hover { background: transparent; color: #bdb4ff; }
 .button-ghost { border-color: transparent; background: transparent; color: var(--text-muted); }
 .button-danger { border-color: rgba(249, 112, 102, 0.3); background: rgba(249, 112, 102, 0.08); color: #ffaca5; }
 .button-danger:hover { background: rgba(249, 112, 102, 0.15); }
@@ -171,6 +171,7 @@ code { color: #c9c2ff; font-size: 0.88em; }
   position: relative;
   display: flex;
   flex-direction: column;
+  height: 100%;
   overflow: hidden;
   padding: 16px;
   border-radius: 12px;
@@ -479,8 +480,6 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
   .service-grid { grid-template-columns: 1fr; }
   .nav-links .button-ghost { padding-inline: 8px; }
   .service-card-actions { justify-content: space-between; }
-  .service-card-actions .button, .service-card-actions form { flex: 1; }
-  .service-card-actions form .button { width: 100%; }
   .form-actions .button { flex: 1; }
   .form-actions { width: 100%; margin-left: 0; }
   .login-card { padding: 29px 24px; }

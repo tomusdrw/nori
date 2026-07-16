@@ -74,7 +74,7 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 						if v.UpdateAvailable {
 							<button class="button button-primary button-small" type="submit">Update</button>
 						} else {
-							<button class="button button-secondary button-redeploy button-small" type="submit">Re-deploy</button>
+							<button class="button-redeploy" type="submit">Re-deploy</button>
 						}
 					</form>
 					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>Details</a>
