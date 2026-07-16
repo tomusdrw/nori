@@ -76,14 +76,14 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<div class="panel-heading">
 				<div>
 					<h2>Deployment script</h2>
-					<p>Runs verbatim with <code>$SERVICE</code> and <code>$TARGET_DIGEST</code> injected.</p>
+					<p>Runs with <code>$SERVICE</code>, <code>$IMAGE</code>, <code>$TARGET_IMAGE</code>, <code>$TARGET_DIGEST</code> and <code>$ENV_FILE</code> injected.</p>
 				</div>
 				<div class="panel-heading-actions">
 					<div class="editor-health" data-validation-status="bash"><span class="validation-dot"></span><span data-validation-message>Checking Bash…</span></div>
 					<span class="step-number">02</span>
 				</div>
 			</div>
-			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Pull, back up, and replace your containers here" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
+			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Injected: $SERVICE $IMAGE $TARGET_IMAGE $TARGET_DIGEST $ENV_FILE (+ your .env vars)&#10;# $ENV_FILE is this service's .env, ready for docker run --env-file.&#10;&#10;docker pull $TARGET_IMAGE&#10;docker rm -f $SERVICE 2&gt;/dev/null || true&#10;docker run -d --name $SERVICE --label deploybot.service=$SERVICE --env-file $ENV_FILE $TARGET_IMAGE" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
 			<div class="editor-footer">
 				<span>Bash · syntax checked before save and deploy</span>
 				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>

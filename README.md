@@ -155,17 +155,34 @@ Each service requires two declarations in your deploy script:
 1. **Watched image** — configured in the UI (e.g. `ghcr.io/you/app:latest`). This image's
    digest drives "update available" and auto-deploy.
 2. **Container label** — add `--label deploybot.service=$SERVICE` to every `docker run`.
-   The app injects `$SERVICE` and `$TARGET_DIGEST` into your script's environment.
+
+The app injects these variables into your script's environment on every deploy:
+
+| Variable | Value |
+|----------|-------|
+| `$SERVICE` | The service name. |
+| `$IMAGE` | The watched image reference, e.g. `ghcr.io/you/app:latest`. |
+| `$TARGET_DIGEST` | The digest being deployed, e.g. `sha256:…`. |
+| `$TARGET_IMAGE` | The digest-pinned reference `repo@sha256:…`. Pull this to deploy the exact digest. |
+| `$ENV_FILE` | Path to the service's `.env`, materialized for `docker run --env-file "$ENV_FILE"`. |
+
+Every variable from the service's `.env` document is also exported directly into the
+script's shell. `$ENV_FILE` is written `0600`, holds only the service env (not the
+variables above), and is removed once the deploy finishes — so pass it to the container
+with `--env-file` rather than forwarding each value with `-e` by hand. Because the docker
+CLI reads `--env-file` locally, this works whether deploybot runs as a container or a
+local binary; it does **not** write a file inside the deployed container.
 
 Example deploy script snippet:
 
 ```bash
-docker pull ghcr.io/you/app:latest
+docker pull "$TARGET_IMAGE"
 # ... backup steps ...
-docker stop myapp || true && docker rm myapp || true
-docker run -d --name myapp \
-  --label deploybot.service=$SERVICE \
-  ghcr.io/you/app:latest
+docker rm -f "$SERVICE" 2>/dev/null || true
+docker run -d --name "$SERVICE" \
+  --label deploybot.service="$SERVICE" \
+  --env-file "$ENV_FILE" \
+  "$TARGET_IMAGE"
 ```
 
 ## Auto-deploy policies

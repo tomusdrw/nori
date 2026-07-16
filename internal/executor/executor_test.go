@@ -5,12 +5,23 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"deploybot/internal/store"
 )
+
+// envFileValue returns the ENV_FILE=... path from a script environment.
+func envFileValue(env []string) string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "ENV_FILE=") {
+			return strings.TrimPrefix(kv, "ENV_FILE=")
+		}
+	}
+	return ""
+}
 
 // crlfScript is a valid Bash script carrying Windows (CRLF) line endings,
 // as a browser submits a <textarea>. Bash rejects the stray carriage
@@ -51,6 +62,29 @@ func (f *fakeRunner) Run(ctx context.Context, script string, env []string, stdou
 		io.WriteString(stdout, f.log)
 	}
 	return f.err
+}
+
+func TestPinnedImage(t *testing.T) {
+	cases := []struct {
+		name   string
+		ref    string
+		digest string
+		want   string
+	}{
+		{"registry and tag", "ghcr.io/you/app:latest", "sha256:abc", "ghcr.io/you/app@sha256:abc"},
+		{"registry port and tag", "registry:5000/you/app:tag", "sha256:abc", "registry:5000/you/app@sha256:abc"},
+		{"registry port no tag", "registry:5000/you/app", "sha256:abc", "registry:5000/you/app@sha256:abc"},
+		{"already digest pinned", "ghcr.io/you/app@sha256:old", "sha256:abc", "ghcr.io/you/app@sha256:abc"},
+		{"no registry with tag", "app:latest", "sha256:abc", "app@sha256:abc"},
+		{"bare name", "image", "sha256:abc", "image@sha256:abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pinnedImage(tc.ref, tc.digest); got != tc.want {
+				t.Errorf("pinnedImage(%q, %q) = %q, want %q", tc.ref, tc.digest, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestDeploy_InvalidBashIsRejectedBeforeRun(t *testing.T) {
@@ -109,16 +143,119 @@ func TestBuildEnv_UsesCompleteDotenvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	ex := New(st, &fakeRunner{}, nil, 0)
-	env, err := ex.buildEnv(ctx, svc, "sha256:abc")
+	env, envFile, err := ex.buildEnv(ctx, svc, "sha256:abc")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer os.Remove(envFile)
 	joined := strings.Join(env, "\n")
 	for _, want := range []string{"SERVICE=app", "TARGET_DIGEST=sha256:abc", "PORT=8080", "GREETING=hello world"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("environment missing %q: %v", want, env)
 		}
 	}
+}
+
+func TestBuildEnv_InjectsImageAndEnvFile(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "app", WatchedImage: "ghcr.io/me/app:latest", Policy: store.PolicyManual}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvFile(ctx, svc.ID, "PORT=8080\nGREETING=\"hello world\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	ex := New(st, &fakeRunner{}, nil, 0)
+	env, envFile, err := ex.buildEnv(ctx, svc, "sha256:abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(envFile)
+
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{
+		"SERVICE=app",
+		"IMAGE=ghcr.io/me/app:latest",
+		"TARGET_DIGEST=sha256:abc",
+		"TARGET_IMAGE=ghcr.io/me/app@sha256:abc",
+		"ENV_FILE=" + envFile,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("environment missing %q: %v", want, env)
+		}
+	}
+
+	// The materialized file is a docker --env-file: resolved KEY=VALUE lines
+	// (quotes already stripped), holding only the service env — not the
+	// deploybot metadata variables.
+	info, err := os.Stat(envFile)
+	if err != nil {
+		t.Fatalf("stat env file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("env file mode = %o, want 600", perm)
+	}
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "PORT=8080") || !strings.Contains(got, "GREETING=hello world") {
+		t.Errorf("env file content = %q", got)
+	}
+	if strings.Contains(got, "SERVICE=") || strings.Contains(got, "TARGET_DIGEST=") {
+		t.Errorf("env file must contain only the service env, got %q", got)
+	}
+}
+
+func TestDeploy_RemovesEnvFileAfterRun(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "app", WatchedImage: "ghcr.io/me/app:latest", Policy: store.PolicyManual, DeployScript: "echo hi"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+
+	type capture struct {
+		path             string
+		existedDuringRun bool
+	}
+	seen := make(chan capture, 1)
+	runner := runnerFunc(func(_ context.Context, _ string, env []string, stdout, _ io.Writer) error {
+		io.WriteString(stdout, "ok\n")
+		path := envFileValue(env)
+		_, err := os.Stat(path)
+		seen <- capture{path: path, existedDuringRun: err == nil}
+		return nil
+	})
+	ex := New(st, runner, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	if _, err := ex.Deploy(ctx, svc.ID, store.TriggerManual); err != nil {
+		t.Fatal(err)
+	}
+
+	var cap capture
+	select {
+	case cap = <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("deploy did not run")
+	}
+	if cap.path == "" {
+		t.Fatal("ENV_FILE was not injected into the script environment")
+	}
+	if !cap.existedDuringRun {
+		t.Fatal("env file must exist while the deploy script runs")
+	}
+	// After the deploy finishes, the decrypted env file must be removed so
+	// secrets do not linger on disk.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(cap.path); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("env file %s was not removed after the deploy", cap.path)
 }
 
 func TestDeploy_Success(t *testing.T) {
