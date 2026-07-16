@@ -9,7 +9,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
 		<div>
 			<p class="eyebrow">Instance</p>
 			<h1>Settings</h1>
-			<p class="page-subtitle">Customize how this Deploy Bot instance appears in the dashboard and browser tab.</p>
+			<p class="page-subtitle">Customize how this Nori instance appears in the dashboard and browser tab.</p>
 		</div>
 	</section>
 	if errMsg != "" {
@@ -37,7 +37,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
 			<div class="form-grid">
 				<div class="field">
 					<label for="bot-name">Bot name</label>
-					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Deploy Bot" autofocus/>
+					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Nori" autofocus/>
 					<span class="field-help">Up to 64 characters. Does not change the internal <code>deploybot</code> service name.</span>
 				</div>
 			</div>

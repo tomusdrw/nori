@@ -1,4 +1,4 @@
-# GitHub Deploy Bot — Design
+# Nori — Design
 
 **Date:** 2026-07-15
 **Status:** Approved design, pending implementation plan

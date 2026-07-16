@@ -1,4 +1,4 @@
-# Deploy Bot — Self-Update Design
+# Nori — Self-Update Design
 
 **Date:** 2026-07-15
 **Status:** Approved design, pending implementation plan
@@ -70,7 +70,7 @@ the rest of the app.
 `deploybot-config` volume, mounted at `/config`. Single source of truth, human-editable,
 holds two concerns:
 
-- **Run spec:** image ref (tag, e.g. `ghcr.io/tomusdrw/github-deploy-bot:latest`), container
+- **Run spec:** image ref (tag, e.g. `ghcr.io/tomusdrw/nori:latest`), container
   name, port mappings, volume mounts (data volume, docker socket, config volume), labels
   (incl. `deploybot.service=<self-service-name>`), restart policy.
 - **App env:** `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, `DEPLOYBOT_ADMIN_HASH`, plus any

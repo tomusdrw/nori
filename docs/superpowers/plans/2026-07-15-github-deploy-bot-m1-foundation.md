@@ -1,4 +1,4 @@
-# GitHub Deploy Bot — Milestone 1: Foundation + Read-Only Dashboard — Implementation Plan
+# Nori — Milestone 1: Foundation + Read-Only Dashboard — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1238,7 +1238,7 @@ templ Page(views []ServiceView) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>Deploy Bot</title>
+			<title>Nori</title>
 			<script src="/static/htmx.min.js"></script>
 		</head>
 		<body>
