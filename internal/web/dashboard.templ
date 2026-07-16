@@ -69,7 +69,6 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 					<pre>{ v.RecentLogs }</pre>
 				</div>
 				<div class="service-card-actions">
-					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>View details</a>
 					<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
 						if v.UpdateAvailable {
@@ -78,6 +77,7 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 							<button class="button button-secondary button-redeploy button-small" type="submit">Re-deploy</button>
 						}
 					</form>
+					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>Details</a>
 				</div>
 			</article>
 		}

@@ -151,7 +151,7 @@ code { color: #c9c2ff; font-size: 0.88em; }
 .button-secondary { border-color: var(--border-strong); background: rgba(255, 255, 255, 0.035); color: var(--text-soft); }
 .button-secondary:hover, .button-ghost:hover { border-color: rgba(155, 140, 255, 0.35); background: var(--primary-soft); color: var(--text); }
 .button-redeploy { border-color: transparent; background: transparent; color: var(--text-muted); }
-.button-redeploy:hover { border-color: transparent; background: var(--primary-soft); color: var(--text); }
+.button-redeploy:hover { border-color: transparent; background: transparent; color: #bdb4ff; }
 .button-ghost { border-color: transparent; background: transparent; color: var(--text-muted); }
 .button-danger { border-color: rgba(249, 112, 102, 0.3); background: rgba(249, 112, 102, 0.08); color: #ffaca5; }
 .button-danger:hover { background: rgba(249, 112, 102, 0.15); }
@@ -234,6 +234,7 @@ code { color: #c9c2ff; font-size: 0.88em; }
 .dashboard-log-preview pre { height: 76px; margin: 0; overflow: hidden; padding: 7px 9px 8px; color: #b7c0d3; font-family: var(--font-mono); font-size: 0.61rem; line-height: 1.45; white-space: pre-wrap; }
 .service-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: auto; padding-top: 11px; border-top: 1px solid var(--border); }
 .service-card-actions .button-small { min-height: 29px; padding: 6px 9px; font-size: 0.68rem; }
+.service-card-actions .button-redeploy { min-height: auto; padding: 0; }
 
 .badge { display: inline-flex; align-items: center; gap: 7px; width: fit-content; border: 1px solid var(--border); border-radius: 999px; font-size: 0.7rem; font-weight: 600; line-height: 1; white-space: nowrap; }
 .badge-update { padding: 7px 9px; border-color: rgba(253, 176, 34, 0.23); background: rgba(253, 176, 34, 0.1); color: #fbcf75; }
