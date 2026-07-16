@@ -43,6 +43,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	}
 	s := &Server{store: st, docker: dk, executor: ex, poller: pl, auth: a, terminal: term}
 	r := chi.NewRouter()
+	r.Use(s.botNameMiddleware)
 	r.Get("/login", s.handleLoginGet)
 	r.Post("/login", s.handleLoginPost)
 	r.Post("/logout", s.handleLogout)
@@ -68,6 +69,8 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Get("/services/{name}/logs/stream", s.handleLogsStream)
 		r.Get("/deployments/{id}", s.handleDeployment)
 		r.Get("/deployments/{id}/stream", s.handleDeploymentStream)
+		r.Get("/settings", s.handleSettingsGet)
+		r.Post("/settings", s.handleSettingsPost)
 	})
 
 	sub, _ := fs.Sub(staticFS, "static")
@@ -79,6 +82,33 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.ServeHTTP(w, r) }
 
 func (s *Server) csrf(r *http.Request) string { return s.auth.CSRFToken(r) }
+
+func (s *Server) botNameMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(withBotName(r.Context(), s.store.BotName(r.Context()))))
+	})
+}
+
+func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
+	_ = SettingsPage(BotName(r.Context()), s.csrf(r), "", r.URL.Query().Get("saved") == "1").Render(r.Context(), w)
+}
+
+func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name, err := store.NormalizeBotName(r.FormValue("bot_name"))
+	if err != nil {
+		_ = SettingsPage(r.FormValue("bot_name"), s.csrf(r), err.Error(), false).Render(r.Context(), w)
+		return
+	}
+	if err := s.store.SetSetting(r.Context(), store.SettingBotName, name); err != nil {
+		_ = SettingsPage(name, s.csrf(r), err.Error(), false).Render(r.Context(), w)
+		return
+	}
+	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
+}
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	unavailable := ""

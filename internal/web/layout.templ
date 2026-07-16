@@ -7,7 +7,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#0b1020"/>
-			<title>{ title } · Deploy Bot</title>
+			<title>{ title } · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/htmx.min.js" defer></script>
 			<script src="/static/editor.js" type="module"></script>
@@ -30,15 +30,16 @@ templ Layout(title string, csrf string, content templ.Component) {
 		<body>
 			<div class="app-shell">
 				<header class="topbar">
-					<a class="brand" href="/" aria-label="Deploy Bot dashboard">
+					<a class="brand" href="/" aria-label={ BotName(ctx) + " dashboard" }>
 						<span class="brand-mark" aria-hidden="true">
 							<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
 						</span>
-						<span>Deploy Bot</span>
+						<span>{ BotName(ctx) }</span>
 					</a>
 					<nav class="nav-links" aria-label="Main navigation">
 						<a href="/">Services</a>
 						<a class="nav-terminal" href="/terminal"><span class="nav-terminal-icon" aria-hidden="true">&gt;_</span><span>Terminal</span></a>
+						<a href="/settings">Settings</a>
 						<a class="button button-primary button-small" href="/services/new">
 							<span aria-hidden="true">+</span> New service
 						</a>
@@ -63,7 +64,7 @@ templ LoginPage(csrf string, errMsg string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#080c18"/>
-			<title>Sign in · Deploy Bot</title>
+			<title>Sign in · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 		</head>
 		<body class="login-body">
@@ -73,7 +74,7 @@ templ LoginPage(csrf string, errMsg string) {
 				<div class="login-brand brand-mark" aria-hidden="true">
 					<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
 				</div>
-				<p class="eyebrow">Deployment control plane</p>
+				<p class="eyebrow">{ BotName(ctx) }</p>
 				<h1>Welcome back</h1>
 				<p class="login-copy">Sign in to monitor services and ship new versions.</p>
 				if errMsg != "" {

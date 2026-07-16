@@ -1,0 +1,49 @@
+package web
+
+templ SettingsPage(botName string, csrf string, errMsg string, saved bool) {
+	@Layout("Settings", csrf, settingsContent(botName, csrf, errMsg, saved))
+}
+
+templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
+	<section class="page-heading form-heading">
+		<div>
+			<p class="eyebrow">Instance</p>
+			<h1>Settings</h1>
+			<p class="page-subtitle">Customize how this Deploy Bot instance appears in the dashboard and browser tab.</p>
+		</div>
+	</section>
+	if errMsg != "" {
+		<div class="alert alert-error" role="alert">
+			<strong>Couldn’t save</strong>
+			<span>{ errMsg }</span>
+		</div>
+	}
+	if saved {
+		<div class="alert alert-success" role="status">
+			<strong>Saved</strong>
+			<span>Display name updated. Open tabs will show the new title after refresh.</span>
+		</div>
+	}
+	<form method="post" action="/settings" class="service-form">
+		<input type="hidden" name="csrf_token" value={ csrf }/>
+		<section class="panel form-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Display name</h2>
+					<p>Shown in the top bar and page title so you can tell instances apart across browser tabs.</p>
+				</div>
+				<span class="step-number">01</span>
+			</div>
+			<div class="form-grid">
+				<div class="field">
+					<label for="bot-name">Bot name</label>
+					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Deploy Bot" autofocus/>
+					<span class="field-help">Up to 64 characters. Does not change the internal <code>deploybot</code> service name.</span>
+				</div>
+			</div>
+		</section>
+		<div class="form-actions">
+			<button class="button button-primary" type="submit">Save settings</button>
+		</div>
+	</form>
+}
