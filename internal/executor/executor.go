@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -130,6 +131,7 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 		return 0, err
 	}
 
+	log.Printf("deploy: %s %q started (id=%d digest=%s)", trigger, svc.Name, deploy.ID, shortDigest(digest))
 	go e.runDeploy(svc, deploy, env, envFile)
 	return deploy.ID, nil
 }
@@ -145,6 +147,7 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 	deploy.Log = logBuf.String()
 
 	if err != nil {
+		log.Printf("deploy: %s %q failed (id=%d): %v", deploy.Trigger, svc.Name, deploy.ID, err)
 		e.recordFailure(svc.ID, deploy.TargetDigest)
 		e.finish(ctx, deploy, store.DeployFailed, "")
 		return
@@ -155,10 +158,23 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 		// The detached updater has only been handed off at this point. The
 		// launcher will stop this process next, so the newly booted instance
 		// resolves this record from its actual running digest.
+		log.Printf("deploy: %s %q handed off (id=%d)", deploy.Trigger, svc.Name, deploy.ID)
 		_ = e.store.UpdateDeployment(ctx, deploy)
 		return
 	}
+	log.Printf("deploy: %s %q succeeded (id=%d)", deploy.Trigger, svc.Name, deploy.ID)
 	e.finish(ctx, deploy, store.DeploySuccess, "")
+}
+
+func shortDigest(digest string) string {
+	const prefix = "sha256:"
+	if strings.HasPrefix(digest, prefix) && len(digest) > len(prefix)+12 {
+		return digest[:len(prefix)+12]
+	}
+	if len(digest) > 19 {
+		return digest[:19]
+	}
+	return digest
 }
 
 // buildEnv assembles the script environment and materializes the service's

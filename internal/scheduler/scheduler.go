@@ -34,14 +34,16 @@ func (s *Scheduler) Start(ctx context.Context) error {
 			continue
 		}
 		svcID := svc.ID
+		svcName := svc.Name
 		expr := svc.CronExpr
 		_, err := s.cron.AddFunc(expr, func() {
+			log.Printf("scheduler: triggering deploy for %q", svcName)
 			if _, err := s.executor.Deploy(ctx, svcID, store.TriggerScheduled); err != nil {
-				log.Printf("scheduler: deploy service %d: %v", svcID, err)
+				log.Printf("scheduler: deploy %q: %v", svcName, err)
 			}
 		})
 		if err != nil {
-			log.Printf("scheduler: bad cron %q for service %d: %v", expr, svcID, err)
+			log.Printf("scheduler: bad cron %q for %q: %v", expr, svcName, err)
 		}
 	}
 	s.cron.Start()

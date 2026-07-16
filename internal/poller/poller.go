@@ -68,6 +68,7 @@ func (p *Poller) Tick(ctx context.Context) {
 		p.mu.Unlock()
 
 		if svc.Policy == store.PolicyImmediate && prev != "" && prev != digest {
+			log.Printf("poller: digest changed for %s, triggering auto-deploy", svc.Name)
 			if _, err := p.executor.Deploy(ctx, svc.ID, store.TriggerAuto); err != nil {
 				log.Printf("poller: auto-deploy %s: %v", svc.Name, err)
 			}
