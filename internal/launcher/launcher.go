@@ -61,6 +61,7 @@ type UpOptions struct {
 	Ports             []string
 	NoPort            bool
 	Network           string
+	Volumes           []string
 	Environment       []string
 	EncryptionKey     string
 	SessionKey        string
@@ -286,6 +287,9 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 	if len(opts.Ports) == 0 && !opts.NoPort {
 		opts.Ports = []string{DefaultPort}
 	}
+	if err := validateVolumeMounts(opts.Volumes); err != nil {
+		return RunSpec{}, err
+	}
 
 	adminHash := opts.AdminPasswordHash
 	if adminHash == "" {
@@ -314,11 +318,11 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 		Image:         opts.Image,
 		ContainerName: opts.ContainerName,
 		Ports:         append([]string(nil), opts.Ports...),
-		Volumes: []string{
+		Volumes: appendVolumes([]string{
 			"/var/run/docker.sock:/var/run/docker.sock",
 			opts.DataVolume + ":/data",
 			opts.ConfigVolume + ":/config",
-		},
+		}, opts.Volumes),
 		Labels: map[string]string{
 			"deploybot.service": "deploybot",
 		},
@@ -462,6 +466,16 @@ func (l *Launcher) applyOverrides(spec *RunSpec, opts UpOptions) error {
 		spec.Network = opts.Network
 		changed = true
 	}
+	if len(opts.Volumes) > 0 {
+		if err := validateVolumeMounts(opts.Volumes); err != nil {
+			return err
+		}
+		merged := appendVolumes(spec.Volumes, opts.Volumes)
+		if len(merged) != len(spec.Volumes) {
+			spec.Volumes = merged
+			changed = true
+		}
+	}
 	if len(opts.Environment) > 0 {
 		if err := l.mergeEnvironment(opts.Environment); err != nil {
 			return err
@@ -579,6 +593,34 @@ func isProtectedEnvironmentKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// appendVolumes returns existing with each extra mount that is not already
+// present appended, preserving order. Deduplication keeps repeated `up`
+// invocations idempotent so Docker never sees a duplicate mount point.
+func appendVolumes(existing, extra []string) []string {
+	out := existing
+	for _, v := range extra {
+		if !contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// validateVolumeMounts rejects entries that would corrupt the docker run
+// invocation or the persisted run spec. Values are otherwise passed to
+// `docker run -v` verbatim, so their src:dst[:opts] shape is Docker's to parse.
+func validateVolumeMounts(volumes []string) error {
+	for _, v := range volumes {
+		if strings.TrimSpace(v) == "" {
+			return errors.New("volume mount cannot be empty")
+		}
+		if strings.ContainsAny(v, "\x00\r\n") {
+			return errors.New("volume mount cannot contain NUL, carriage return, or newline")
+		}
+	}
+	return nil
 }
 
 func contains(items []string, want string) bool {

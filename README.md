@@ -76,11 +76,36 @@ docker run --rm -it \
 ```
 
 Use `--data-volume`, `--config-volume`, `--container-name`, repeat `--port`,
-`--no-port`, `--network`, or repeat `--env` at first boot to change the
-defaults. The port, network, and environment options can also intentionally
-update an existing launch configuration. The launcher stores a human-editable
-`run.json` and `deploybot.env` on the config volume; `deploybot.env` contains
-plaintext secrets, so it has the same sensitive trust boundary as `docker.sock`.
+`--no-port`, `--network`, or repeat `--env`/`--volume` at first boot to change
+the defaults. The port, network, volume, and environment options can also
+intentionally update an existing launch configuration. The launcher stores a
+human-editable `run.json` and `deploybot.env` on the config volume;
+`deploybot.env` contains plaintext secrets, so it has the same sensitive trust
+boundary as `docker.sock`.
+
+### Private images (GHCR authentication)
+
+Watching a **private** package needs registry credentials. Both the in-process
+digest poll and your deploy script's `docker pull` run *inside* the deploybot
+container, which does not see the host user's `docker login`. Give the container
+access to those credentials by mounting your Docker config with `--volume`:
+
+```bash
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v deploybot-config:/config \
+  "$IMAGE" up \
+  --image "$IMAGE" \
+  --volume "$HOME/.docker/config.json:/root/.docker/config.json:ro"
+```
+
+The mount is persisted in `run.json` and survives self-updates. This works when
+`~/.docker/config.json` holds an inline `auths` token (the default after
+`docker login ghcr.io` on a Linux host). It does **not** work if your host uses a
+credential *helper* (`credsStore`/`credHelpers`, e.g. Docker Desktop's
+`desktop`), because the mounted file only references a helper binary that is
+absent from the container — in that case generate a config with an inline token
+and mount that instead.
 
 ### Reverse proxy
 
@@ -102,10 +127,11 @@ docker run --rm -it \
 ```
 
 Add `--network your-proxy-network` when the proxy requires deploybot to join a
-specific Docker network. The `--env`, `--port`/`--no-port`, and `--network`
-options also update an existing launcher configuration without regenerating its
-secrets, so the same command repairs a first boot that failed because port 8080
-was already in use. These settings are retained for every self-update.
+specific Docker network. The `--env`, `--port`/`--no-port`, `--network`, and
+`--volume` options also update an existing launcher configuration without
+regenerating its secrets, so the same command repairs a first boot that failed
+because port 8080 was already in use. These settings are retained for every
+self-update.
 
 The image ships `bash`, `tmux`, and the `docker` CLI so your deploy scripts,
 launcher, and browser terminal can call Docker against the host daemon through
