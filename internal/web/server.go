@@ -227,7 +227,8 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.auth.Login(w, r, r.FormValue("password")); err != nil {
+	remember := r.FormValue("remember") != ""
+	if err := s.auth.Login(w, r, r.FormValue("password"), remember); err != nil {
 		log.Printf("auth: login failed from %s", r.RemoteAddr)
 		_ = LoginPage("", "Invalid credentials").Render(r.Context(), w)
 		return
