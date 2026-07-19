@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	sessionCookie = "deploybot_session"
 	csrfCookie    = "deploybot_csrf"
 	sessionTTL    = 24 * time.Hour
+	rememberTTL   = 30 * 24 * time.Hour
 )
 
 type contextKey string
@@ -49,11 +51,30 @@ func HashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
-func (a *Auth) Login(w http.ResponseWriter, r *http.Request, password string) error {
+func (a *Auth) Login(w http.ResponseWriter, r *http.Request, password string, remember bool) error {
 	if err := bcrypt.CompareHashAndPassword(a.passwordHash, []byte(password)); err != nil {
 		return errors.New("invalid credentials")
 	}
-	token, err := a.signSession("admin", time.Now().Add(sessionTTL))
+	ttl := sessionTTL
+	if remember {
+		ttl = rememberTTL
+	}
+	csrf, err := randomToken(32)
+	if err != nil {
+		return err
+	}
+	return a.writeSession(w, r.TLS != nil, "admin", ttl, csrf)
+}
+
+// writeSession (re)issues the session and CSRF cookies with a fresh idle window
+// of ttl. Both cookies share the same expiry so a live session never starts
+// failing CSRF checks. The ttl is baked into the signed token so the sliding
+// refresh knows how far to extend. Callers supply the CSRF value: Login mints a
+// new one; the sliding refresh reuses the existing one so in-flight forms stay
+// valid.
+func (a *Auth) writeSession(w http.ResponseWriter, secure bool, user string, ttl time.Duration, csrf string) error {
+	exp := time.Now().Add(ttl)
+	token, err := a.signSession(user, ttl, exp)
 	if err != nil {
 		return err
 	}
@@ -63,20 +84,16 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request, password string) er
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
-		Expires:  time.Now().Add(sessionTTL),
+		Secure:   secure,
+		Expires:  exp,
 	})
-	csrf, err := randomToken(32)
-	if err != nil {
-		return err
-	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookie,
 		Value:    csrf,
 		Path:     "/",
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
-		Expires:  time.Now().Add(sessionTTL),
+		Secure:   secure,
+		Expires:  exp,
 	})
 	return nil
 }
@@ -92,12 +109,29 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		user, err := a.userFromRequest(r)
+		sess, err := a.userFromRequest(r)
 		if err != nil {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		ctx := context.WithValue(r.Context(), userKey, user)
+		// Sliding expiry: once a session is past the halfway point of its idle
+		// window, re-issue it so continued activity keeps it alive. Refreshing
+		// only in the second half avoids setting a cookie on every request
+		// (the dashboard polls every few seconds).
+		if time.Until(sess.exp) < sess.ttl/2 {
+			csrf := a.CSRFToken(r)
+			if csrf == "" {
+				if csrf, err = randomToken(32); err != nil {
+					http.Error(w, "session error", http.StatusInternalServerError)
+					return
+				}
+			}
+			if err := a.writeSession(w, r.TLS != nil, sess.user, sess.ttl, csrf); err != nil {
+				http.Error(w, "session error", http.StatusInternalServerError)
+				return
+			}
+		}
+		ctx := context.WithValue(r.Context(), userKey, sess.user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -133,44 +167,60 @@ func (a *Auth) CSRFToken(r *http.Request) string {
 	return cookie.Value
 }
 
-func (a *Auth) userFromRequest(r *http.Request) (string, error) {
+// session is a verified, unexpired session decoded from the cookie token. ttl
+// is the idle window the session was issued with; exp is when it currently
+// lapses. The sliding refresh uses both to decide whether, and how far, to
+// extend.
+type session struct {
+	user string
+	ttl  time.Duration
+	exp  time.Time
+}
+
+func (a *Auth) userFromRequest(r *http.Request) (session, error) {
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil {
-		return "", err
+		return session{}, err
 	}
 	return a.verifySession(cookie.Value)
 }
 
-func (a *Auth) signSession(user string, exp time.Time) (string, error) {
-	payload := fmt.Sprintf("%s|%d", user, exp.Unix())
+func (a *Auth) signSession(user string, ttl time.Duration, exp time.Time) (string, error) {
+	payload := fmt.Sprintf("%s|%d|%d", user, int64(ttl.Seconds()), exp.Unix())
 	mac := hmac.New(sha256.New, a.sessionKey)
 	mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return base64.RawURLEncoding.EncodeToString([]byte(payload + "|" + sig)), nil
 }
 
-func (a *Auth) verifySession(token string) (string, error) {
+func (a *Auth) verifySession(token string) (session, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return "", err
+		return session{}, err
 	}
 	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 {
-		return "", errors.New("bad session")
+	if len(parts) != 4 {
+		return session{}, errors.New("bad session")
 	}
-	user, expStr, sig := parts[0], parts[1], parts[2]
-	payload := user + "|" + expStr
+	user, ttlStr, expStr, sig := parts[0], parts[1], parts[2], parts[3]
+	payload := user + "|" + ttlStr + "|" + expStr
 	mac := hmac.New(sha256.New, a.sessionKey)
 	mac.Write([]byte(payload))
 	if !hmac.Equal([]byte(sig), []byte(hex.EncodeToString(mac.Sum(nil)))) {
-		return "", errors.New("bad signature")
+		return session{}, errors.New("bad signature")
 	}
-	var exp int64
-	fmt.Sscanf(expStr, "%d", &exp)
+	ttlSecs, err := strconv.ParseInt(ttlStr, 10, 64)
+	if err != nil || ttlSecs <= 0 {
+		return session{}, errors.New("bad session ttl")
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return session{}, errors.New("bad session exp")
+	}
 	if time.Now().Unix() > exp {
-		return "", errors.New("session expired")
+		return session{}, errors.New("session expired")
 	}
-	return user, nil
+	return session{user: user, ttl: time.Duration(ttlSecs) * time.Second, exp: time.Unix(exp, 0)}, nil
 }
 
 func randomToken(n int) (string, error) {

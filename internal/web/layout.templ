@@ -85,6 +85,10 @@ templ LoginPage(csrf string, errMsg string) {
 				<form method="post" action="/login" class="login-form">
 					<label for="password">Admin password</label>
 					<input id="password" type="password" name="password" required autofocus placeholder="Enter your password"/>
+					<label class="login-remember">
+						<input type="checkbox" name="remember" value="1"/>
+						<span>Remember me</span>
+					</label>
 					<button class="button button-primary button-full" type="submit">Sign in</button>
 				</form>
 				<p class="login-footnote"><span class="status-dot status-running"></span> Self-hosted and under your control</p>
