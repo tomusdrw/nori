@@ -439,8 +439,8 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
 .login-copy { margin: 0 0 26px; color: var(--text-muted); }
 .login-form { display: grid; gap: 9px; }
 .login-form input { height: 46px; margin-bottom: 8px; }
-.login-remember { display: flex; flex-direction: row; align-items: center; gap: 9px; margin: -2px 0 8px; color: var(--text-muted); font-size: 0.82rem; font-weight: 500; cursor: pointer; }
-.login-remember input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.login-remember { display: flex; flex-direction: row; align-items: center; gap: 7px; margin: -2px 0 8px; color: var(--text-muted); font-size: 0.82rem; font-weight: 500; cursor: pointer; }
+.login-remember input[type="checkbox"] { width: 1em; height: 1em; margin: 0; accent-color: var(--primary); cursor: pointer; }
 .login-footnote { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 24px 0 0; color: var(--text-muted); font-size: 0.72rem; }
 
 @media (max-width: 1000px) {
