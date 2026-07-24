@@ -12,6 +12,12 @@ const (
 	SettingBotName = "bot_name"
 	DefaultBotName = "Nori"
 	MaxBotNameLen  = 64
+
+	// SettingNotifyMode stores the in-app notification-mode toggle
+	// (always / auto-only / never). The values and their semantics live in
+	// internal/notify; the store treats it as an opaque string so the lower
+	// layer has no dependency on notification logic.
+	SettingNotifyMode = "notify_mode"
 )
 
 var (
@@ -45,6 +51,17 @@ func (s *Store) BotName(ctx context.Context) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return DefaultBotName
+	}
+	return value
+}
+
+// NotifyMode returns the stored notification-mode string (e.g. "always",
+// "auto-only", "never"), or "" when unset. Validation of the value belongs
+// to the caller (see internal/notify.NormalizeMode).
+func (s *Store) NotifyMode(ctx context.Context) string {
+	value, err := s.GetSetting(ctx, SettingNotifyMode)
+	if err != nil {
+		return ""
 	}
 	return value
 }

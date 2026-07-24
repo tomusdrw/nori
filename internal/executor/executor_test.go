@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"deploybot/internal/notify"
 	"deploybot/internal/store"
 )
 
@@ -400,6 +402,257 @@ func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
 	}
 	if d.Status != store.DeployFailed || d.FinishedAt == nil {
 		t.Fatalf("failed self handoff was not finalized: %+v", d)
+	}
+}
+
+// capturingNotifier records every service-down event it receives.
+type capturingNotifier struct {
+	mu     sync.Mutex
+	events []notify.Event
+}
+
+func (c *capturingNotifier) NotifyServiceDown(_ context.Context, evt notify.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, evt)
+	return nil
+}
+
+func (c *capturingNotifier) snapshot() []notify.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]notify.Event, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:         "app",
+		WatchedImage: "ghcr.io/me/app:latest",
+		Policy:       store.PolicyManual,
+		DeployScript: "exit 1",
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	cap := &capturingNotifier{}
+	ex := New(st, &fakeRunner{err: errors.New("deploy boom")}, func(context.Context, string) (string, error) {
+		return "sha256:bad", nil
+	}, 0)
+	ex.SetNotifier(cap)
+	ex.SetBotName("staging")
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d, derr := st.GetDeployment(ctx, id)
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		if d.Status == store.DeployFailed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(cap.snapshot()) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	events := cap.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("got %d notify events, want 1: %+v", len(events), events)
+	}
+	evt := events[0]
+	if evt.ServiceName != "app" || evt.Trigger != store.TriggerManual {
+		t.Errorf("unexpected event: %+v", evt)
+	}
+	if evt.Digest == "" || !strings.Contains(evt.Reason, "deploy boom") {
+		t.Errorf("unexpected event payload: %+v", evt)
+	}
+	if evt.BotName != "staging" {
+		t.Errorf("BotName = %q, want staging", evt.BotName)
+	}
+}
+
+func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	cap := &capturingNotifier{}
+	ex := New(st, &fakeRunner{log: "ok"}, func(context.Context, string) (string, error) {
+		return "sha256:good", nil
+	}, 0)
+	ex.SetNotifier(cap)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d, derr := st.GetDeployment(ctx, id)
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		if d.Status == store.DeploySuccess {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := cap.snapshot(); len(got) != 0 {
+		t.Fatalf("success must not notify; got %+v", got)
+	}
+}
+
+// waitForFailure blocks until the deploy record for id reaches DeployFailed,
+// giving the synchronous notifier call inside alertFailure time to land.
+func waitForFailure(t *testing.T, st *store.Store, ctx context.Context, id int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d, err := st.GetDeployment(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Status == store.DeployFailed {
+			// alertFailure runs before finish(); a tiny cushion lets the
+			// notifier call return before we read the capture.
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("deploy did not finish as failed")
+}
+
+func TestExecutor_ModeNeverSuppressesAllTriggers(t *testing.T) {
+	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
+		t.Run(trigger, func(t *testing.T) {
+			st := openTestStore(t)
+			ctx := context.Background()
+			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeNever)); err != nil {
+				t.Fatal(err)
+			}
+			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
+			if err := st.CreateService(ctx, svc); err != nil {
+				t.Fatal(err)
+			}
+			cap := &capturingNotifier{}
+			ex := New(st, &fakeRunner{err: errors.New("boom")},
+				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+			ex.SetNotifier(cap)
+
+			id, err := ex.Deploy(ctx, svc.ID, trigger)
+			if err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+			waitForFailure(t, st, ctx, id)
+			if got := cap.snapshot(); len(got) != 0 {
+				t.Fatalf("mode=never must suppress %s trigger; got %+v", trigger, got)
+			}
+		})
+	}
+}
+
+func TestExecutor_ModeAutoOnlySuppressesManualOnly(t *testing.T) {
+	cases := []struct {
+		trigger string
+		want    int
+	}{
+		{store.TriggerManual, 0},
+		{store.TriggerAuto, 1},
+		{store.TriggerScheduled, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.trigger, func(t *testing.T) {
+			st := openTestStore(t)
+			ctx := context.Background()
+			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAutoOnly)); err != nil {
+				t.Fatal(err)
+			}
+			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
+			if err := st.CreateService(ctx, svc); err != nil {
+				t.Fatal(err)
+			}
+			cap := &capturingNotifier{}
+			ex := New(st, &fakeRunner{err: errors.New("boom")},
+				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+			ex.SetNotifier(cap)
+
+			id, err := ex.Deploy(ctx, svc.ID, tc.trigger)
+			if err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+			waitForFailure(t, st, ctx, id)
+			if got := len(cap.snapshot()); got != tc.want {
+				t.Fatalf("mode=auto-only trigger=%s: got %d events, want %d", tc.trigger, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecutor_ModeAlwaysFiresForAllTriggers(t *testing.T) {
+	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
+		t.Run(trigger, func(t *testing.T) {
+			st := openTestStore(t)
+			ctx := context.Background()
+			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAlways)); err != nil {
+				t.Fatal(err)
+			}
+			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
+			if err := st.CreateService(ctx, svc); err != nil {
+				t.Fatal(err)
+			}
+			cap := &capturingNotifier{}
+			ex := New(st, &fakeRunner{err: errors.New("boom")},
+				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+			ex.SetNotifier(cap)
+
+			id, err := ex.Deploy(ctx, svc.ID, trigger)
+			if err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+			waitForFailure(t, st, ctx, id)
+			if got := len(cap.snapshot()); got != 1 {
+				t.Fatalf("mode=always trigger=%s: got %d events, want 1", trigger, got)
+			}
+		})
+	}
+}
+
+func TestExecutor_UnsetModeDefaultsToAlways(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	// Intentionally do NOT set SettingNotifyMode.
+	svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	cap := &capturingNotifier{}
+	ex := New(st, &fakeRunner{err: errors.New("boom")},
+		func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+	ex.SetNotifier(cap)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	waitForFailure(t, st, ctx, id)
+	if got := len(cap.snapshot()); got != 1 {
+		t.Fatalf("unset mode must default to always: got %d events, want 1", got)
 	}
 }
 
