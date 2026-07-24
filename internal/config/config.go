@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,22 @@ type Config struct {
 	DockerHost        string
 	TerminalDir       string
 	PollInterval      time.Duration
+	Twilio            TwilioConfig
+}
+
+// TwilioConfig holds optional Twilio SMS settings. When every field is empty,
+// SMS notifications are disabled and the app behaves as before. Partial
+// configuration is rejected so a typo does not silently disable alerts.
+type TwilioConfig struct {
+	AccountSID string
+	AuthToken  string
+	From       string
+	To         string
+}
+
+// Enabled reports whether all required Twilio fields are present.
+func (t TwilioConfig) Enabled() bool {
+	return t.AccountSID != "" && t.AuthToken != "" && t.From != "" && t.To != ""
 }
 
 func Load() (Config, error) {
@@ -64,7 +81,47 @@ func Load() (Config, error) {
 		}
 		c.PollInterval = d
 	}
+
+	tw, err := loadTwilio()
+	if err != nil {
+		return Config{}, err
+	}
+	c.Twilio = tw
 	return c, nil
+}
+
+func loadTwilio() (TwilioConfig, error) {
+	t := TwilioConfig{
+		AccountSID: strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_ACCOUNT_SID")),
+		AuthToken:  os.Getenv("DEPLOYBOT_TWILIO_AUTH_TOKEN"),
+		From:       strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_FROM")),
+		To:         strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_TO")),
+	}
+	// Treat "all empty" as "intentionally disabled". Any partial set is an
+	// operator error: half-configured Twilio would silently never fire and
+	// defeat the purpose of wiring it up.
+	any := t.AccountSID != "" || t.AuthToken != "" || t.From != "" || t.To != ""
+	if !any {
+		return TwilioConfig{}, nil
+	}
+	var missing []string
+	if t.AccountSID == "" {
+		missing = append(missing, "DEPLOYBOT_TWILIO_ACCOUNT_SID")
+	}
+	if t.AuthToken == "" {
+		missing = append(missing, "DEPLOYBOT_TWILIO_AUTH_TOKEN")
+	}
+	if t.From == "" {
+		missing = append(missing, "DEPLOYBOT_TWILIO_FROM")
+	}
+	if t.To == "" {
+		missing = append(missing, "DEPLOYBOT_TWILIO_TO")
+	}
+	if len(missing) > 0 {
+		return TwilioConfig{}, fmt.Errorf(
+			"DEPLOYBOT_TWILIO_* partially configured: missing %s", strings.Join(missing, ", "))
+	}
+	return t, nil
 }
 
 func getenv(k, def string) string {

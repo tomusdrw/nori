@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"deploybot/internal/envfile"
+	"deploybot/internal/notify"
 	"deploybot/internal/store"
 )
 
@@ -77,6 +78,8 @@ type Executor struct {
 	runner   CommandRunner
 	latest   LatestDigestFunc
 	cooldown time.Duration
+	notify   notify.Notifier
+	botName  string
 
 	locks    sync.Map // int64 -> *sync.Mutex
 	failures sync.Map // int64 -> failureRecord
@@ -91,7 +94,29 @@ func New(st *store.Store, runner CommandRunner, latest LatestDigestFunc, cooldow
 	if cooldown == 0 {
 		cooldown = 15 * time.Minute
 	}
-	return &Executor{store: st, runner: runner, latest: latest, cooldown: cooldown}
+	return &Executor{
+		store:    st,
+		runner:   runner,
+		latest:   latest,
+		cooldown: cooldown,
+		notify:   notify.Noop{},
+	}
+}
+
+// SetNotifier installs the alert notifier used for service-down events. The
+// default is a no-op; pass a *notify.Twilio (typically wrapped in
+// *notify.LogFailures) to enable SMS alerts. SetBotName should be called
+// alongside it so the alert identifies the source instance.
+func (e *Executor) SetNotifier(n notify.Notifier) {
+	if n == nil {
+		n = notify.Noop{}
+	}
+	e.notify = n
+}
+
+// SetBotName sets the instance display name used in alert bodies.
+func (e *Executor) SetBotName(name string) {
+	e.botName = name
 }
 
 func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) (int64, error) {
@@ -149,6 +174,7 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 	if err != nil {
 		log.Printf("deploy: %s %q failed (id=%d): %v", deploy.Trigger, svc.Name, deploy.ID, err)
 		e.recordFailure(svc.ID, deploy.TargetDigest)
+		e.alertFailure(svc, deploy, err)
 		e.finish(ctx, deploy, store.DeployFailed, "")
 		return
 	}
@@ -267,6 +293,48 @@ func (e *Executor) inCooldown(serviceID int64, digest string) bool {
 
 func (e *Executor) recordFailure(serviceID int64, digest string) {
 	e.failures.Store(serviceID, failureRecord{digest: digest, until: time.Now().Add(e.cooldown)})
+}
+
+// alertFailure sends a service-down notification. The call has its own
+// timeout so a slow notifier cannot stall the deploy pipeline, and the
+// notifier is expected to swallow send errors itself (see notify.LogFailures)
+// so a Twilio outage can never fail a deploy. The in-app notify-mode setting
+// (always / auto-only / never) is consulted first and can suppress the call.
+func (e *Executor) alertFailure(svc *store.Service, deploy *store.Deployment, cause error) {
+	if e.notify == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	raw := e.store.NotifyMode(ctx)
+	mode, err := notify.NormalizeMode(raw)
+	if err != nil {
+		log.Printf("notify: ignoring invalid stored mode %q: %v", raw, err)
+		mode = notify.DefaultMode
+	}
+	if !notify.ShouldSend(mode, deploy.Trigger) {
+		return
+	}
+
+	evt := notify.Event{
+		BotName:     e.botName,
+		ServiceName: svc.Name,
+		Trigger:     deploy.Trigger,
+		Digest:      shortDigest(deploy.TargetDigest),
+		Reason:      truncateReason(cause.Error()),
+	}
+	_ = e.notify.NotifyServiceDown(ctx, evt)
+}
+
+// truncateReason keeps the SMS body short. Twilio rejects bodies longer than
+// 1600 chars; an unbounded script error log could exceed that.
+func truncateReason(s string) string {
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
 }
 
 func (e *Executor) clearFailure(serviceID int64) {

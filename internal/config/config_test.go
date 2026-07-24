@@ -66,3 +66,42 @@ func TestLoad_BadKeyLength(t *testing.T) {
 		t.Fatal("expected error for 16-byte key")
 	}
 }
+
+func TestLoad_TwilioDisabledByDefault(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Twilio.Enabled() {
+		t.Fatal("Twilio must be disabled when env vars are absent")
+	}
+}
+
+func TestLoad_TwilioEnabledWhenFullyConfigured(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TWILIO_ACCOUNT_SID", "AC123")
+	t.Setenv("DEPLOYBOT_TWILIO_AUTH_TOKEN", "tok")
+	t.Setenv("DEPLOYBOT_TWILIO_FROM", "+15551234567")
+	t.Setenv("DEPLOYBOT_TWILIO_TO", "+15559876543")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Twilio.Enabled() {
+		t.Fatal("Twilio must be enabled when all four vars are set")
+	}
+	if cfg.Twilio.AccountSID != "AC123" || cfg.Twilio.From != "+15551234567" {
+		t.Errorf("unexpected twilio config: %+v", cfg.Twilio)
+	}
+}
+
+func TestLoad_TwilioPartialConfigRejected(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TWILIO_ACCOUNT_SID", "AC123")
+	// AuthToken, From, To intentionally omitted.
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for partially configured Twilio")
+	}
+}

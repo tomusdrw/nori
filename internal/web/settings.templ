@@ -1,10 +1,10 @@
 package web
 
-templ SettingsPage(botName string, csrf string, errMsg string, saved bool) {
-	@Layout("Settings", csrf, settingsContent(botName, csrf, errMsg, saved))
+templ SettingsPage(botName string, notifyMode string, csrf string, errMsg string, saved bool) {
+	@Layout("Settings", csrf, settingsContent(botName, notifyMode, csrf, errMsg, saved))
 }
 
-templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
+templ settingsContent(botName string, notifyMode string, csrf string, errMsg string, saved bool) {
 	<section class="page-heading form-heading">
 		<div>
 			<p class="eyebrow">Instance</p>
@@ -21,7 +21,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
 	if saved {
 		<div class="alert alert-success" role="status">
 			<strong>Saved</strong>
-			<span>Display name updated. Open tabs will show the new title after refresh.</span>
+			<span>Settings updated. Open tabs will reflect the change after refresh.</span>
 		</div>
 	}
 	<form method="post" action="/settings" class="service-form">
@@ -42,8 +42,29 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool) {
 				</div>
 			</div>
 		</section>
+		<section class="panel form-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Notifications</h2>
+					<p>When to send an SMS when a deploy fails. Requires Twilio to be configured via <code>DEPLOYBOT_TWILIO_*</code> env vars.</p>
+				</div>
+				<span class="step-number">02</span>
+			</div>
+			<div class="form-grid">
+				<div class="field">
+					<label for="notify-mode">SMS on deploy failure</label>
+					<select id="notify-mode" name="notify_mode">
+						<option value="always" selected?={ notifyMode == "always" }>Always (manual + automatic)</option>
+						<option value="auto-only" selected?={ notifyMode == "auto-only" }>Automatic deployments only</option>
+						<option value="never" selected?={ notifyMode == "never" }>Never</option>
+					</select>
+					<span class="field-help">Automatic retries are already deduped per image digest during the failure cooldown; manual deploys are not deduped.</span>
+				</div>
+			</div>
+		</section>
 		<div class="form-actions">
 			<button class="button button-primary" type="submit">Save settings</button>
 		</div>
 	</form>
 }
+
