@@ -220,6 +220,40 @@ docker run -d --name "$SERVICE" \
 | `immediate` | Auto-deploy when registry digest changes (polled every 60s) |
 | `scheduled` | Deploy on cron schedule (e.g. `0 3 * * *`) |
 
+## SMS alerts (optional, Twilio)
+
+Nori sends an SMS to a preconfigured number when a deploy script exits non-zero.
+This is the closest "service is down" signal available: there is no live
+container health check, so the trigger is deploy failure (which usually means
+the new container did not start or the script could not bring the service up).
+A container that crashes *after* a successful deploy is not detected today.
+
+Configure all four env vars; leaving any blank disables SMS entirely, and a
+partial set is rejected at startup:
+
+```
+DEPLOYBOT_TWILIO_ACCOUNT_SID=AC...
+DEPLOYBOT_TWILIO_AUTH_TOKEN=...
+DEPLOYBOT_TWILIO_FROM=+15551234567
+DEPLOYBOT_TWILIO_TO=+15559876543
+```
+
+Send failures are logged but never fail a deploy. The per-service failure
+cooldown already prevents SMS spam during repeated auto-deploy retries of the
+same digest; manual deploys are not rate-limited.
+
+The **Settings** page exposes an in-app toggle that further controls when SMS
+is sent, independent of Twilio being configured:
+
+| Mode | Behavior |
+|------|----------|
+| `always` (default) | Alert on every failure (same as above). |
+| `auto-only` | Suppress alerts for manually triggered deploys. Automatic and scheduled failures still alert. |
+| `never` | Suppress all alerts. |
+
+The toggle takes effect on the next deploy; no restart needed. It only has an
+effect when Twilio is configured.
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -232,6 +266,10 @@ docker run -d --name "$SERVICE" \
 | `DEPLOYBOT_DOCKER_HOST` | no | Docker host override |
 | `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
 | `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
+| `DEPLOYBOT_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `DEPLOYBOT_TWILIO_*` to enable SMS on deploy failure. |
+| `DEPLOYBOT_TWILIO_AUTH_TOKEN` | no | Twilio auth token. |
+| `DEPLOYBOT_TWILIO_FROM` | no | Sender number (Twilio-owned, E.164, e.g. `+15551234567`). |
+| `DEPLOYBOT_TWILIO_TO` | no | Recipient number (E.164). Partial config is an error. |
 
 When started by the launcher, `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
 `DEPLOYBOT_ADMIN_HASH` are generated once and read from `/config/deploybot.env`.

@@ -13,6 +13,7 @@ import (
 	"deploybot/internal/config"
 	"deploybot/internal/docker"
 	"deploybot/internal/executor"
+	"deploybot/internal/notify"
 	"deploybot/internal/poller"
 	"deploybot/internal/registry"
 	"deploybot/internal/scheduler"
@@ -73,6 +74,8 @@ func main() {
 	}
 
 	ex := executor.New(st, executor.OSRunner{}, latest, 0)
+	ex.SetNotifier(buildNotifier(cfg))
+	ex.SetBotName(st.BotName(context.Background()))
 	pl := poller.New(st, latest, ex, cfg.PollInterval)
 	sched := scheduler.New(st, ex)
 
@@ -105,4 +108,20 @@ func main() {
 	<-sig
 	cancel()
 	_ = httpSrv.Shutdown(context.Background())
+}
+
+// buildNotifier returns the service-down notifier chosen by configuration.
+// When Twilio is not configured, the no-op notifier keeps the app behaving
+// exactly as before. When fully configured, the Twilio notifier is wrapped
+// in LogFailures so a Twilio outage can never fail a deploy.
+func buildNotifier(cfg config.Config) notify.Notifier {
+	if !cfg.Twilio.Enabled() {
+		return notify.Noop{}
+	}
+	return &notify.LogFailures{Inner: notify.NewTwilio(
+		cfg.Twilio.AccountSID,
+		cfg.Twilio.AuthToken,
+		cfg.Twilio.From,
+		cfg.Twilio.To,
+	)}
 }

@@ -23,6 +23,7 @@ import (
 	"deploybot/internal/docker"
 	"deploybot/internal/envfile"
 	"deploybot/internal/executor"
+	"deploybot/internal/notify"
 	"deploybot/internal/poller"
 	"deploybot/internal/store"
 	terminalsession "deploybot/internal/terminal"
@@ -92,7 +93,8 @@ func (s *Server) botNameMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
-	_ = SettingsPage(BotName(r.Context()), s.csrf(r), "", r.URL.Query().Get("saved") == "1").Render(r.Context(), w)
+	mode, _ := notify.NormalizeMode(s.store.NotifyMode(r.Context()))
+	_ = SettingsPage(BotName(r.Context()), string(mode), s.csrf(r), "", r.URL.Query().Get("saved") == "1").Render(r.Context(), w)
 }
 
 func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
@@ -102,15 +104,30 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	}
 	name, err := store.NormalizeBotName(r.FormValue("bot_name"))
 	if err != nil {
-		_ = SettingsPage(r.FormValue("bot_name"), s.csrf(r), err.Error(), false).Render(r.Context(), w)
+		s.renderSettingsError(w, r, r.FormValue("bot_name"), r.FormValue("notify_mode"), err.Error())
+		return
+	}
+	mode, err := notify.NormalizeMode(r.FormValue("notify_mode"))
+	if err != nil {
+		s.renderSettingsError(w, r, name, r.FormValue("notify_mode"), err.Error())
 		return
 	}
 	if err := s.store.SetSetting(r.Context(), store.SettingBotName, name); err != nil {
-		_ = SettingsPage(name, s.csrf(r), err.Error(), false).Render(r.Context(), w)
+		s.renderSettingsError(w, r, name, string(mode), err.Error())
 		return
 	}
-	log.Printf("settings: bot name set to %q", name)
+	if err := s.store.SetSetting(r.Context(), store.SettingNotifyMode, string(mode)); err != nil {
+		s.renderSettingsError(w, r, name, string(mode), err.Error())
+		return
+	}
+	log.Printf("settings: bot name set to %q, notify mode set to %q", name, mode)
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
+}
+
+func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, botName, rawMode, errMsg string) {
+	// Preserve whatever the user typed (not the normalized value) so they can
+	// see and fix their input on re-render.
+	_ = SettingsPage(botName, rawMode, s.csrf(r), errMsg, false).Render(r.Context(), w)
 }
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
