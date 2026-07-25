@@ -2,9 +2,27 @@ package store
 
 import (
 	"database/sql"
+	"net/url"
 
 	_ "modernc.org/sqlite"
 )
+
+// dsn builds a SQLite URI carrying the connection PRAGMAs. They have to travel
+// on the DSN rather than run as `db.Exec("PRAGMA ...")` after opening: sql.Open
+// returns a pool, so such a statement configures only whichever connection
+// served it. Every later connection would keep the SQLite defaults —
+// busy_timeout=0, which turns concurrent writes into instant SQLITE_BUSY, and
+// foreign_keys=OFF, which silently skips ON DELETE CASCADE.
+// The path is carried as an opaque URI part so it never grows a "//" authority,
+// which would make SQLite read a relative path like "deploybot.db" as a hostname.
+func dsn(path string) string {
+	u := url.URL{
+		Scheme:   "file",
+		Opaque:   (&url.URL{Path: path}).EscapedPath(),
+		RawQuery: url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)"}}.Encode(),
+	}
+	return u.String()
+}
 
 type Store struct {
 	db  *sql.DB
@@ -52,16 +70,8 @@ CREATE TABLE IF NOT EXISTS setting (
 `
 
 func Open(path string, key []byte) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
-		db.Close()
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {

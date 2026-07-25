@@ -5,7 +5,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate
+RUN go run github.com/a-h/templ/cmd/templ@$(go list -m -f '{{.Version}}' github.com/a-h/templ) generate
 RUN CGO_ENABLED=0 go build -o /deploybot ./cmd/deploybot
 
 # Runtime stage
