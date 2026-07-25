@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +14,12 @@ import (
 )
 
 type Monitor struct {
-	store    *store.Store
-	docker   docker.Client
-	notify   notify.Notifier
-	interval time.Duration
-	cooldown time.Duration
+	store      *store.Store
+	docker     docker.Client
+	notify     notify.Notifier
+	interval   time.Duration
+	cooldown   time.Duration
+	httpClient *http.Client
 	// per-service state tracked in-memory in a single goroutine context.
 	states map[int64]serviceState
 }
@@ -36,12 +38,13 @@ func New(st *store.Store, dk docker.Client, nf notify.Notifier, interval time.Du
 		interval = 60 * time.Second
 	}
 	return &Monitor{
-		store:    st,
-		docker:   dk,
-		notify:   nf,
-		interval: interval,
-		cooldown: 15 * time.Minute,
-		states:   make(map[int64]serviceState),
+		store:      st,
+		docker:     dk,
+		notify:     nf,
+		interval:   interval,
+		cooldown:   15 * time.Minute,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		states:     make(map[int64]serviceState),
 	}
 }
 
@@ -73,12 +76,16 @@ func (m *Monitor) Tick(ctx context.Context) {
 			log.Printf("monitor: list containers for %q: %v", svc.Name, err)
 			continue
 		}
-		up := false
+		containerUp := false
 		for _, c := range containers {
 			if c.State == "running" && c.Health != "unhealthy" {
-				up = true
+				containerUp = true
 				break
 			}
+		}
+		probeUp, probeDetail := true, ""
+		if svc.HealthURL != "" {
+			probeUp, probeDetail = m.probe(ctx, svc.HealthURL)
 		}
 		var firstDigest string
 		if len(containers) > 0 {
@@ -89,6 +96,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 		st := m.states[svc.ID]
 		now := time.Now().UTC()
 
+		up := containerUp && probeUp
 		if up {
 			if !st.up && st.downAlertSent {
 				m.maybeSendRecovery(ctx, svc, firstDigest)
@@ -124,6 +132,10 @@ func (m *Monitor) Tick(ctx context.Context) {
 			reason = "no containers"
 		}
 
+		if containerUp && !probeUp {
+			reason = "health probe GET " + svc.HealthURL + ": " + probeDetail
+		}
+
 		// Alert only on the second consecutive down observation, at most once
 		// per cooldown window; a sustained outage does not re-alert.
 		if st.consecutiveDown == 2 &&
@@ -143,6 +155,37 @@ func (m *Monitor) Tick(ctx context.Context) {
 
 		m.states[svc.ID] = st
 	}
+}
+
+// probe fetches the service health URL and reports whether it answered with
+// a 2xx status, plus a short one-line detail for the failure case.
+func (m *Monitor) probe(ctx context.Context, endpoint string) (bool, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, err.Error()
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return false, shortErr(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, "status " + strconv.Itoa(resp.StatusCode)
+	}
+	return true, ""
+}
+
+// shortErr trims noisy URL-error wrappers so the SMS reason stays one line.
+func shortErr(err error) string {
+	msg := err.Error()
+	if i := strings.LastIndex(msg, ": "); i >= 0 {
+		msg = msg[i+2:]
+	}
+	const max = 80
+	if len(msg) > max {
+		msg = msg[:max-1] + "…"
+	}
+	return msg
 }
 
 // shortDigest mirrors executor.shortDigest logic but kept local to this package.

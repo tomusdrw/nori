@@ -110,6 +110,9 @@ and mount that instead.
 
 ### Reverse proxy
 
+Nori serves an unauthenticated `GET /healthz` returning `200 ok` for proxy
+and uptime checks.
+
 If a Docker-aware reverse proxy routes containers using `VIRTUAL_HOST` and
 `VIRTUAL_PORT`, let it own external port exposure. For an nginx-proxy
 certificate companion, also set `LETSENCRYPT_HOST`. On first boot, omit the host
@@ -236,6 +239,16 @@ throttled to at most one per 15 minutes. Stopping a service from the dashboard
 also counts as down (it is, after all, down); starting it again sends the
 recovery. Monitor alerts respect the same `notify_mode` setting as deploy
 alerts — `auto-only` includes them, `never` suppresses them.
+
+Each service may also set an optional **Health URL** in its service form. When
+set, the monitor GETs that URL on every check and the service only counts as
+up when both a container is running and the endpoint answers with a 2xx
+status; an unreachable endpoint or a non-2xx response counts as down after the
+same two consecutive checks, with the same alert, recovery, and throttling
+rules as container state. Leave it empty to disable probing for that service.
+The URL is probed from inside Nori's own container and network, so it must be
+reachable from there — for example a container address on a shared Docker
+network, or a port published on the host.
 
 Configure all four env vars; leaving any blank disables SMS entirely, and a
 partial set is rejected at startup:

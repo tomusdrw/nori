@@ -3,6 +3,9 @@ package monitor
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +59,174 @@ func TestMonitor_SustainedUp_NoAlerts(t *testing.T) {
 	m.Tick(ctx)
 	if len(n.events) != 0 {
 		t.Fatalf("expected no alerts, got %d: %v", len(n.events), n.events)
+	}
+}
+
+// Health URL probing tests
+func TestMonitor_HealthURL_DownOnSecondTick(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "svc_health", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok", HealthURL: ""}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	// health_url server that returns 503
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		w.Write([]byte("service unhealthy"))
+	}))
+	defer server.Close()
+	// attach health URL to service via store update
+	svc.HealthURL = server.URL
+	if err := st.UpdateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "running", Digest: "sha256:abc"}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	// Tick 1: up with container, but health down => probeUp false
+	m.Tick(ctx)
+	// Tick 2: second consecutive tick, should alert
+	m.Tick(ctx)
+	if len(n.events) != 1 {
+		t.Fatalf("expected 1 down event due to health URL, got %d: %+v", len(n.events), n.events)
+	}
+	if n.events[0].Kind != "down" || n.events[0].E.Trigger != store.TriggerMonitor {
+		t.Fatalf("expected down event with monitor trigger: %+v", n.events[0])
+	}
+	if !strings.Contains(n.events[0].E.Reason, "status 503") {
+		t.Fatalf("down event reason must name the failing status: %+v", n.events[0].E.Reason)
+	}
+}
+
+func TestMonitor_HealthURL_RecoveryAfterGood(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "svc_health2", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	// server: first two requests return 503 to trigger a down alert, then 200 to simulate recovery
+	var state int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if state < 2 {
+			w.WriteHeader(503)
+			w.Write([]byte("service unhealthy"))
+		} else {
+			w.WriteHeader(200)
+			w.Write([]byte("ok"))
+		}
+		state++
+	}))
+	defer server.Close()
+	svc.HealthURL = server.URL
+	if err := st.UpdateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "running", Digest: "sha256:abc"}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	// Tick 1: health down
+	m.Tick(ctx)
+	// Tick 2: down again (should trigger down alert)
+	m.Tick(ctx)
+	// Tick 3: health healthy again -> recovery
+	m.Tick(ctx)
+	if len(n.events) != 2 {
+		t.Fatalf("expected down then recovery after health URL recovered, got events: %v", n.events)
+	}
+	if n.events[1].Kind != "recovered" || n.events[1].E.Trigger != store.TriggerMonitor {
+		t.Fatalf("second event must be recovered with monitor trigger: %+v", n.events[1])
+	}
+}
+
+func TestMonitor_HealthURL_OKNoAlerts(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := &store.Service{Name: "svc_health3", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok", HealthURL: server.URL}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "running"}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if len(n.events) != 0 {
+		t.Fatalf("expected no alerts for healthy service, got %+v", n.events)
+	}
+}
+
+func TestMonitor_HealthURL_UnreachableCountsDown(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "svc_health4", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok", HealthURL: "http://127.0.0.1:1"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "running"}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if len(n.events) != 1 || n.events[0].Kind != "down" {
+		t.Fatalf("expected 1 down event for unreachable health URL, got %+v", n.events)
+	}
+	if !strings.HasPrefix(n.events[0].E.Reason, "health probe GET ") {
+		t.Fatalf("down event reason must describe the probe failure: %+v", n.events[0].E.Reason)
+	}
+}
+
+func TestMonitor_HealthURL_NotProbedWhenEmpty(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer server.Close()
+	svc := &store.Service{Name: "svc_health5", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "running"}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if hits != 0 {
+		t.Fatalf("service without health_url must not be probed, got %d requests", hits)
+	}
+	if len(n.events) != 0 {
+		t.Fatalf("expected no alerts, got %+v", n.events)
+	}
+}
+
+func TestMonitor_HealthURL_ContainerDownStillDown(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := &store.Service{Name: "svc_health6", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok", HealthURL: server.URL}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "exited", ExitCode: 1}}}}
+	n := &capturingNotifier{}
+	m := New(st, f, n, 20*time.Millisecond)
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if len(n.events) != 1 || n.events[0].Kind != "down" {
+		t.Fatalf("expected 1 down event despite healthy probe, got %+v", n.events)
+	}
+	if !strings.Contains(n.events[0].E.Reason, "exited") {
+		t.Fatalf("container-down reason must win over probe result: %+v", n.events[0].E.Reason)
 	}
 }
 

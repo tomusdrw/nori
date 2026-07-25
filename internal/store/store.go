@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS service (
 	policy TEXT NOT NULL,
 	cron_expr TEXT NOT NULL DEFAULT '',
 	deploy_script TEXT NOT NULL DEFAULT '',
+	health_url TEXT NOT NULL DEFAULT '',
 	is_self INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
@@ -94,6 +95,7 @@ func migrate(db *sql.DB) error {
 	}
 	defer rows.Close()
 	hasSelf := false
+	hasHealth := false
 	for rows.Next() {
 		var cid int
 		var name, typ string
@@ -105,12 +107,20 @@ func migrate(db *sql.DB) error {
 		if name == "is_self" {
 			hasSelf = true
 		}
+		if name == "health_url" {
+			hasHealth = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	if !hasSelf {
 		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !hasHealth {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN health_url TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
