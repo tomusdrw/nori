@@ -418,6 +418,13 @@ func (c *capturingNotifier) NotifyServiceDown(_ context.Context, evt notify.Even
 	return nil
 }
 
+func (c *capturingNotifier) NotifyServiceRecovered(_ context.Context, evt notify.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, evt)
+	return nil
+}
+
 func (c *capturingNotifier) snapshot() []notify.Event {
 	c.mu.Lock()
 	defer c.mu.Unlock()

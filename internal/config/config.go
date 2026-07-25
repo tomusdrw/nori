@@ -17,6 +17,7 @@ type Config struct {
 	DockerHost        string
 	TerminalDir       string
 	PollInterval      time.Duration
+	MonitorInterval   time.Duration
 	Twilio            TwilioConfig
 }
 
@@ -37,11 +38,12 @@ func (t TwilioConfig) Enabled() bool {
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:   getenv("DEPLOYBOT_LISTEN", ":8080"),
-		DBPath:       getenv("DEPLOYBOT_DB", "deploybot.db"),
-		DockerHost:   os.Getenv("DEPLOYBOT_DOCKER_HOST"),
-		TerminalDir:  getenv("DEPLOYBOT_TERMINAL_DIR", "."),
-		PollInterval: 60 * time.Second,
+		ListenAddr:      getenv("DEPLOYBOT_LISTEN", ":8080"),
+		DBPath:          getenv("DEPLOYBOT_DB", "deploybot.db"),
+		DockerHost:      os.Getenv("DEPLOYBOT_DOCKER_HOST"),
+		TerminalDir:     getenv("DEPLOYBOT_TERMINAL_DIR", "."),
+		PollInterval:    60 * time.Second,
+		MonitorInterval: 60 * time.Second,
 	}
 	keyB64 := os.Getenv("DEPLOYBOT_KEY")
 	if keyB64 == "" {
@@ -80,6 +82,14 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("DEPLOYBOT_POLL_INTERVAL: %w", err)
 		}
 		c.PollInterval = d
+	}
+
+	if v := os.Getenv("DEPLOYBOT_MONITOR_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("DEPLOYBOT_MONITOR_INTERVAL: %w", err)
+		}
+		c.MonitorInterval = d
 	}
 
 	tw, err := loadTwilio()

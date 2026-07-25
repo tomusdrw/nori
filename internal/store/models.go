@@ -18,6 +18,7 @@ type Service struct {
 	CronExpr     string
 	DeployScript string
 	IsSelf       bool
+	HealthURL    string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

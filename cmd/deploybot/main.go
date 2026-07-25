@@ -13,6 +13,7 @@ import (
 	"deploybot/internal/config"
 	"deploybot/internal/docker"
 	"deploybot/internal/executor"
+	monitorpkg "deploybot/internal/monitor"
 	"deploybot/internal/notify"
 	"deploybot/internal/poller"
 	"deploybot/internal/registry"
@@ -72,12 +73,16 @@ func main() {
 	latest := func(ctx context.Context, image string) (string, error) {
 		return registry.LatestDigest(image)
 	}
-
+	// Build a single notifier instance to share with monitor.
+	nf := buildNotifier(cfg)
 	ex := executor.New(st, executor.OSRunner{}, latest, 0)
-	ex.SetNotifier(buildNotifier(cfg))
+	ex.SetNotifier(nf)
 	ex.SetBotName(st.BotName(context.Background()))
 	pl := poller.New(st, latest, ex, cfg.PollInterval)
 	sched := scheduler.New(st, ex)
+
+	// Initialize monitor with the same notifier instance as executor
+	mon := monitorpkg.New(st, dk, nf, cfg.MonitorInterval)
 
 	a, err := auth.New(cfg.AdminPasswordHash, cfg.SessionKey)
 	if err != nil {
@@ -87,6 +92,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pl.Run(ctx)
+	go mon.Run(ctx)
 	if err := sched.Start(ctx); err != nil {
 		log.Fatalf("scheduler: %v", err)
 	}

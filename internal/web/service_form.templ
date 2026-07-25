@@ -69,6 +69,11 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					<input id="cron-expr" name="cron_expr" value={ form.CronExpr } placeholder="0 3 * * *"/>
 					<span class="field-help">For example, <code>0 3 * * *</code> deploys daily at 03:00.</span>
 				</div>
+				<div class="field">
+					<label for="health-url">Health URL</label>
+					<input id="health-url" name="health_url" value={ form.HealthURL } placeholder="https://service.example/health"/>
+					<span class="field-help">Optional health probe URL. If empty, no per-service probe is performed.</span>
+				</div>
 			</div>
 		</section>
 

@@ -21,6 +21,12 @@ type Container struct {
 	Image  string
 	Digest string
 	State  string
+	// Health is the container health status as reported by Docker.
+	// Empty when the image has no HEALTHCHECK or health information is not available.
+	// Possible values: "healthy", "unhealthy", "starting". Empty string indicates no health data.
+	Health string
+	// ExitCode is the exit code from the container's last termination.
+	ExitCode int
 	// StartedAt is the most recent time Docker started this container. It is
 	// intentionally distinct from the container creation timestamp: a
 	// restarted container should report its current uptime.
@@ -92,10 +98,19 @@ func (r *realClient) ListByService(ctx context.Context, service string) ([]Conta
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 		startedAt := time.Time{}
+		health := ""
+		exitCode := 0
 		if inspect, err := r.cli.ContainerInspect(ctx, c.ID); err == nil && inspect.State != nil {
+			// StartedAt is a RFC3339Nano string in container state
 			startedAt, _ = time.Parse(time.RFC3339Nano, inspect.State.StartedAt)
+			// Health data (optional, may be nil depending on Docker version)
+			if inspect.State.Health != nil {
+				health = inspect.State.Health.Status
+			}
+			// Exit code (0 when still running; non-zero on termination / crash)
+			exitCode = int(inspect.State.ExitCode)
 		}
-		out = append(out, Container{ID: c.ID, Name: name, Image: c.Image, Digest: digest, State: c.State, StartedAt: startedAt})
+		out = append(out, Container{ID: c.ID, Name: name, Image: c.Image, Digest: digest, State: c.State, Health: health, ExitCode: exitCode, StartedAt: startedAt})
 	}
 	return out, nil
 }

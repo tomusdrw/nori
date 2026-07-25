@@ -50,6 +50,9 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	r.Get("/login", s.handleLoginGet)
 	r.Post("/login", s.handleLoginPost)
 	r.Post("/logout", s.handleLogout)
+	// Intentionally outside the auth group so proxies and uptime monitors can
+	// reach it; the response carries no information beyond liveness.
+	r.Get("/healthz", s.handleHealthz)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
@@ -83,6 +86,11 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.ServeHTTP(w, r) }
+
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
 
 func (s *Server) csrf(r *http.Request) string { return s.auth.CSRFToken(r) }
 
@@ -339,6 +347,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		Policy:       store.Policy(form.Policy),
 		CronExpr:     form.CronExpr,
 		DeployScript: form.DeployScript,
+		HealthURL:    form.HealthURL,
 	}
 	if err := s.store.CreateService(r.Context(), svc); err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
@@ -393,6 +402,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript
+	svc.HealthURL = form.HealthURL
 	if err := s.store.UpdateService(r.Context(), svc); err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
@@ -628,7 +638,7 @@ func (s *Server) serviceToForm(ctx context.Context, svc *store.Service) (Service
 	}
 	return ServiceFormData{
 		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
-		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content, IsSelf: svc.IsSelf,
+		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
 	}, nil
 }
 
@@ -638,13 +648,20 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	// can parse.
 	return ServiceFormData{
 		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
-		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"),
+		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"), HealthURL: r.FormValue("health_url"),
 		DeployScript: executor.NormalizeNewlines(r.FormValue("deploy_script")),
 		EnvFile:      executor.NormalizeNewlines(r.FormValue("env_file")),
 	}
 }
 
 func validateServiceForm(ctx context.Context, form ServiceFormData) error {
+	if form.HealthURL != "" {
+		// basic URL validation: must have scheme http/https and non-empty host
+		u, err := url.Parse(form.HealthURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("health URL: invalid URL")
+		}
+	}
 	if _, err := envfile.Parse(form.EnvFile); err != nil {
 		return fmt.Errorf("environment file: %w", err)
 	}

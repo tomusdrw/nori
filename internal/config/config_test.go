@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"testing"
+	"time"
 
 	"deploybot/internal/auth"
 )
@@ -103,5 +104,36 @@ func TestLoad_TwilioPartialConfigRejected(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error for partially configured Twilio")
+	}
+}
+
+func TestLoad_MonitorInterval_Defaults(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MonitorInterval != 60*time.Second {
+		t.Fatalf("MonitorInterval default = %v, want 60s", cfg.MonitorInterval)
+	}
+}
+
+func TestLoad_MonitorInterval_Parses(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_MONITOR_INTERVAL", "2m")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MonitorInterval != 2*time.Minute {
+		t.Fatalf("MonitorInterval = %v, want 2m", cfg.MonitorInterval)
+	}
+}
+
+func TestLoad_MonitorInterval_BadValue(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_MONITOR_INTERVAL", "not-a-duration")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for invalid DEPLOYBOT_MONITOR_INTERVAL value")
 	}
 }

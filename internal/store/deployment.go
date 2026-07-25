@@ -18,6 +18,10 @@ const (
 	TriggerAuto      = "auto"
 	TriggerManual    = "manual"
 	TriggerScheduled = "scheduled"
+	// TriggerMonitor marks container-monitor down/recovery events. It is not
+	// a deployment trigger; it exists so notify.ShouldSend can gate monitor
+	// alerts with the same mode rules.
+	TriggerMonitor = "monitor"
 )
 
 func (s *Store) CreateDeployment(ctx context.Context, d *Deployment) error {

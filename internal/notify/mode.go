@@ -44,7 +44,9 @@ func NormalizeMode(s string) (Mode, error) {
 
 // ShouldSend reports whether an event with the given trigger should be
 // forwarded to the inner notifier under the given mode. trigger follows the
-// store.Trigger* string values ("manual", "auto", "scheduled").
+// store.Trigger* string values ("manual", "auto", "scheduled", "monitor").
+// "monitor" is an automatic signal, so it sends under auto-only exactly like
+// "auto" and "scheduled"; TestShouldSend locks this in.
 func ShouldSend(mode Mode, trigger string) bool {
 	switch mode {
 	case ModeNever:

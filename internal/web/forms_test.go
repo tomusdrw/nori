@@ -21,6 +21,19 @@ func TestParseServiceFormReadsCompleteEnvFile(t *testing.T) {
 	}
 }
 
+func TestParseServiceFormReadsHealthURL(t *testing.T) {
+	body := "name=app&watched_image=ghcr.io%2Fme%2Fapp%3Alatest&policy=manual&deploy_script=echo+ok&env_file=PORT%3D8080%0ASECRET%3D%22hello+world%22%0A&health_url=http%3A%2F%2Fexample.com%2Fhealth"
+	req := httptest.NewRequest("POST", "/services", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := req.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	form := parseServiceForm(req)
+	if form.HealthURL != "http://example.com/health" {
+		t.Fatalf("HealthURL = %q", form.HealthURL)
+	}
+}
+
 func TestParseServiceFormNormalizesCRLFDeployScript(t *testing.T) {
 	// Browsers submit <textarea> content with CRLF newlines; the server
 	// must store LF so Bash can parse the script.
@@ -55,6 +68,14 @@ func TestValidateServiceFormRejectsInvalidDotenv(t *testing.T) {
 	err := validateServiceForm(context.Background(), form)
 	if err == nil || !strings.Contains(err.Error(), "environment file") {
 		t.Fatalf("expected environment file validation error, got %v", err)
+	}
+}
+
+func TestValidateServiceFormRejectsInvalidHealthURL(t *testing.T) {
+	form := ServiceFormData{EnvFile: "PORT=8080\n", DeployScript: "echo ok", HealthURL: "ftp://bad"}
+	err := validateServiceForm(context.Background(), form)
+	if err == nil || !strings.Contains(err.Error(), "health URL") {
+		t.Fatalf("expected health URL validation error, got %v", err)
 	}
 }
 
