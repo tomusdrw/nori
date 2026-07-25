@@ -183,3 +183,92 @@ func TestLogFailures_SwallowsButLogs(t *testing.T) {
 		t.Errorf("LogFailures must not propagate: %v", err)
 	}
 }
+
+func TestLogFailures_NotifyServiceRecovered_SwallowsButLogs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	tw := &Twilio{
+		BaseURL:    srv.URL,
+		AccountSID: "AC",
+		AuthToken:  "t",
+		From:       "+1",
+		To:         "+2",
+		Client:     srv.Client(),
+	}
+	wrapped := &LogFailures{Inner: tw}
+	if err := wrapped.NotifyServiceRecovered(context.Background(), Event{ServiceName: "app"}); err != nil {
+		t.Errorf("LogFailures must not propagate: %v", err)
+	}
+}
+
+func TestTwilio_NotifyServiceRecovered_PostsExpectedRequest(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotUser   string
+		gotBody   string
+		gotCT     string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		u, _, _ := r.BasicAuth()
+		gotUser = u
+		gotCT = r.Header.Get("Content-Type")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"sid":"SM123"}`))
+	}))
+	defer srv.Close()
+
+	tw := &Twilio{
+		BaseURL:    srv.URL,
+		AccountSID: "AC123",
+		AuthToken:  "secret-token",
+		From:       "+15551234567",
+		To:         "+15559876543",
+		Client:     srv.Client(),
+	}
+	// Recovered event payload
+	err := tw.NotifyServiceRecovered(context.Background(), Event{
+		BotName:     "prod-nori",
+		ServiceName: "billing",
+		Trigger:     "monitor",
+		Digest:      "sha256:deadbeef",
+		Reason:      "service recovered",
+	})
+	if err != nil {
+		t.Fatalf("NotifyServiceRecovered: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if want := "/2010-04-01/Accounts/AC123/Messages.json"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+	if gotUser != "AC123" {
+		t.Errorf("basic auth user = %q, want AC123", gotUser)
+	}
+	if gotCT != "application/x-www-form-urlencoded" {
+		t.Errorf("content-type = %q", gotCT)
+	}
+	vals, err := url.ParseQuery(gotBody)
+	if err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if vals.Get("From") != "+15551234567" {
+		t.Errorf("From = %q", vals.Get("From"))
+	}
+	if vals.Get("To") != "+15559876543" {
+		t.Errorf("To = %q", vals.Get("To"))
+	}
+	if !strings.Contains(vals.Get("Body"), "billing") || !strings.Contains(vals.Get("Body"), "prod-nori") || !strings.Contains(vals.Get("Body"), "service recovered") {
+		t.Errorf("Body = %q", vals.Get("Body"))
+	}
+}

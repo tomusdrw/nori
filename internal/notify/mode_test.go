@@ -47,14 +47,17 @@ func TestShouldSend(t *testing.T) {
 		{ModeAlways, "auto", true},
 		{ModeAlways, "scheduled", true},
 		{ModeAlways, "", true},
+		{ModeAlways, "monitor", true},
 
 		{ModeAutoOnly, "manual", false},
 		{ModeAutoOnly, "auto", true},
 		{ModeAutoOnly, "scheduled", true},
+		{ModeAutoOnly, "monitor", true},
 
 		{ModeNever, "manual", false},
 		{ModeNever, "auto", false},
 		{ModeNever, "scheduled", false},
+		{ModeNever, "monitor", false},
 
 		// Unknown mode falls back to "always" semantics.
 		{"", "manual", true},

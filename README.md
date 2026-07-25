@@ -223,10 +223,19 @@ docker run -d --name "$SERVICE" \
 ## SMS alerts (optional, Twilio)
 
 Nori sends an SMS to a preconfigured number when a deploy script exits non-zero.
-This is the closest "service is down" signal available: there is no live
-container health check, so the trigger is deploy failure (which usually means
-the new container did not start or the script could not bring the service up).
-A container that crashes *after* a successful deploy is not detected today.
+Deploy-failure alerts still work as before; additionally a built-in monitor now
+checks every managed service's containers (the same `deploybot.service` label
+used by the dashboard) every `DEPLOYBOT_MONITOR_INTERVAL` (default 60s). A
+service counts as down when no container for the service is running and healthy
+(a container whose Docker HEALTHCHECK reports `unhealthy` counts as down even
+while running) for two consecutive checks — so a single transient restart does
+not alert, but a crash loop does. Nori then sends an SMS when the service goes
+down and one recovery SMS when it comes back up. A service that is already down
+when Nori starts alerts once shortly after startup. Per-service alerts are
+throttled to at most one per 15 minutes. Stopping a service from the dashboard
+also counts as down (it is, after all, down); starting it again sends the
+recovery. Monitor alerts respect the same `notify_mode` setting as deploy
+alerts — `auto-only` includes them, `never` suppresses them.
 
 Configure all four env vars; leaving any blank disables SMS entirely, and a
 partial set is rejected at startup:
@@ -248,7 +257,7 @@ is sent, independent of Twilio being configured:
 | Mode | Behavior |
 |------|----------|
 | `always` (default) | Alert on every failure (same as above). |
-| `auto-only` | Suppress alerts for manually triggered deploys. Automatic and scheduled failures still alert. |
+| `auto-only` | Suppress alerts for manually triggered deploys. Automatic, scheduled, and monitor alerts still alert. |
 | `never` | Suppress all alerts. |
 
 The toggle takes effect on the next deploy; no restart needed. It only has an
@@ -266,6 +275,7 @@ effect when Twilio is configured.
 | `DEPLOYBOT_DOCKER_HOST` | no | Docker host override |
 | `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
 | `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
+| `DEPLOYBOT_MONITOR_INTERVAL` | no | Container health check interval (default: `60s`) |
 | `DEPLOYBOT_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `DEPLOYBOT_TWILIO_*` to enable SMS on deploy failure. |
 | `DEPLOYBOT_TWILIO_AUTH_TOKEN` | no | Twilio auth token. |
 | `DEPLOYBOT_TWILIO_FROM` | no | Sender number (Twilio-owned, E.164, e.g. `+15551234567`). |
