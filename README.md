@@ -307,6 +307,15 @@ image appears as an update that you deploy while watching. The normal deploy
 history is used: after the handoff starts, the row remains `running` until the
 new instance starts and verifies its own digest.
 
+The service's **Configure** page also exposes the editable portion of
+`/config/deploybot.env`. Launcher-managed values — `DEPLOYBOT_KEY`,
+`DEPLOYBOT_SESSION_KEY`, `DEPLOYBOT_ADMIN_HASH`, and the self-identity variables
+— are hidden, rejected if submitted, and preserved when the editable values are
+saved. Other launcher environment values can be added, changed, or removed
+using Docker env-file syntax. Save the configuration and then use
+**Re-deploy** on the service page to restart Nori at the current image digest
+with the new environment.
+
 Deploying this service deliberately interrupts the browser connection, including
 any browser terminal session. Wait for deploybot to return at the same address,
 then refresh its deployment history; that is when the handoff is resolved to

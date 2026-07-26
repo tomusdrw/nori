@@ -23,20 +23,27 @@ import (
 	"deploybot/internal/docker"
 	"deploybot/internal/envfile"
 	"deploybot/internal/executor"
+	"deploybot/internal/launcher"
 	"deploybot/internal/notify"
 	"deploybot/internal/poller"
 	"deploybot/internal/store"
 	terminalsession "deploybot/internal/terminal"
 )
 
+type selfEnvironmentStore interface {
+	EditableEnvironment() (string, error)
+	ReplaceEditableEnvironment(string) error
+}
+
 type Server struct {
-	store    *store.Store
-	docker   docker.Client
-	executor *executor.Executor
-	poller   *poller.Poller
-	auth     *auth.Auth
-	terminal terminalsession.Attacher
-	router   chi.Router
+	store           *store.Store
+	docker          docker.Client
+	executor        *executor.Executor
+	poller          *poller.Poller
+	auth            *auth.Auth
+	terminal        terminalsession.Attacher
+	selfEnvironment selfEnvironmentStore
+	router          chi.Router
 }
 
 func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, terminals ...terminalsession.Attacher) *Server {
@@ -44,7 +51,10 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	if len(terminals) > 0 && terminals[0] != nil {
 		term = terminals[0]
 	}
-	s := &Server{store: st, docker: dk, executor: ex, poller: pl, auth: a, terminal: term}
+	s := &Server{
+		store: st, docker: dk, executor: ex, poller: pl, auth: a, terminal: term,
+		selfEnvironment: launcher.New(),
+	}
 	r := chi.NewRouter()
 	r.Use(s.botNameMiddleware)
 	r.Get("/login", s.handleLoginGet)
@@ -366,7 +376,7 @@ func (s *Server) handleServiceEdit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	form, err := s.serviceToForm(r.Context(), svc)
+	form, err := s.serviceToEditForm(r.Context(), svc)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -387,17 +397,18 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	if svc.IsSelf {
 		// The launcher owns the self image and handoff command. Policy remains
 		// editable, but a POST cannot turn the managed service into an arbitrary
-		// privileged Docker script.
+		// privileged Docker script. The submitted environment is intentionally
+		// retained: only non-protected launcher values are exposed and accepted.
 		form.Name = svc.Name
 		form.WatchedImage = svc.WatchedImage
 		form.DeployScript = store.SelfDeployScript
-		form.EnvFile = ""
 		form.IsSelf = true
 	}
 	if err := validateServiceForm(r.Context(), form); err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
 	}
+	previous := *svc
 	svc.WatchedImage = form.WatchedImage
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
@@ -407,7 +418,15 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
 	}
-	if !svc.IsSelf {
+	if svc.IsSelf {
+		if err := s.selfEnvironment.ReplaceEditableEnvironment(form.EnvFile); err != nil {
+			if rollbackErr := s.store.UpdateService(r.Context(), &previous); rollbackErr != nil {
+				err = fmt.Errorf("%w; restoring prior service settings: %v", err, rollbackErr)
+			}
+			_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+			return
+		}
+	} else {
 		if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -592,10 +611,7 @@ func (s *Server) getServiceByName(w http.ResponseWriter, r *http.Request) (*stor
 }
 
 func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDetailData, error) {
-	form, err := s.serviceToForm(ctx, svc)
-	if err != nil {
-		return ServiceDetailData{}, err
-	}
+	form := serviceForm(svc)
 	cs, err := s.docker.ListByService(ctx, svc.Name)
 	state := "unknown"
 	running := ""
@@ -631,15 +647,29 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	}, nil
 }
 
-func (s *Server) serviceToForm(ctx context.Context, svc *store.Service) (ServiceFormData, error) {
-	content, err := s.store.GetEnvFile(ctx, svc.ID)
+func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (ServiceFormData, error) {
+	var (
+		content string
+		err     error
+	)
+	if svc.IsSelf {
+		content, err = s.selfEnvironment.EditableEnvironment()
+	} else {
+		content, err = s.store.GetEnvFile(ctx, svc.ID)
+	}
 	if err != nil {
 		return ServiceFormData{}, err
 	}
+	form := serviceForm(svc)
+	form.EnvFile = content
+	return form, nil
+}
+
+func serviceForm(svc *store.Service) ServiceFormData {
 	return ServiceFormData{
 		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
-		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, EnvFile: content, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
-	}, nil
+		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
+	}
 }
 
 func parseServiceForm(r *http.Request) ServiceFormData {
@@ -662,8 +692,14 @@ func validateServiceForm(ctx context.Context, form ServiceFormData) error {
 			return fmt.Errorf("health URL: invalid URL")
 		}
 	}
-	if _, err := envfile.Parse(form.EnvFile); err != nil {
-		return fmt.Errorf("environment file: %w", err)
+	if form.IsSelf {
+		if err := launcher.ValidateEditableEnvironment(form.EnvFile); err != nil {
+			return fmt.Errorf("environment file: %w", err)
+		}
+	} else {
+		if _, err := envfile.Parse(form.EnvFile); err != nil {
+			return fmt.Errorf("environment file: %w", err)
+		}
 	}
 	if err := executor.ValidateScript(ctx, form.DeployScript); err != nil {
 		return fmt.Errorf("deploy script: %w", err)
@@ -691,6 +727,8 @@ func (s *Server) handleEditorValidate(w http.ResponseWriter, r *http.Request) {
 		err = executor.ValidateScript(r.Context(), r.FormValue("content"))
 	case "dotenv":
 		_, err = envfile.Parse(r.FormValue("content"))
+	case "launcher-env":
+		err = launcher.ValidateEditableEnvironment(r.FormValue("content"))
 	default:
 		http.Error(w, "unknown editor kind", http.StatusBadRequest)
 		return

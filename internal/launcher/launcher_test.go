@@ -431,6 +431,240 @@ func TestUpdateKeepsReverseProxyConfiguration(t *testing.T) {
 	}
 }
 
+func TestEditableEnvironmentHidesLauncherManagedValues(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	if err := os.WriteFile(l.envPath(), []byte(
+		"DEPLOYBOT_KEY=encryption-secret\n"+
+			"DEPLOYBOT_SESSION_KEY=session-secret\n"+
+			"DEPLOYBOT_ADMIN_HASH=admin-secret\n"+
+			"DEPLOYBOT_CONFIG_VOLUME=config-volume\n"+
+			"DEPLOYBOT_SELF_CONTAINER=nori\n"+
+			"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
+			"DEPLOYBOT_POLL_INTERVAL=30s\n"+
+			"VIRTUAL_HOST=nori.example.com\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := l.EditableEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hidden := range []string{
+		"DEPLOYBOT_KEY",
+		"DEPLOYBOT_SESSION_KEY",
+		"DEPLOYBOT_ADMIN_HASH",
+		"DEPLOYBOT_CONFIG_VOLUME",
+		"DEPLOYBOT_SELF_CONTAINER",
+		"DEPLOYBOT_SELF_IMAGE",
+	} {
+		if strings.Contains(content, hidden) {
+			t.Errorf("editable environment exposes protected key %s: %q", hidden, content)
+		}
+	}
+	for _, visible := range []string{"DEPLOYBOT_POLL_INTERVAL=30s", "VIRTUAL_HOST=nori.example.com"} {
+		if !strings.Contains(content, visible) {
+			t.Errorf("editable environment missing %q: %q", visible, content)
+		}
+	}
+}
+
+func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	if err := os.WriteFile(l.envPath(), []byte(
+		"DEPLOYBOT_KEY=encryption-secret\n"+
+			"DEPLOYBOT_SESSION_KEY=session-secret\n"+
+			"DEPLOYBOT_ADMIN_HASH=admin-secret\n"+
+			"DEPLOYBOT_CONFIG_VOLUME=config-volume\n"+
+			"DEPLOYBOT_SELF_CONTAINER=nori\n"+
+			"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
+			"DEPLOYBOT_POLL_INTERVAL=60s\n"+
+			"OLD_CUSTOM=value\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.ReplaceEditableEnvironment(
+		"DEPLOYBOT_POLL_INTERVAL=15s\nVIRTUAL_HOST=nori.example.com\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(data))
+	for key, want := range map[string]string{
+		"DEPLOYBOT_KEY":            "encryption-secret",
+		"DEPLOYBOT_SESSION_KEY":    "session-secret",
+		"DEPLOYBOT_ADMIN_HASH":     "admin-secret",
+		"DEPLOYBOT_CONFIG_VOLUME":  "config-volume",
+		"DEPLOYBOT_SELF_CONTAINER": "nori",
+		"DEPLOYBOT_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
+		"DEPLOYBOT_POLL_INTERVAL":  "15s",
+		"VIRTUAL_HOST":             "nori.example.com",
+	} {
+		if values[key] != want {
+			t.Errorf("%s = %q, want %q", key, values[key], want)
+		}
+	}
+	if _, ok := values["OLD_CUSTOM"]; ok {
+		t.Errorf("omitted editable value was not removed: %+v", values)
+	}
+	info, err := os.Stat(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("environment mode = %o, want 600", got)
+	}
+}
+
+func TestReplaceEditableEnvironmentRejectsProtectedValuesWithoutChangingFile(t *testing.T) {
+	for _, protected := range []string{
+		"DEPLOYBOT_KEY",
+		"DEPLOYBOT_SESSION_KEY",
+		"DEPLOYBOT_ADMIN_HASH",
+		"DEPLOYBOT_CONFIG_VOLUME",
+		"DEPLOYBOT_SELF_CONTAINER",
+		"DEPLOYBOT_SELF_IMAGE",
+	} {
+		t.Run(protected, func(t *testing.T) {
+			l := &Launcher{ConfigDir: t.TempDir()}
+			const original = "DEPLOYBOT_KEY=encryption-secret\nDEPLOYBOT_POLL_INTERVAL=60s\n"
+			if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			err := l.ReplaceEditableEnvironment(protected + "=replaced\n")
+			if err == nil || !strings.Contains(err.Error(), "launcher-managed") {
+				t.Fatalf("ReplaceEditableEnvironment error = %v, want launcher-managed rejection", err)
+			}
+			data, readErr := os.ReadFile(l.envPath())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(data) != original {
+				t.Fatalf("rejected edit changed environment:\n%s", data)
+			}
+		})
+	}
+}
+
+func TestReplaceEditableEnvironmentEmptyPreservesAllProtectedValues(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	const original = "DEPLOYBOT_KEY=encryption-secret\n" +
+		"DEPLOYBOT_SESSION_KEY=session-secret\n" +
+		"DEPLOYBOT_ADMIN_HASH=admin-secret\n" +
+		"DEPLOYBOT_CONFIG_VOLUME=config-volume\n" +
+		"DEPLOYBOT_SELF_CONTAINER=nori\n" +
+		"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n" +
+		"VIRTUAL_HOST=nori.example.com\n"
+	if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.ReplaceEditableEnvironment(""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(data))
+	for key, want := range map[string]string{
+		"DEPLOYBOT_KEY":            "encryption-secret",
+		"DEPLOYBOT_SESSION_KEY":    "session-secret",
+		"DEPLOYBOT_ADMIN_HASH":     "admin-secret",
+		"DEPLOYBOT_CONFIG_VOLUME":  "config-volume",
+		"DEPLOYBOT_SELF_CONTAINER": "nori",
+		"DEPLOYBOT_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
+	} {
+		if values[key] != want {
+			t.Errorf("%s = %q, want %q", key, values[key], want)
+		}
+	}
+	if _, ok := values["VIRTUAL_HOST"]; ok {
+		t.Errorf("empty replacement retained editable value: %+v", values)
+	}
+}
+
+func TestReplaceEditableEnvironmentRejectsInvalidRuntimeValuesWithoutChangingFile(t *testing.T) {
+	tests := map[string]string{
+		"invalid duration": "DEPLOYBOT_POLL_INTERVAL=soon\n",
+		"zero duration":    "DEPLOYBOT_MONITOR_INTERVAL=0s\n",
+		"partial Twilio":   "DEPLOYBOT_TWILIO_ACCOUNT_SID=AC123\n",
+	}
+	for name, replacement := range tests {
+		t.Run(name, func(t *testing.T) {
+			l := &Launcher{ConfigDir: t.TempDir()}
+			const original = "DEPLOYBOT_KEY=encryption-secret\nDEPLOYBOT_POLL_INTERVAL=60s\n"
+			if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := l.ReplaceEditableEnvironment(replacement); err == nil {
+				t.Fatal("ReplaceEditableEnvironment error = nil, want semantic validation error")
+			}
+			data, err := os.ReadFile(l.envPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != original {
+				t.Fatalf("rejected edit changed environment:\n%s", data)
+			}
+		})
+	}
+}
+
+func TestUpdateUsesReplacedEditableEnvironmentFile(t *testing.T) {
+	runner := &fakeRunner{}
+	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
+	spec := testRunSpec()
+	spec.CurrentImageDigest = "sha256:old"
+	writeTestConfig(t, l, spec)
+
+	if err := l.ReplaceEditableEnvironment("VIRTUAL_HOST=new.nori.example.com\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Update(context.Background(), "sha256:new"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := dotenvValues(t, string(data))
+	if values["VIRTUAL_HOST"] != "new.nori.example.com" {
+		t.Fatalf("VIRTUAL_HOST = %q, want updated value", values["VIRTUAL_HOST"])
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("docker calls = %v", runner.calls)
+	}
+	assertContainsArgPair(t, runner.calls[3], "--env-file", l.envPath())
+}
+
+func TestReplaceEditableEnvironmentDoesNotRewriteUnchangedValues(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	const original = "# existing operator note\nVIRTUAL_HOST=nori.example.com\nDEPLOYBOT_KEY=encryption-secret\n"
+	if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.ReplaceEditableEnvironment("VIRTUAL_HOST=nori.example.com\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("unchanged values rewrote launcher environment:\n%s", data)
+	}
+}
+
 func testRunSpec() RunSpec {
 	return RunSpec{
 		Image:         "ghcr.io/acme/deploybot:latest",
@@ -470,6 +704,16 @@ func assertContainsArgs(t *testing.T, args []string, want string) {
 		}
 	}
 	t.Fatalf("args %v do not contain %q", args, want)
+}
+
+func assertContainsArgPair(t *testing.T, args []string, first, second string) {
+	t.Helper()
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == first && args[i+1] == second {
+			return
+		}
+	}
+	t.Fatalf("args %v do not contain pair %q, %q", args, first, second)
 }
 
 func equal(a, b []string) bool {

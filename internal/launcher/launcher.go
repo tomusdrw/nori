@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"strings"
 
 	"deploybot/internal/auth"
+	"deploybot/internal/config"
 	"golang.org/x/term"
 )
 
@@ -490,13 +492,9 @@ func (l *Launcher) applyOverrides(spec *RunSpec, opts UpOptions) error {
 }
 
 func (l *Launcher) mergeEnvironment(entries []string) error {
-	data, err := os.ReadFile(l.envPath())
+	values, err := l.loadEnvironment()
 	if err != nil {
-		return fmt.Errorf("read launcher environment: %w", err)
-	}
-	values, err := parseEnvironment(string(data))
-	if err != nil {
-		return fmt.Errorf("parse launcher environment: %w", err)
+		return err
 	}
 	if err := mergeEnvironment(values, entries); err != nil {
 		return err
@@ -506,6 +504,91 @@ func (l *Launcher) mergeEnvironment(entries []string) error {
 		return fmt.Errorf("encode launcher environment: %w", err)
 	}
 	return writeAtomic(l.envPath(), encoded, 0o600)
+}
+
+func (l *Launcher) loadEnvironment() (map[string]string, error) {
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		return nil, fmt.Errorf("read launcher environment: %w", err)
+	}
+	values, err := parseEnvironment(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse launcher environment: %w", err)
+	}
+	return values, nil
+}
+
+// EditableEnvironment returns the launcher environment values that an
+// authenticated operator may change from the running application. Bootstrap
+// secrets and self-identity values are omitted so the UI never has to receive
+// or round-trip them.
+func (l *Launcher) EditableEnvironment() (string, error) {
+	values, err := l.loadEnvironment()
+	if err != nil {
+		return "", err
+	}
+	maps.DeleteFunc(values, func(key, _ string) bool {
+		return isProtectedEnvironmentKey(key)
+	})
+	encoded, err := marshalEnvironment(values)
+	if err != nil {
+		return "", fmt.Errorf("encode editable launcher environment: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// ValidateEditableEnvironment validates Docker env-file content accepted by
+// ReplaceEditableEnvironment without changing the persisted launcher config.
+func ValidateEditableEnvironment(content string) error {
+	_, err := parseEditableEnvironment(content)
+	return err
+}
+
+func parseEditableEnvironment(content string) (map[string]string, error) {
+	values, err := parseEnvironment(content)
+	if err != nil {
+		return nil, fmt.Errorf("parse launcher environment: %w", err)
+	}
+	for key := range values {
+		if isProtectedEnvironmentKey(key) {
+			return nil, fmt.Errorf("%s is launcher-managed and cannot be changed here", key)
+		}
+	}
+	if err := config.ValidateEnvironment(values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+// ReplaceEditableEnvironment replaces every non-protected launcher value while
+// preserving bootstrap secrets and self-identity values exactly. Omitting an
+// editable key removes it, matching the complete-env-file editor in the UI.
+func (l *Launcher) ReplaceEditableEnvironment(content string) error {
+	replacement, err := parseEditableEnvironment(content)
+	if err != nil {
+		return err
+	}
+
+	values, err := l.loadEnvironment()
+	if err != nil {
+		return err
+	}
+	original := maps.Clone(values)
+	maps.DeleteFunc(values, func(key, _ string) bool {
+		return !isProtectedEnvironmentKey(key)
+	})
+	maps.Copy(values, replacement)
+	if maps.Equal(values, original) {
+		return nil
+	}
+	encoded, err := marshalEnvironment(values)
+	if err != nil {
+		return fmt.Errorf("encode launcher environment: %w", err)
+	}
+	if err := writeAtomic(l.envPath(), encoded, 0o600); err != nil {
+		return fmt.Errorf("write launcher environment: %w", err)
+	}
+	return nil
 }
 
 func mergeEnvironment(values map[string]string, entries []string) error {
