@@ -77,22 +77,20 @@ func Load() (Config, error) {
 	}
 
 	if v := os.Getenv("DEPLOYBOT_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
+		c.PollInterval, err = parsePositiveDuration("DEPLOYBOT_POLL_INTERVAL", v)
 		if err != nil {
-			return Config{}, fmt.Errorf("DEPLOYBOT_POLL_INTERVAL: %w", err)
+			return Config{}, err
 		}
-		c.PollInterval = d
 	}
 
 	if v := os.Getenv("DEPLOYBOT_MONITOR_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
+		c.MonitorInterval, err = parsePositiveDuration("DEPLOYBOT_MONITOR_INTERVAL", v)
 		if err != nil {
-			return Config{}, fmt.Errorf("DEPLOYBOT_MONITOR_INTERVAL: %w", err)
+			return Config{}, err
 		}
-		c.MonitorInterval = d
 	}
 
-	tw, err := loadTwilio()
+	tw, err := loadTwilio(os.Getenv)
 	if err != nil {
 		return Config{}, err
 	}
@@ -100,12 +98,40 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-func loadTwilio() (TwilioConfig, error) {
+// ValidateEnvironment validates the known runtime settings that an operator
+// may provide through an environment editor. Unknown keys remain valid so
+// Docker, reverse-proxy, and future application settings can pass through.
+func ValidateEnvironment(values map[string]string) error {
+	for _, name := range []string{"DEPLOYBOT_POLL_INTERVAL", "DEPLOYBOT_MONITOR_INTERVAL"} {
+		if value := values[name]; value != "" {
+			if _, err := parsePositiveDuration(name, value); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := loadTwilio(func(name string) string {
+		return values[name]
+	})
+	return err
+}
+
+func parsePositiveDuration(name, value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("%s must be greater than zero", name)
+	}
+	return duration, nil
+}
+
+func loadTwilio(get func(string) string) (TwilioConfig, error) {
 	t := TwilioConfig{
-		AccountSID: strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_ACCOUNT_SID")),
-		AuthToken:  os.Getenv("DEPLOYBOT_TWILIO_AUTH_TOKEN"),
-		From:       strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_FROM")),
-		To:         strings.TrimSpace(os.Getenv("DEPLOYBOT_TWILIO_TO")),
+		AccountSID: strings.TrimSpace(get("DEPLOYBOT_TWILIO_ACCOUNT_SID")),
+		AuthToken:  get("DEPLOYBOT_TWILIO_AUTH_TOKEN"),
+		From:       strings.TrimSpace(get("DEPLOYBOT_TWILIO_FROM")),
+		To:         strings.TrimSpace(get("DEPLOYBOT_TWILIO_TO")),
 	}
 	// Treat "all empty" as "intentionally disabled". Any partial set is an
 	// operator error: half-configured Twilio would silently never fire and

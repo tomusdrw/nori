@@ -18,7 +18,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<p class="eyebrow">Configuration</p>
 			<h1>{ formTitle(isEdit) }</h1>
 			if form.IsSelf {
-				<p class="page-subtitle">Launcher-managed self-update. You can change its deployment policy, but the image and handoff are protected.</p>
+				<p class="page-subtitle">Launcher-managed self-update. You can change its deployment policy and runtime environment, but the image and handoff are protected.</p>
 			} else {
 				<p class="page-subtitle">Define what to watch and exactly how this service is deployed.</p>
 			}
@@ -100,17 +100,26 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<div class="panel-heading">
 				<div>
 					<h2>Environment file</h2>
-					<p>Paste the complete contents of the service’s <code>.env</code> file.</p>
+					if form.IsSelf {
+						<p>Launcher-managed secrets are hidden and preserved. Save these values, then use Re-deploy to apply them.</p>
+					} else {
+						<p>Paste the complete contents of the service’s <code>.env</code> file.</p>
+					}
 				</div>
 				<div class="panel-heading-actions">
-					<div class="editor-health" data-validation-status="dotenv"><span class="validation-dot"></span><span data-validation-message>Checking .env…</span></div>
+					<div class="editor-health" data-validation-status={ environmentEditorKind(form) }><span class="validation-dot"></span><span data-validation-message>Checking .env…</span></div>
 					<span class="step-number">03</span>
 				</div>
 			</div>
-			<textarea class="code-editor" name="env_file" data-editor="dotenv" aria-label="Dotenv environment file" spellcheck="false" placeholder="# One complete .env file&#10;DATABASE_URL=postgres://...&#10;LOG_LEVEL=info" readonly?={ form.IsSelf }>{ form.EnvFile }</textarea>
+			<textarea class="code-editor" name="env_file" data-editor={ environmentEditorKind(form) } aria-label={ environmentEditorLabel(form) } spellcheck="false" placeholder="# One complete .env file&#10;DATABASE_URL=postgres://...&#10;LOG_LEVEL=info">{ form.EnvFile }</textarea>
 			<div class="editor-footer">
-				<span class="secure-note">◆ The complete file is encrypted at rest</span>
-				<span>Dotenv syntax</span>
+				if form.IsSelf {
+					<span class="secure-note">◆ Protected launcher keys stay hidden and unchanged</span>
+					<span>Docker env-file syntax</span>
+				} else {
+					<span class="secure-note">◆ The complete file is encrypted at rest</span>
+					<span>Dotenv syntax</span>
+				}
 			</div>
 		</section>
 		</div>
@@ -139,4 +148,18 @@ func serviceBackURL(form ServiceFormData, isEdit bool) templ.SafeURL {
 		return templ.SafeURL("/services/" + form.Name)
 	}
 	return "/"
+}
+
+func environmentEditorKind(form ServiceFormData) string {
+	if form.IsSelf {
+		return "launcher-env"
+	}
+	return "dotenv"
+}
+
+func environmentEditorLabel(form ServiceFormData) string {
+	if form.IsSelf {
+		return "Launcher environment"
+	}
+	return "Dotenv environment file"
 }

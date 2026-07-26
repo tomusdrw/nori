@@ -137,3 +137,58 @@ func TestLoad_MonitorInterval_BadValue(t *testing.T) {
 		t.Fatal("expected error for invalid DEPLOYBOT_MONITOR_INTERVAL value")
 	}
 }
+
+func TestLoad_IntervalsMustBePositive(t *testing.T) {
+	for _, name := range []string{"DEPLOYBOT_POLL_INTERVAL", "DEPLOYBOT_MONITOR_INTERVAL"} {
+		for _, value := range []string{"0s", "-1s"} {
+			t.Run(name+"="+value, func(t *testing.T) {
+				setRequiredEnv(t)
+				t.Setenv(name, value)
+				if _, err := Load(); err == nil {
+					t.Fatalf("expected error for %s=%s", name, value)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateEnvironment(t *testing.T) {
+	validTwilio := map[string]string{
+		"DEPLOYBOT_TWILIO_ACCOUNT_SID": "AC123",
+		"DEPLOYBOT_TWILIO_AUTH_TOKEN":  "token",
+		"DEPLOYBOT_TWILIO_FROM":        "+15551234567",
+		"DEPLOYBOT_TWILIO_TO":          "+15559876543",
+	}
+	tests := []struct {
+		name    string
+		values  map[string]string
+		wantErr bool
+	}{
+		{
+			name: "known values and unknown passthrough",
+			values: map[string]string{
+				"DEPLOYBOT_POLL_INTERVAL":    "15s",
+				"DEPLOYBOT_MONITOR_INTERVAL": "2m",
+				"VIRTUAL_HOST":               "nori.example.com",
+			},
+		},
+		{name: "invalid poll duration", values: map[string]string{"DEPLOYBOT_POLL_INTERVAL": "soon"}, wantErr: true},
+		{name: "zero monitor duration", values: map[string]string{"DEPLOYBOT_MONITOR_INTERVAL": "0s"}, wantErr: true},
+		{name: "negative poll duration", values: map[string]string{"DEPLOYBOT_POLL_INTERVAL": "-1s"}, wantErr: true},
+		{name: "Twilio disabled", values: map[string]string{}},
+		{name: "Twilio complete", values: validTwilio},
+		{name: "Twilio partial", values: map[string]string{"DEPLOYBOT_TWILIO_ACCOUNT_SID": "AC123"}, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateEnvironment(test.values)
+			if test.wantErr && err == nil {
+				t.Fatal("ValidateEnvironment error = nil, want error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("ValidateEnvironment error = %v", err)
+			}
+		})
+	}
+}
