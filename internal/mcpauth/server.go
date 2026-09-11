@@ -133,10 +133,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			failure(w, 405, "invalid_request")
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && origin != c.PublicURL {
-			failure(w, 403, "invalid_origin")
-			return
-		}
+		// OAuth clients open the consent page from other origins. GET only
+		// renders consent; approving or denying it requires a same-origin POST
+		// and the session's CSRF token.
 		if r.Method == "POST" && r.Header.Get("Origin") != c.PublicURL {
 			failure(w, 403, "invalid_origin")
 			return
