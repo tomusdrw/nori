@@ -58,7 +58,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 	</html>
 }
 
-templ LoginPage(csrf string, errMsg string) {
+templ LoginPage(csrf string, errMsg string, next string) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -83,6 +83,7 @@ templ LoginPage(csrf string, errMsg string) {
 					<div class="alert alert-error" role="alert">{ errMsg }</div>
 				}
 				<form method="post" action="/login" class="login-form">
+					<input type="hidden" name="next" value={ next }/>
 					<label for="password">Admin password</label>
 					<input id="password" type="password" name="password" required autofocus placeholder="Enter your password"/>
 					<label class="login-remember">

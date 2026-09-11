@@ -276,6 +276,93 @@ is sent, independent of Twilio being configured:
 The toggle takes effect on the next deploy; no restart needed. It only has an
 effect when Twilio is configured.
 
+## MCP agent access
+
+The instance-wide **Settings → Agent access (MCP)** option enables a Streamable
+HTTP MCP server at `/mcp`. It is **disabled by default**. Set the public instance
+URL (for example `https://nori.example.com`) and save the settings; no restart is
+required. The URL must be an HTTPS origin without a path. HTTP is allowed only
+on loopback addresses for local development.
+
+Add `https://nori.example.com/mcp` to an OAuth-capable MCP client. The client
+discovers the authorization endpoints, registers itself, and opens Nori in your
+browser. Sign in with the existing administrator password and approve or deny
+the requested permissions. Public clients use Authorization Code with mandatory
+S256 PKCE; confidential clients can use `client_secret_basic`, also with PKCE.
+The `resource` parameter must be the exact public URL followed by `/mcp` during
+authorization, code exchange, and refresh.
+
+| Scope | Access |
+|-------|--------|
+| `nori:read` | Service configuration and status, deployment history, explicitly requested logs |
+| `nori:write` | Create/update/delete services, replace environment configuration, start/stop containers, deploy |
+| `nori:secrets` | Read plaintext service environment files; also requires `nori:read` |
+
+The default connection requests read and write access. Clients can explicitly
+request only `nori:read` for inspection, or additionally request `nori:secrets`
+when reading environment contents is necessary. Environment files are excluded
+from ordinary service responses and remain encrypted in SQLite. Logs and deploy
+scripts may themselves contain sensitive data. Write access can execute scripts
+with Nori's permissions, including control of the Docker host; the consent page
+explains this before approval. A client with `nori:write` can also read host
+secrets through its scripts. `nori:secrets` gates direct environment reads in
+the API; it does not sandbox a client that already has write access.
+
+Available tools: `list_services`, `get_service`, `create_service`,
+`update_service`, `delete_service`, `start_service`, `stop_service`,
+`deploy_service`, `list_deployments`, `get_deployment`, `get_container_logs`,
+`get_service_environment`, and `set_service_environment`. Tools use numeric
+service IDs, validate configuration, and save service/environment changes
+atomically. Creating a service defaults to manual deployment.
+Concurrent configuration edits return a conflict instead of overwriting a newer
+configuration; read the service again before retrying. Scheduled-service
+changes are picked up within one second without restarting Nori. Deleting a
+service removes its configuration/history but does not remove its containers.
+The launcher-managed Nori self-service cannot be modified through MCP.
+
+Authorization codes expire after five minutes and can be exchanged only once.
+Access tokens expire after at most ten minutes, or when the grant expires if
+that is sooner. Refresh tokens rotate on every use,
+expire with their grant after 30 days, and reuse revokes the entire token family.
+Credentials are stored as hashes. OAuth grants survive normal restarts.
+**Revoke all agent access**, disabling MCP, or changing its public URL
+invalidates every grant and registration; reconnect/re-register clients and
+authorize again afterward. Clients can also revoke their token family through
+`/oauth/revoke`. Disabling MCP stops subsequent requests; deployments already
+started continue running.
+
+Finish initial authorization within ten minutes of client registration. If it
+expires, reconnect the client to register again. Approved registrations are
+retained for one year from the latest consent. Concurrent refresh attempts can
+trigger replay protection: the client must serialize refreshes and retain the
+new refresh token before using it again.
+
+If connection fails, check the response:
+
+| Response | What to check |
+|----------|---------------|
+| `404` on `/mcp` or OAuth endpoints | MCP is enabled and the proxy routes the path to Nori. |
+| `403 invalid_host` or `invalid_origin` | Public URL and forwarded `Host` match; browser clients must use the configured origin. |
+| `400 invalid_grant` | Exact resource URL, redirect URI and PKCE verifier; expired/replayed credentials require fresh authorization. |
+| `401 invalid_client` | Client registration and credentials; after global revocation, register again. |
+| `429 slow_down` | Respect `Retry-After`. Anonymous registration is limited separately from existing grants. |
+| `503 temporarily_unavailable` | Check database health and OAuth storage capacity in the [maintenance notes](docs/mcp.md). |
+
+When using a reverse proxy, preserve the public `Host` header and route `/mcp`,
+`/oauth/*`, `/.well-known/oauth-authorization-server`, and
+`/.well-known/oauth-protected-resource[/mcp]` to Nori. The configured URL is the
+canonical issuer and token audience; forwarded headers do not determine it.
+MCP rejects a mismatched Host and browser Origins other than the configured
+origin. OAuth clients should call MCP from their backend or native process.
+The configured HTTPS origin also enables Secure login cookies behind a TLS
+terminating proxy. An additional proxy login must not intercept the OAuth
+discovery, registration, token, or MCP requests made by the client.
+
+The implementation uses the [official Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk)
+and [MCP authorization discovery and resource binding](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
+For implementation boundaries, regression tests and proposed follow-ups, see
+[MCP maintenance notes](docs/mcp.md).
+
 ## Environment variables
 
 | Variable | Required | Description |

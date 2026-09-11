@@ -24,6 +24,7 @@ import (
 	"deploybot/internal/envfile"
 	"deploybot/internal/executor"
 	"deploybot/internal/launcher"
+	"deploybot/internal/mcpauth"
 	"deploybot/internal/notify"
 	"deploybot/internal/poller"
 	"deploybot/internal/store"
@@ -57,12 +58,19 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	}
 	r := chi.NewRouter()
 	r.Use(s.botNameMiddleware)
+	r.Use(s.mcpSecureCookies)
 	r.Get("/login", s.handleLoginGet)
 	r.Post("/login", s.handleLoginPost)
 	r.Post("/logout", s.handleLogout)
 	// Intentionally outside the auth group so proxies and uptime monitors can
 	// reach it; the response carries no information beyond liveness.
 	r.Get("/healthz", s.handleHealthz)
+	oauth := mcpauth.New(st, a)
+	r.Handle("/mcp", oauth.Protect(s.newMCPHandler()))
+	r.Handle("/oauth/*", oauth)
+	r.Handle("/.well-known/oauth-authorization-server", oauth)
+	r.Handle("/.well-known/oauth-protected-resource", oauth)
+	r.Handle("/.well-known/oauth-protected-resource/mcp", oauth)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
@@ -87,6 +95,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Get("/deployments/{id}/stream", s.handleDeploymentStream)
 		r.Get("/settings", s.handleSettingsGet)
 		r.Post("/settings", s.handleSettingsPost)
+		r.Post("/settings/mcp/revoke", s.handleMCPRevoke)
 	})
 
 	sub, _ := fs.Sub(staticFS, "static")
@@ -110,12 +119,37 @@ func (s *Server) botNameMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// Trust the administrator's explicit public URL rather than arbitrary forwarded
+// headers when TLS terminates at a reverse proxy.
+func (s *Server) mcpSecureCookies(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/static/") || strings.HasPrefix(r.URL.Path, "/.well-known/") || (strings.HasPrefix(r.URL.Path, "/oauth/") && r.URL.Path != "/oauth/authorize") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		cfg, err := s.store.GetMCPConfig(r.Context())
+		if err == nil && cfg.PublicURL != "" {
+			u, err := url.Parse(cfg.PublicURL)
+			if err == nil && u.Scheme == "https" && u.Host == r.Host {
+				r = r.WithContext(auth.WithSecureCookies(r.Context()))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	mode, _ := notify.NormalizeMode(s.store.NotifyMode(r.Context()))
-	_ = SettingsPage(BotName(r.Context()), string(mode), s.csrf(r), "", r.URL.Query().Get("saved") == "1").Render(r.Context(), w)
+	cfg, err := s.store.GetMCPConfig(r.Context())
+	if err != nil {
+		http.Error(w, "could not load MCP settings", http.StatusInternalServerError)
+		return
+	}
+	_ = SettingsPage(BotName(r.Context()), string(mode), s.csrf(r), "", r.URL.Query().Get("saved") == "1", cfg).Render(r.Context(), w)
 }
 
 func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -128,6 +162,10 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	mode, err := notify.NormalizeMode(r.FormValue("notify_mode"))
 	if err != nil {
 		s.renderSettingsError(w, r, name, r.FormValue("notify_mode"), err.Error())
+		return
+	}
+	if err := s.store.SetMCPConfig(r.Context(), r.FormValue("mcp_enabled") == "1", r.FormValue("mcp_public_url"), false); err != nil {
+		s.renderSettingsError(w, r, name, string(mode), err.Error())
 		return
 	}
 	if err := s.store.SetSetting(r.Context(), store.SettingBotName, name); err != nil {
@@ -145,7 +183,21 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, botName, rawMode, errMsg string) {
 	// Preserve whatever the user typed (not the normalized value) so they can
 	// see and fix their input on re-render.
-	_ = SettingsPage(botName, rawMode, s.csrf(r), errMsg, false).Render(r.Context(), w)
+	cfg := store.MCPConfig{Enabled: r.FormValue("mcp_enabled") == "1", PublicURL: r.FormValue("mcp_public_url")}
+	_ = SettingsPage(botName, rawMode, s.csrf(r), errMsg, false, cfg).Render(r.Context(), w)
+}
+
+func (s *Server) handleMCPRevoke(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.store.GetMCPConfig(r.Context())
+	if err == nil {
+		err = s.store.SetMCPConfig(r.Context(), cfg.Enabled, cfg.PublicURL, true)
+	}
+	if err != nil {
+		http.Error(w, "could not revoke MCP access", http.StatusInternalServerError)
+		return
+	}
+	log.Print("mcp: administrator revoked all agent access")
+	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
 }
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +306,17 @@ func terminalDimensions(rows, cols uint16) (uint16, uint16) {
 }
 
 func (s *Server) handleLoginGet(w http.ResponseWriter, r *http.Request) {
-	_ = LoginPage("", "").Render(r.Context(), w)
+	_ = LoginPage("", "", safeLoginNext(r.URL.Query().Get("next"))).Render(r.Context(), w)
+}
+
+// Only the OAuth consent endpoint may resume after login. Never accept an
+// absolute URL or a path interpreted differently by browsers and net/url.
+func safeLoginNext(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.IsAbs() || u.Host != "" || u.Path != "/oauth/authorize" || u.RawPath != "" || u.Fragment != "" || strings.ContainsAny(raw, "\\\r\n") {
+		return "/"
+	}
+	return u.RequestURI()
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -265,11 +327,11 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	remember := r.FormValue("remember") != ""
 	if err := s.auth.Login(w, r, r.FormValue("password"), remember); err != nil {
 		log.Printf("auth: login failed from %s", r.RemoteAddr)
-		_ = LoginPage("", "Invalid credentials").Render(r.Context(), w)
+		_ = LoginPage("", "Invalid credentials", safeLoginNext(r.FormValue("next"))).Render(r.Context(), w)
 		return
 	}
 	log.Printf("auth: login ok from %s", r.RemoteAddr)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, safeLoginNext(r.FormValue("next")), http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
