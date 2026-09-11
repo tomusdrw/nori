@@ -3,12 +3,10 @@ package web
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -158,33 +156,6 @@ func TestValidateMCPService(t *testing.T) {
 			tc.change(svc)
 			if err := validateMCPService(context.Background(), svc, nil); err == nil {
 				t.Fatal("accepted invalid config")
-			}
-		})
-	}
-}
-
-func TestReadMCPLogs(t *testing.T) {
-	var framed bytes.Buffer
-	for _, part := range []string{"hello\n", "world\n"} {
-		var h [8]byte
-		h[0] = 1
-		binary.BigEndian.PutUint32(h[4:], uint32(len(part)))
-		framed.Write(h[:])
-		framed.WriteString(part)
-	}
-	for _, tc := range []struct {
-		name, input, want string
-		limit             int
-		truncated         bool
-	}{
-		{"raw", "hello world", "hello", 5, true},
-		{"multiplexed", framed.String(), "hello\nworld\n", 100, false},
-		{"bounded frame", framed.String(), "hello\nw", 7, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, truncated, err := readMCPLogs(strings.NewReader(tc.input), tc.limit)
-			if err != nil || got != tc.want || truncated != tc.truncated {
-				t.Fatalf("got %q %t %v", got, truncated, err)
 			}
 		})
 	}

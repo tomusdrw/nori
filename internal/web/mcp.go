@@ -1,18 +1,16 @@
 package web
 
 import (
-	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"deploybot/internal/docker"
 	"deploybot/internal/envfile"
 	"deploybot/internal/executor"
 	"deploybot/internal/mcpauth"
@@ -237,7 +235,7 @@ func (s *Server) newMCPHandler() http.Handler {
 			return nil, errors.New("could not read container logs")
 		}
 		defer rc.Close()
-		output, truncated, err := readMCPLogs(rc, mcpLogLimit)
+		output, truncated, err := docker.ReadLogsBounded(rc, mcpLogLimit)
 		if err != nil {
 			return nil, errors.New("could not decode container logs")
 		}
@@ -331,43 +329,4 @@ func validateMCPService(ctx context.Context, svc *store.Service, env *string) er
 		return errors.New("invalid service configuration: check Bash syntax, dotenv syntax and health URL")
 	}
 	return nil
-}
-
-// Docker emits either raw TTY text or frames with an 8-byte header. Never
-// allocate from the untrusted frame length, and stop reading at the output cap.
-func readMCPLogs(input io.Reader, limit int) (string, bool, error) {
-	r := bufio.NewReader(input)
-	header, err := r.Peek(8)
-	multiplexed := err == nil && header[0] <= 2 && header[1] == 0 && header[2] == 0 && header[3] == 0
-	if !multiplexed {
-		data, err := io.ReadAll(io.LimitReader(r, int64(limit+1)))
-		truncated := len(data) > limit
-		if truncated {
-			data = data[:limit]
-		}
-		return string(data), truncated, err
-	}
-	var output strings.Builder
-	for {
-		var h [8]byte
-		_, err := io.ReadFull(r, h[:])
-		if err == io.EOF {
-			return output.String(), false, nil
-		}
-		if err != nil {
-			return "", false, err
-		}
-		if h[0] > 2 || h[1] != 0 || h[2] != 0 || h[3] != 0 {
-			return "", false, errors.New("invalid Docker log header")
-		}
-		n := int64(binary.BigEndian.Uint32(h[4:]))
-		remaining := int64(limit - output.Len())
-		if n > remaining {
-			_, err = io.CopyN(&output, r, remaining)
-			return output.String(), true, err
-		}
-		if _, err = io.CopyN(&output, r, n); err != nil {
-			return "", false, err
-		}
-	}
 }

@@ -223,6 +223,17 @@ docker run -d --name "$SERVICE" \
 | `immediate` | Auto-deploy when registry digest changes (polled every 60s) |
 | `scheduled` | Deploy on cron schedule (e.g. `0 3 * * *`) |
 
+Schedule changes saved through the dashboard or MCP take effect on the next
+scheduler refresh, normally within one second, without restarting Nori. Creating
+a scheduled service adds its job; changing its cron expression replaces the job;
+switching to another policy or deleting the service removes it. Unchanged jobs
+keep their timing, including `@every` intervals.
+
+If a schedule does not run, check Nori's logs for `scheduler: bad cron` and correct
+the service's expression. Invalid expressions saved by older dashboard versions
+are skipped and logged once per change. `scheduler: reload` indicates that the
+scheduler could not read configuration; it retries on the next refresh.
+
 ## SMS alerts (optional, Twilio)
 
 Nori sends an SMS to a preconfigured number when a deploy script exits non-zero.

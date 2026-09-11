@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -86,7 +87,13 @@ func (s *Scheduler) reload(ctx context.Context) error {
 		expr := svc.CronExpr
 		id, err := s.cron.AddFunc(expr, func() {
 			current, err := s.store.GetService(ctx, svcID)
-			if err != nil || current.Policy != store.PolicyScheduled || current.CronExpr != expr {
+			if err != nil {
+				if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, context.Canceled) {
+					log.Printf("scheduler: load service %q (id %d): %v", svcName, svcID, err)
+				}
+				return
+			}
+			if current.Policy != store.PolicyScheduled || current.CronExpr != expr {
 				return
 			}
 			log.Printf("scheduler: triggering deploy for %q", svcName)

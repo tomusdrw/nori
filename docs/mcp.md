@@ -135,7 +135,9 @@ client. They do not deploy containers on a live host.
   explicit-secret protection, settings/CSRF/revocation and Secure cookie upgrade
   behind a proxy.
 - `web/mcp_test.go`: tool lifecycle, partial updates, scopes, self-service guards,
-  validation and bounded container logs.
+  and validation.
+- `docker/logs_test.go`: bounded container log decoding, oversized frames and
+  malformed streams.
 - Store tests cover encryption, rollback, conflicting writes and bounded log
   reads. Scheduler tests cover creation, changes, deletion and invalid-then-fixed
   schedules without restart.
