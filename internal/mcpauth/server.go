@@ -1,0 +1,177 @@
+// Package mcpauth implements the instance's OAuth authorization and resource server.
+package mcpauth
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"sync"
+	"time"
+
+	"deploybot/internal/auth"
+	"deploybot/internal/store"
+)
+
+const (
+	ScopeRead     = "nori:read"
+	ScopeWrite    = "nori:write"
+	ScopeSecrets  = "nori:secrets"
+	defaultScopes = ScopeRead + " " + ScopeWrite
+
+	authorizationCodeLifetime = 5 * time.Minute
+	accessTokenLifetime       = 10 * time.Minute
+	grantLifetime             = 30 * 24 * time.Hour
+	pendingClientLifetime     = 10 * time.Minute
+	approvedClientLifetime    = 365 * 24 * time.Hour
+)
+
+var scopes = []string{ScopeRead, ScopeWrite, ScopeSecrets}
+
+type Server struct {
+	st      *store.Store
+	auth    *auth.Auth
+	mu      sync.Mutex
+	budgets map[string]requestBudget
+}
+
+type requestBudget struct {
+	window   time.Time
+	requests int
+}
+
+// Anonymous registration cannot exhaust the budget for existing grants.
+// Grant keys enter this bounded map only after the credential is verified.
+func (s *Server) allow(w http.ResponseWriter, key string, limit int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.budgets == nil {
+		s.budgets = make(map[string]requestBudget)
+	}
+	for k, budget := range s.budgets {
+		if time.Since(budget.window) >= time.Minute {
+			delete(s.budgets, k)
+		}
+	}
+	budget := s.budgets[key]
+	if budget.window.IsZero() {
+		budget.window = time.Now()
+	}
+	budget.requests++
+	s.budgets[key] = budget
+	if budget.requests > limit {
+		w.Header().Set("Retry-After", "60")
+		failure(w, 429, "slow_down")
+		return false
+	}
+	return true
+}
+
+func New(st *store.Store, a *auth.Auth) *Server { return &Server{st: st, auth: a} }
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func failure(w http.ResponseWriter, status int, code string) {
+	writeJSON(w, status, map[string]string{"error": code})
+}
+func (s *Server) config(w http.ResponseWriter, r *http.Request) (store.MCPConfig, bool) {
+	c, err := s.st.GetMCPConfig(r.Context())
+	if err != nil {
+		failure(w, 503, "temporarily_unavailable")
+		return c, false
+	}
+	if !c.Enabled || c.PublicURL == "" || c.Epoch == "" {
+		http.NotFound(w, r)
+		return c, false
+	}
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Host != r.Host {
+		failure(w, 403, "invalid_host")
+		return c, false
+	}
+	return c, true
+}
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	c, ok := s.config(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+	if len(r.URL.RawQuery) > 16384 {
+		failure(w, 414, "invalid_request")
+		return
+	}
+	if r.URL.Path != "/oauth/authorize" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(204)
+			return
+		}
+	}
+	switch r.URL.Path {
+	case "/.well-known/oauth-authorization-server":
+		if r.Method != "GET" {
+			failure(w, 405, "invalid_request")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"issuer": c.PublicURL, "authorization_endpoint": c.PublicURL + "/oauth/authorize", "token_endpoint": c.PublicURL + "/oauth/token", "registration_endpoint": c.PublicURL + "/oauth/register", "revocation_endpoint": c.PublicURL + "/oauth/revoke", "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"none", "client_secret_basic"}, "revocation_endpoint_auth_methods_supported": []string{"none", "client_secret_basic"}, "scopes_supported": scopes})
+	case "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp":
+		if r.Method != "GET" {
+			failure(w, 405, "invalid_request")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"resource": c.PublicURL + "/mcp", "authorization_servers": []string{c.PublicURL}, "scopes_supported": scopes, "bearer_methods_supported": []string{"header"}})
+	case "/oauth/authorize":
+		if r.Method != "GET" && r.Method != "POST" {
+			failure(w, 405, "invalid_request")
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != c.PublicURL {
+			failure(w, 403, "invalid_origin")
+			return
+		}
+		if r.Method == "POST" && r.Header.Get("Origin") != c.PublicURL {
+			failure(w, 403, "invalid_origin")
+			return
+		}
+		s.auth.Middleware(s.auth.CSRFMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.authorize(w, r, c) }))).ServeHTTP(w, r)
+	case "/oauth/register", "/oauth/token", "/oauth/revoke":
+		if r.Method != "POST" {
+			failure(w, 405, "invalid_request")
+			return
+		}
+		if r.URL.Path == "/oauth/register" {
+			if !s.allow(w, "registration", 10) {
+				return
+			}
+			s.register(w, r, c)
+			return
+		}
+		if err := r.ParseForm(); err != nil || !unique(r.PostForm) {
+			failure(w, 400, "invalid_request")
+			return
+		}
+		if r.URL.Path == "/oauth/token" {
+			s.token(w, r, c)
+		} else {
+			s.revoke(w, r, c)
+		}
+	default:
+		http.NotFound(w, r)
+	}
+}
+func unique(v url.Values) bool {
+	for _, values := range v {
+		if len(values) != 1 {
+			return false
+		}
+	}
+	return true
+}

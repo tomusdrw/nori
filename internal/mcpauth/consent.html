@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Authorize MCP access · Nori</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body class="login-body oauth-body">
+    <main class="login-card oauth-card">
+      <h1>Authorize MCP access</h1>
+      <p>The application <strong>{{.Name}}</strong> ({{.ID}}) requests access to this Nori instance.</p>
+      <p>Requested permissions: <strong>{{.Scope}}</strong></p>
+      <ul>
+        <li>nori:read: services, configuration, deployment history and logs. Logs can contain sensitive data.</li>
+        <li>nori:write: create and modify services, scripts and environment variables, trigger deployments. Deployment scripts can control the Docker host and read its secrets.</li>
+        <li>nori:secrets: read environment variable contents, including secrets.</li>
+      </ul>
+      <p>Redirect destination: {{.Redirect}}</p>
+      <form class="login-form" method="post" action="/oauth/authorize">
+        {{range $key,$values := .Params}}
+        <input type="hidden" name="{{$key}}" value="{{index $values 0}}">
+        {{end}}
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button class="button button-primary" name="decision" value="allow">Authorize</button>
+        <button class="button" name="decision" value="deny">Deny</button>
+      </form>
+    </main>
+  </body>
+</html>

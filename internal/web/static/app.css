@@ -490,3 +490,7 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Consent includes untrusted client names and potentially long callback URLs. */
+.oauth-body { overflow: auto; align-items: start; }
+.oauth-card { width: min(640px, 100%); overflow-wrap: anywhere; }

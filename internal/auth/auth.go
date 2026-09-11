@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,19 @@ func HashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// WithSecureCookies marks a request served under the configured HTTPS origin.
+// Callers must validate the configured origin and Host, never forwarded headers.
+func WithSecureCookies(ctx context.Context) context.Context {
+	return context.WithValue(ctx, secureCookiesKey{}, true)
+}
+
+type secureCookiesKey struct{}
+
+func requestSecure(r *http.Request) bool {
+	forced, _ := r.Context().Value(secureCookiesKey{}).(bool)
+	return r.TLS != nil || forced
+}
+
 func (a *Auth) Login(w http.ResponseWriter, r *http.Request, password string, remember bool) error {
 	if err := bcrypt.CompareHashAndPassword(a.passwordHash, []byte(password)); err != nil {
 		return errors.New("invalid credentials")
@@ -63,7 +77,7 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request, password string, re
 	if err != nil {
 		return err
 	}
-	return a.writeSession(w, r.TLS != nil, "admin", ttl, csrf)
+	return a.writeSession(w, requestSecure(r), "admin", ttl, csrf)
 }
 
 // writeSession (re)issues the session and CSRF cookies with a fresh idle window
@@ -111,14 +125,20 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 		}
 		sess, err := a.userFromRequest(r)
 		if err != nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			target := "/login"
+			if r.URL.Path == "/oauth/authorize" && r.Method == http.MethodGet {
+				target += "?next=" + url.QueryEscape(r.URL.RequestURI())
+			}
+			http.Redirect(w, r, target, http.StatusSeeOther)
 			return
 		}
 		// Sliding expiry: once a session is past the halfway point of its idle
 		// window, re-issue it so continued activity keeps it alive. Refreshing
 		// only in the second half avoids setting a cookie on every request
 		// (the dashboard polls every few seconds).
-		if time.Until(sess.exp) < sess.ttl/2 {
+		// OAuth consent upgrades sessions created before HTTPS MCP was enabled
+		// to Secure cookies even when their sliding refresh is not due yet.
+		if time.Until(sess.exp) < sess.ttl/2 || (r.URL.Path == "/oauth/authorize" && requestSecure(r)) {
 			csrf := a.CSRFToken(r)
 			if csrf == "" {
 				if csrf, err = randomToken(32); err != nil {
@@ -126,7 +146,7 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 					return
 				}
 			}
-			if err := a.writeSession(w, r.TLS != nil, sess.user, sess.ttl, csrf); err != nil {
+			if err := a.writeSession(w, requestSecure(r), sess.user, sess.ttl, csrf); err != nil {
 				http.Error(w, "session error", http.StatusInternalServerError)
 				return
 			}

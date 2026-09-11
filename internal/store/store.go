@@ -75,7 +75,7 @@ func Open(path string, key []byte) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + oauthSchema); err != nil {
 		db.Close()
 		return nil, err
 	}

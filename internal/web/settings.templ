@@ -1,15 +1,17 @@
 package web
 
-templ SettingsPage(botName string, notifyMode string, csrf string, errMsg string, saved bool) {
-	@Layout("Settings", csrf, settingsContent(botName, notifyMode, csrf, errMsg, saved))
+import "deploybot/internal/store"
+
+templ SettingsPage(botName string, notifyMode string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig) {
+	@Layout("Settings", csrf, settingsContent(botName, notifyMode, csrf, errMsg, saved, mcpConfig))
 }
 
-templ settingsContent(botName string, notifyMode string, csrf string, errMsg string, saved bool) {
+templ settingsContent(botName string, notifyMode string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig) {
 	<section class="page-heading form-heading">
 		<div>
 			<p class="eyebrow">Instance</p>
 			<h1>Settings</h1>
-			<p class="page-subtitle">Customize how this Nori instance appears in the dashboard and browser tab.</p>
+			<p class="page-subtitle">Manage this instance’s name, notifications and agent access.</p>
 		</div>
 	</section>
 	if errMsg != "" {
@@ -21,7 +23,7 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 	if saved {
 		<div class="alert alert-success" role="status">
 			<strong>Saved</strong>
-			<span>Settings updated. Open tabs will reflect the change after refresh.</span>
+			<span>Settings updated. MCP access changes take effect immediately.</span>
 		</div>
 	}
 	<form method="post" action="/settings" class="service-form">
@@ -62,9 +64,45 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 				</div>
 			</div>
 		</section>
+		<section class="panel form-panel">
+			<div class="panel-heading">
+				<div>
+					<h2>Agent access (MCP)</h2>
+					<p>Connect agents to manage services through OAuth. Disabled by default.</p>
+				</div>
+				<span class="step-number">03</span>
+			</div>
+			<div class="form-grid">
+				<div class="field">
+					<label for="mcp-enabled">MCP server</label>
+					<select id="mcp-enabled" name="mcp_enabled">
+						<option value="0" selected?={ !mcpConfig.Enabled }>Disabled</option>
+						<option value="1" selected?={ mcpConfig.Enabled }>Enabled</option>
+					</select>
+					<span class="field-help">Disabling access disconnects agents. Re-enabling requires a new authorization.</span>
+				</div>
+				<div class="field">
+					<label for="mcp-public-url">Public instance URL</label>
+					<input id="mcp-public-url" type="url" name="mcp_public_url" value={ mcpConfig.PublicURL } placeholder="https://nori.example.com" maxlength="2048"/>
+					<span class="field-help">The HTTPS address agents and your browser use to reach Nori, without a path. HTTP is accepted only for local development.</span>
+				</div>
+			</div>
+			if mcpConfig.Enabled {
+				<p class="field-help">Connect your MCP client to <code style="overflow-wrap:anywhere">{ mcpConfig.PublicURL + "/mcp" }</code>. Sign in to Nori and approve the requested permissions.</p>
+			}
+			<p class="field-help">Read access includes logs, which may contain secrets. Write access can deploy scripts with Nori’s permissions on the Docker host. Approve only clients you trust.</p>
+		</section>
 		<div class="form-actions">
 			<button class="button button-primary" type="submit">Save settings</button>
 		</div>
 	</form>
+	if mcpConfig.Enabled {
+		<form method="post" action="/settings/mcp/revoke" class="service-form">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<section class="panel form-panel">
+				<div class="panel-heading"><div><h2>Revoke agent access</h2><p>Invalidate every existing OAuth grant. Agents must request authorization again.</p></div></div>
+				<button class="button button-danger" type="submit">Revoke all agent access</button>
+			</section>
+		</form>
+	}
 }
-
