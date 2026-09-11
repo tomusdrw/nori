@@ -290,12 +290,24 @@ effect when Twilio is configured.
 ## MCP agent access
 
 The instance-wide **Settings → Agent access (MCP)** option enables a Streamable
-HTTP MCP server at `/mcp`. It is **disabled by default**. Set the public instance
-URL (for example `https://nori.example.com`) and save the settings; no restart is
-required. The URL must be an HTTPS origin without a path. HTTP is allowed only
-on loopback addresses for local development.
+HTTP MCP server at `/mcp`. It is **disabled by default**. When **Public instance
+URL** is empty, the browser fills it with the current page's origin: the scheme,
+hostname and port, without the path or query string. An existing value is left
+unchanged. Check that this is the address both your browser and agents use to
+reach Nori, especially if you opened Settings through a local address or an
+alternate proxy hostname. You can edit the suggestion; with JavaScript disabled,
+enter the address manually.
 
-Add `https://nori.example.com/mcp` to an OAuth-capable MCP client. The client
+Select **Enabled** and click **Save settings** to persist the URL and enable MCP;
+the suggestion alone does not save settings or enable access. No restart is
+required. The URL must be an HTTPS origin without a path (for example
+`https://nori.example.com`). HTTP is allowed only on loopback addresses for local
+development.
+
+Once enabled, the connection notes below the fields show the saved URL with
+`/mcp` appended. Add that endpoint (for example `https://nori.example.com/mcp`)
+to an OAuth-capable MCP client. Review the adjacent access notes and approve
+only clients you trust. The client
 discovers the authorization endpoints, registers itself, and opens Nori in your
 browser. Sign in with the existing administrator password and approve or deny
 the requested permissions. Public clients use Authorization Code with mandatory
@@ -353,7 +365,8 @@ If connection fails, check the response:
 | Response | What to check |
 |----------|---------------|
 | `404` on `/mcp` or OAuth endpoints | MCP is enabled and the proxy routes the path to Nori. |
-| `403 invalid_host` or `invalid_origin` | Public URL and forwarded `Host` match; browser clients must use the configured origin. |
+| `403 invalid_host` | The request's `Host`, as preserved by the proxy, must match the configured public URL. |
+| `403 invalid_origin` | Consent approval/denial POSTs must originate from Nori's configured public URL. MCP requests with an `Origin` header must also use that origin. Opening the consent page with GET from another app is allowed. |
 | `400 invalid_grant` | Exact resource URL, redirect URI and PKCE verifier; expired/replayed credentials require fresh authorization. |
 | `401 invalid_client` | Client registration and credentials; after global revocation, register again. |
 | `429 slow_down` | Respect `Retry-After`. Anonymous registration is limited separately from existing grants. |

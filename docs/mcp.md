@@ -31,8 +31,10 @@ on an already initialized client connection.
   cookie context set in `web.Server.mcpSecureCookies`.
 - Browser sessions authorize consent, not MCP requests. Consent requires an
   authenticated admin session, CSRF token, matching Origin and explicit POST.
-  GET never grants access. Keep the template escaped, its parameter whitelist,
-  and its CSP/frame restrictions when changing the page.
+  GET navigation from OAuth clients may have an external, loopback, absent or
+  `null` Origin; it opens login or renders consent and never grants access.
+  Do not add CORS read access to the consent page. Keep the template escaped,
+  its parameter whitelist, and its CSP/frame restrictions when changing it.
 - Codes bind client, exact registered redirect, S256 challenge, resource,
   scope and current epoch. Tokens bind client, resource, scope and epoch.
   Refresh may narrow scopes but cannot add permissions or extend the original
@@ -62,6 +64,27 @@ on an already initialized client connection.
 - Logs must be bounded at the read boundary, not only after loading the full
   output. Container logs must belong to the selected service; preserve byte,
   tail and timeout limits and Docker multiplex-frame validation.
+
+## Public URL setup and settings checks
+
+On the Settings page, an empty public URL input is filled from
+`window.location.origin`. This is an editable browser-side suggestion, not the
+canonical issuer until the administrator saves it and server validation passes.
+Existing input values are preserved. Behind a reverse proxy, open Settings at
+the intended public HTTPS address or correct the suggestion before saving.
+See the [user setup instructions](../README.md#mcp-agent-access).
+
+When verifying changes to this page:
+
+- With no configured URL, open `/settings` and check that the suggestion contains
+  only the browser's scheme, host and port. MCP must remain disabled until saved.
+- With a saved URL that differs from the browser's origin, confirm that the saved
+  value remains in the input. Confirm that a manually edited value can be saved.
+- After enabling and saving, verify that the connection notes show the saved
+  URL plus `/mcp`, alongside the read/write access explanation. Check note padding
+  and the separate revoke-access section at desktop and mobile widths.
+- Confirm that disabling access or revoking all access requires clients to
+  authorize again, as described in the form notes.
 
 ## Persistence and concurrency
 

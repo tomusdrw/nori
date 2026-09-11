@@ -30,11 +30,14 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	hash, _ := auth.HashPassword("password")
 	a, _ := auth.New(hash, make([]byte, 32))
 	s := New(st, a)
-	call := func(method, path, body string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	call := func(method, path, body string, cookies []*http.Cookie, origins ...string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "https://nori.example"+path, strings.NewReader(body))
 		if method == "POST" {
 			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			r.Header.Set("Origin", "https://nori.example")
+		}
+		if len(origins) > 0 {
+			r.Header.Set("Origin", origins[0])
 		}
 		for _, c := range cookies {
 			r.AddCookie(c)
@@ -43,7 +46,7 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 		s.ServeHTTP(w, r)
 		return w
 	}
-	registration := call("POST", "/oauth/register", `{"client_name":"Test agent","redirect_uris":["http://127.0.0.1:8765/callback"],"token_endpoint_auth_method":"none"}`, nil)
+	registration := call("POST", "/oauth/register", `{"client_name":"Test agent","redirect_uris":["http://localhost:8765/callback"],"token_endpoint_auth_method":"none"}`, nil)
 	if registration.Code != 201 {
 		t.Fatalf("registration: %d %s", registration.Code, registration.Body)
 	}
@@ -56,7 +59,7 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	}
 	verifier := strings.Repeat("a", 43)
 	h := sha256.Sum256([]byte(verifier))
-	params := url.Values{"client_id": {id}, "redirect_uri": {"http://127.0.0.1:8765/callback"}, "response_type": {"code"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(h[:])}, "resource": {"https://nori.example/mcp"}, "scope": {"nori:read nori:write"}, "state": {"original-state"}}
+	params := url.Values{"client_id": {id}, "redirect_uri": {"http://localhost:8765/callback"}, "response_type": {"code"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(h[:])}, "resource": {"https://nori.example/mcp"}, "scope": {"nori:read nori:write"}, "state": {"original-state"}}
 	unauth := call("GET", "/oauth/authorize?"+params.Encode(), "", nil)
 	if unauth.Code != 303 || !strings.HasPrefix(unauth.Header().Get("Location"), "/login?next=") {
 		t.Fatalf("login redirect %d %s", unauth.Code, unauth.Header())
@@ -77,6 +80,19 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	if consent.Code != 200 || !strings.Contains(consent.Body.String(), "Docker host") {
 		t.Fatalf("consent %d %s", consent.Code, consent.Body)
 	}
+	for _, origin := range []string{"", "null", "https://chatgpt.com", "https://other-client.example", "http://localhost", "http://localhost:8765", "http://127.0.0.1:8765", "http://[::1]:8765"} {
+		unauth := call("GET", "/oauth/authorize?"+params.Encode(), "", nil, origin)
+		if unauth.Code != 303 || !strings.HasPrefix(unauth.Header().Get("Location"), "/login?next=") {
+			t.Errorf("login navigation from %q: %d %s", origin, unauth.Code, unauth.Body)
+		}
+		w := call("GET", "/oauth/authorize?"+params.Encode(), "", cookies, origin)
+		if w.Code != 200 {
+			t.Errorf("consent navigation from %q: %d %s", origin, w.Code, w.Body)
+		}
+		if w.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Error("consent page must not enable cross-origin reads")
+		}
+	}
 	originalRedirect := params.Get("redirect_uri")
 	params.Set("redirect_uri", "https://attacker.example/callback")
 	if w := call("GET", "/oauth/authorize?"+params.Encode(), "", cookies); w.Code != 400 || w.Header().Get("Location") != "" {
@@ -89,6 +105,12 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 		t.Fatalf("CSRF accepted %d", denied.Code)
 	}
 	params.Set("csrf_token", csrf)
+	for _, origin := range []string{"", "http://localhost:8765", "http://127.0.0.1:8765", "https://evil.example", "null"} {
+		w := call("POST", "/oauth/authorize", params.Encode(), cookies, origin)
+		if w.Code != 403 {
+			t.Errorf("consent submission from %q accepted: %d", origin, w.Code)
+		}
+	}
 	params.Set("decision", "deny")
 	refused := call("POST", "/oauth/authorize", params.Encode(), cookies)
 	refusedURL, err := url.Parse(refused.Header().Get("Location"))
@@ -103,6 +125,9 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 			t.Fatalf("authorize %d %s", w.Code, w.Body)
 		}
 		u, _ := url.Parse(w.Header().Get("Location"))
+		if u.Scheme+"://"+u.Host+u.Path != originalRedirect {
+			t.Fatal("authorization did not return to the registered localhost callback")
+		}
 		if u.Query().Get("state") != "original-state" {
 			t.Fatal("state lost")
 		}
@@ -116,7 +141,7 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	// Anonymous registration abuse must not exhaust the token budget of an
 	// already-approved client. Only a few short-lived registrations are retained.
 	for i := 0; i < 130; i++ {
-		w := call("POST", "/oauth/register", `{"redirect_uris":["http://127.0.0.1:8765/callback"],"token_endpoint_auth_method":"none"}`, nil)
+		w := call("POST", "/oauth/register", `{"redirect_uris":["http://localhost:8765/callback"],"token_endpoint_auth_method":"none"}`, nil)
 		if i > 10 && w.Code != 429 {
 			t.Fatalf("unbounded registration: %d", w.Code)
 		}
@@ -194,7 +219,7 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 }
 
 func TestRedirectValidation(t *testing.T) {
-	for _, v := range []string{"https://example.com/callback", "http://127.0.0.1:123/cb", "http://[::1]:123/cb"} {
+	for _, v := range []string{"https://example.com/callback", "http://localhost", "http://localhost:8765/callback", "http://127.0.0.1:123/cb", "http://[::1]:123/cb"} {
 		if !validRedirect(v) {
 			t.Errorf("rejected %s", v)
 		}
