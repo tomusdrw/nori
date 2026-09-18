@@ -46,7 +46,24 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 		s.ServeHTTP(w, r)
 		return w
 	}
-	registration := call("POST", "/oauth/register", `{"client_name":"Test agent","redirect_uris":["http://localhost:8765/callback"],"token_endpoint_auth_method":"none"}`, nil)
+	callbacks := []struct{ uri, source string }{
+		{"http://localhost:8765/callback", "http://localhost:8765"},
+		{"https://agent.example/callback?next=other;value,more", "https://agent.example"},
+		{"https://agent.example:8443/oauth/callback", "https://agent.example:8443"},
+		{"http://127.0.0.1:8765/callback", "http://127.0.0.1:8765"},
+		{"https://host;name.example/callback", "https://host%3Bname.example"},
+		{"https://host,name.example/callback", "https://host%2Cname.example"},
+		{"https://*.example/callback", "https://%2A.example"},
+	}
+	redirects := make([]string, len(callbacks))
+	for i, callback := range callbacks {
+		redirects[i] = callback.uri
+	}
+	metadata, err := json.Marshal(map[string]any{"client_name": "Test agent", "redirect_uris": redirects, "token_endpoint_auth_method": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := call("POST", "/oauth/register", string(metadata), nil)
 	if registration.Code != 201 {
 		t.Fatalf("registration: %d %s", registration.Code, registration.Body)
 	}
@@ -86,6 +103,18 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	if got := consent.Header().Get("Referrer-Policy"); got != "same-origin" {
 		t.Errorf("consent form must preserve its POST Origin; Referrer-Policy=%q", got)
 	}
+	// Browsers apply form-action to the POST's redirect as well. Allow only
+	// this request's registered callback origin, without letting URL syntax
+	// inject policy directives, extra policies, or wildcard sources.
+	for _, callback := range callbacks {
+		params.Set("redirect_uri", callback.uri)
+		page := call("GET", "/oauth/authorize?"+params.Encode(), "", cookies)
+		want := "default-src 'none'; style-src 'self'; form-action 'self' " + callback.source + "; frame-ancestors 'none'; base-uri 'none'"
+		if got := page.Header().Get("Content-Security-Policy"); page.Code != 200 || got != want {
+			t.Errorf("consent must permit its callback %q without broadening CSP: status=%d policy=%q, want %q", callback.uri, page.Code, got, want)
+		}
+	}
+	params.Set("redirect_uri", callbacks[0].uri)
 	for _, origin := range []string{"", "null", "https://chatgpt.com", "https://other-client.example", "http://localhost", "http://localhost:8765", "http://127.0.0.1:8765", "http://[::1]:8765"} {
 		unauth := call("GET", "/oauth/authorize?"+params.Encode(), "", nil, origin)
 		if unauth.Code != 303 || !strings.HasPrefix(unauth.Header().Get("Location"), "/login?next=") {

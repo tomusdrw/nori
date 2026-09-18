@@ -63,9 +63,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, c store.MCPCo
 		failure(w, 400, "invalid_request")
 		return
 	}
+	target, _ := url.Parse(p.Get("redirect_uri"))
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		// Browsers also check form-action on the POST's 303 callback redirect.
+		// Only allow the validated callback origin, escaping CSP delimiters and
+		// wildcards so client metadata cannot broaden the policy.
+		callbackOrigin := (&url.URL{Scheme: target.Scheme, Host: target.Host}).String()
+		callbackSource := strings.NewReplacer(";", "%3B", ",", "%2C", "*", "%2A").Replace(callbackOrigin)
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self' "+callbackSource+"; frame-ancestors 'none'; base-uri 'none'")
 		// no-referrer makes browsers send Origin: null on the consent form
 		// POST. same-origin preserves that security check while withholding
 		// the authorization URL from cross-origin client callbacks.
@@ -81,7 +87,6 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, c store.MCPCo
 		}{cl.Client.Name, cl.Client.ID, scope, p.Get("redirect_uri"), s.auth.CSRFToken(r), params})
 		return
 	}
-	target, _ := url.Parse(p.Get("redirect_uri"))
 	q := target.Query()
 	q.Set("state", p.Get("state"))
 	if p.Get("decision") != "allow" {
