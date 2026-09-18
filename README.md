@@ -178,6 +178,15 @@ is checked again immediately before every deployment.
 The `.env` document is kept exactly as entered, including comments and blank lines. The
 complete document is encrypted at rest in SQLite because any value may be sensitive.
 
+Both editors have **Version history** with dated snapshots of saved changes. Select a
+version to preview it, **Use in editor** to restore its contents into the current
+form, **Copy contents** for the clipboard, or **Use in new service** to start an
+unnamed service with that script or envfile. Nothing is applied until you save.
+Restoring older contents creates a new version; unchanged saves do not add duplicates.
+Environment history is encrypted too. Existing installations start with their current
+configuration as the first version, and deleting a service removes its history.
+The managed self-service versions only editable launcher environment values.
+
 ## Per-service contract
 
 Each service requires two declarations in your deploy script:

@@ -89,6 +89,9 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					<span class="step-number">02</span>
 				</div>
 			</div>
+            if isEdit {
+                @configHistory(form.Name, "script", "deploy_script", form.IsSelf)
+            }
 			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Injected: $SERVICE $IMAGE $TARGET_IMAGE $TARGET_DIGEST $ENV_FILE (+ your .env vars)&#10;# $ENV_FILE is this service's .env, ready for docker run --env-file.&#10;&#10;docker pull $TARGET_IMAGE&#10;docker rm -f $SERVICE 2&gt;/dev/null || true&#10;docker run -d --name $SERVICE --label deploybot.service=$SERVICE --env-file $ENV_FILE $TARGET_IMAGE" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
 			<div class="editor-footer">
 				<span>Bash · syntax checked before save and deploy</span>
@@ -111,6 +114,9 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					<span class="step-number">03</span>
 				</div>
 			</div>
+            if isEdit {
+                @configHistory(form.Name, "env", "env_file", false)
+            }
 			<textarea class="code-editor" name="env_file" data-editor={ environmentEditorKind(form) } aria-label={ environmentEditorLabel(form) } spellcheck="false" placeholder="# One complete .env file&#10;DATABASE_URL=postgres://...&#10;LOG_LEVEL=info">{ form.EnvFile }</textarea>
 			<div class="editor-footer">
 				if form.IsSelf {
@@ -162,4 +168,25 @@ func environmentEditorLabel(form ServiceFormData) string {
 		return "Launcher environment"
 	}
 	return "Dotenv environment file"
+}
+
+
+templ configHistory(name, kind, target string, readOnly bool) {
+    <details class="config-history" data-history-kind={ kind } data-history-url={ "/services/" + name + "/history/" + kind } data-history-target={ target } data-history-source={ name }>
+        <summary>Version history</summary>
+        <div class="history-content">
+            <label for={ "history-" + kind }>Saved version</label>
+            <select id={ "history-" + kind } data-history-select disabled><option>Loading versions…</option></select>
+            <textarea class="history-preview" data-history-preview readonly aria-label={ "Saved " + kind + " version" } spellcheck="false" placeholder="Select a version to preview its contents"></textarea>
+            <div class="history-actions">
+                if !readOnly {
+                    <button type="button" class="button button-secondary button-small" data-history-use disabled>Use in editor</button>
+                }
+                <button type="button" class="button button-secondary button-small" data-history-copy disabled>Copy contents</button>
+                <a class="button button-ghost button-small" data-history-new hidden>Use in new service</a>
+            </div>
+            <p class="field-help">Using a version fills the editor. Save the service to create a new version.</p>
+            <p class="field-help" data-history-status role="status" aria-live="polite"></p>
+        </div>
+    </details>
 }

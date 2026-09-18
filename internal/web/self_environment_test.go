@@ -245,6 +245,9 @@ func (f *fakeSelfEnvironment) EditableEnvironment() (string, error) {
 
 func (f *fakeSelfEnvironment) ReplaceEditableEnvironment(content string) error {
 	f.replacements = append(f.replacements, content)
+	if f.writeErr == nil {
+		f.content = content
+	}
 	return f.writeErr
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"deploybot/internal/crypto"
 	"deploybot/internal/envfile"
 )
 
@@ -30,9 +29,9 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 		return err
 	}
 	defer tx.Rollback()
-	var encrypted []byte
+	var content string
 	if env != nil {
-		content := *env
+		content = *env
 		if template {
 			current, err := s.getEnvFile(ctx, tx, svc.ID)
 			if err != nil {
@@ -42,10 +41,6 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 			if err != nil {
 				return err
 			}
-		}
-		encrypted, err = crypto.Encrypt(s.key, []byte(content))
-		if err != nil {
-			return err
 		}
 	}
 
@@ -77,10 +72,7 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 		}
 	}
 	if env != nil {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO service_env(service_id,content) VALUES (?,?) ON CONFLICT(service_id) DO UPDATE SET content=excluded.content`, id, encrypted); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM env_var WHERE service_id=?`, id); err != nil {
+		if err := s.writeEnvFile(ctx, tx, id, content); err != nil {
 			return err
 		}
 	}
