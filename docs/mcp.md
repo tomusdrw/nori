@@ -33,6 +33,8 @@ on an already initialized client connection.
   authenticated admin session, CSRF token, matching Origin and explicit POST.
   GET navigation from OAuth clients may have an external, loopback, absent or
   `null` Origin; it opens login or renders consent and never grants access.
+  The consent GET uses `Referrer-Policy: same-origin`: `no-referrer` suppresses
+  the Origin on browser form POSTs and breaks approval with `invalid_origin`.
   Do not add CORS read access to the consent page. Keep the template escaped,
   its parameter whitelist, and its CSP/frame restrictions when changing it.
 - Codes bind client, exact registered redirect, S256 challenge, resource,
@@ -54,16 +56,28 @@ on an already initialized client connection.
   may finish, and a deployment already launched continues running.
 - All tools go through `addNoriTool` and its scope check before side effects.
   `WithIdentity` is for trusted internal callers/tests; it must not replace
-  `Protect` on an HTTP route. Normal responses exclude environment contents;
-  direct environment reads require both read and secrets scopes.
+  `Protect` on an HTTP route. Environment reads return only
+  variable names and fixed placeholders. `nori:secrets` permits only setting a
+  declared variable, together with `nori:write`; no scope reveals values.
 - Write access can run arbitrary Bash with Nori's permissions and Docker
   socket. It can read host secrets and affect Nori itself. The explicit
   self-service guards prevent accidental edits through service tools; they
-  are not a sandbox against a client granted write access. Log access and
-  deploy-script configuration may also reveal secrets.
+  are not a sandbox against a client granted write access. Known current dotenv values are
+  redacted from MCP output, including scripts and logs. Unknown, encoded and
+  historical credentials are outside that redaction guarantee.
 - Logs must be bounded at the read boundary, not only after loading the full
   output. Container logs must belong to the selected service; preserve byte,
-  tail and timeout limits and Docker multiplex-frame validation.
+  tail and timeout limits and Docker multiplex-frame validation. Reads include
+  at most one maximum-value-length of extra context to redact secrets crossing
+  the 256 KiB output window. Redaction happens before the final output cap.
+- The MCP wrapper snapshots dotenv values before each tool operation, including
+  legacy and self-service values, refreshes after reads, and redacts decoded
+  response strings with both snapshots. A longer newly written value makes a
+  truncated log read fail closed if its captured context is insufficient.
+  Multiline values also redact individual nonempty lines because Docker applies
+  its line tail before the server receives logs. Failure
+  to load/parse the values fails closed. The environment template response is
+  constructed separately from names and markers so redaction cannot corrupt it.
 
 ## Public URL setup and settings checks
 
@@ -93,11 +107,15 @@ environment together. Updates compare the configuration snapshot read by the
 operation against the current database fields. A mismatch aborts with
 `ErrServiceConflict`; neither configuration nor environment may partially save.
 This detects overlapping MCP mutations, not stale client-side drafts: the tool
-does not expose a client-supplied version token. Whole environment replacements
-use last-write-wins semantics; omitted environment fields are preserved.
+does not expose a client-supplied version token. MCP template saves resolve placeholders against the current encrypted
+values within that transaction. Omitted environment fields are preserved;
+omitted keys in an explicitly supplied template are removed.
 
-The environment-only tool uses `SetEnvFile` so it cannot restore an earlier
-service configuration. Names and managed status are immutable through MCP.
+The environment tools use transactional `SetEnvTemplate` / `SetEnvSecret`
+operations so they cannot restore an earlier service configuration or silently
+restore a stale secret value. Concurrent SQLite write conflicts fail without
+partial writes; clients can retry. Templates normalize dotenv syntax and omit
+comments; values are always quoted to retain leading zeros and literal dollars. Names and managed status are immutable through MCP.
 The existing dashboard still uses its older save/validation path; do not assume
 its writes have the same conflict protection. Unifying those paths is a
 separate follow-up below.
@@ -155,7 +173,7 @@ client. They do not deploy containers on a live host.
   refresh exchange through two independent stores, live grants and revoked
   families across restart, and scope-escalation rejection.
 - `web/mcp_settings_test.go`: real OAuth-to-MCP HTTP flow, default write access,
-  explicit-secret protection, settings/CSRF/revocation and Secure cookie upgrade
+  write-only secret protection, settings/CSRF/revocation and Secure cookie upgrade
   behind a proxy.
 - `web/mcp_test.go`: tool lifecycle, partial updates, scopes, self-service guards,
   and validation.

@@ -80,6 +80,12 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	if consent.Code != 200 || !strings.Contains(consent.Body.String(), "Docker host") {
 		t.Fatalf("consent %d %s", consent.Code, consent.Body)
 	}
+	// HTML form POSTs under no-referrer carry Origin: null and are rejected
+	// by the same-origin consent guard. Preserve Origin without forwarding the
+	// authorization query to the client's callback.
+	if got := consent.Header().Get("Referrer-Policy"); got != "same-origin" {
+		t.Errorf("consent form must preserve its POST Origin; Referrer-Policy=%q", got)
+	}
 	for _, origin := range []string{"", "null", "https://chatgpt.com", "https://other-client.example", "http://localhost", "http://localhost:8765", "http://127.0.0.1:8765", "http://[::1]:8765"} {
 		unauth := call("GET", "/oauth/authorize?"+params.Encode(), "", nil, origin)
 		if unauth.Code != 303 || !strings.HasPrefix(unauth.Header().Get("Location"), "/login?next=") {

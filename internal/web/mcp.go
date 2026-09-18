@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -32,7 +34,7 @@ type mcpCreate struct {
 	Policy       string  `json:"policy,omitempty"`
 	CronExpr     string  `json:"cron_expr,omitempty"`
 	HealthURL    string  `json:"health_url,omitempty"`
-	EnvFile      *string `json:"env_file,omitempty" jsonschema:"Complete dotenv document, encrypted at rest"`
+	EnvFile      *string `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
 }
 type mcpUpdate struct {
 	ServiceID    int64   `json:"service_id"`
@@ -41,7 +43,7 @@ type mcpUpdate struct {
 	Policy       *string `json:"policy,omitempty"`
 	CronExpr     *string `json:"cron_expr,omitempty"`
 	HealthURL    *string `json:"health_url,omitempty"`
-	EnvFile      *string `json:"env_file,omitempty"`
+	EnvFile      *string `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; omitted keys are removed; insert values with set_service_secret"`
 }
 type mcpHistory struct {
 	ServiceID int64 `json:"service_id"`
@@ -49,25 +51,36 @@ type mcpHistory struct {
 }
 type mcpDeployment struct {
 	DeploymentID int64 `json:"deployment_id"`
-	IncludeLogs  bool  `json:"include_logs,omitempty" jsonschema:"Explicitly include logs, which may contain secrets"`
+	IncludeLogs  bool  `json:"include_logs,omitempty" jsonschema:"Include logs with known dotenv values redacted"`
 }
 type mcpLogs struct {
 	ServiceID   int64  `json:"service_id"`
 	ContainerID string `json:"container_id" jsonschema:"Container belonging to this service"`
 	Tail        int    `json:"tail,omitempty" jsonschema:"Lines, defaults to 100, maximum 1000"`
 }
+type mcpSecret struct {
+	ServiceID int64  `json:"service_id"`
+	Key       string `json:"key" jsonschema:"Environment variable name already declared in the service configuration"`
+	Value     string `json:"value" jsonschema:"Literal secret value; never returned"`
+}
+
 type mcpEnv struct {
 	ServiceID int64  `json:"service_id"`
-	EnvFile   string `json:"env_file" jsonschema:"Complete replacement dotenv document"`
+	EnvFile   string `json:"env_file" jsonschema:"Replacement dotenv template: every value must be [REDACTED]; existing values are preserved by name"`
 }
 
 // addNoriTool puts authorization before all tool side effects. The OAuth HTTP
 // middleware supplies the authenticated principal on every stateless request.
-func addNoriTool[I any](server *mcp.Server, name, description, scope string, run func(context.Context, I) (any, error)) {
+func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope string, run func(context.Context, I) (any, error)) {
 	mcp.AddTool(server, &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: scope == mcpauth.ScopeRead}}, func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, any, error) {
 		if err := mcpauth.RequireScope(ctx, scope); err != nil {
 			return nil, nil, err
 		}
+		redactor, err := s.mcpRedactor(ctx)
+		if err != nil {
+			return nil, nil, errors.New("could not safely read environment values for redaction")
+		}
+		ctx = context.WithValue(ctx, mcpRedactorKey{}, redactor)
 		out, err := run(ctx, in)
 		if scope == mcpauth.ScopeWrite {
 			identity, _ := mcpauth.FromContext(ctx)
@@ -79,17 +92,41 @@ func addNoriTool[I any](server *mcp.Server, name, description, scope string, run
 				serviceID = v.ServiceID
 			case mcpEnv:
 				serviceID = v.ServiceID
+			case mcpSecret:
+				serviceID = v.ServiceID
 			}
 			log.Printf("mcp: client=%q tool=%s service_id=%d success=%t", identity.ClientID, name, serviceID, err == nil)
 		}
-		return nil, out, err
+		if refreshErr := s.refreshMCPRedactor(ctx); refreshErr != nil {
+			return nil, nil, refreshErr
+		}
+		if err != nil {
+			return nil, nil, errors.New(redactor.Redact(err.Error()))
+		}
+		// This tool constructs its response solely from names and fixed markers.
+		if name == "get_service_environment" {
+			return nil, out, nil
+		}
+		// Redact decoded strings, not serialized JSON: quotes/newlines in secrets
+		// must match in both the SDK's text and structured response representations.
+		data, err := json.Marshal(out)
+		if err != nil {
+			return nil, nil, errors.New("could not encode tool result")
+		}
+		var safe any
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		if err := decoder.Decode(&safe); err != nil {
+			return nil, nil, errors.New("could not encode tool result")
+		}
+		return nil, redactMCPResult(safe, redactor, name == "get_deployment" || name == "get_container_logs"), nil
 	})
 }
 
 func (s *Server) newMCPHandler() http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, nil)
-	addNoriTool(server, "list_services", "List service configurations without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
-	addNoriTool(server, "get_service", "Get a service configuration and its containers; environment values are excluded.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
+	addNoriTool(s, server, "list_services", "List service configurations without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
+	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are excluded.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -100,7 +137,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return map[string]any{"service": svc, "containers": containers}, nil
 	})
-	addNoriTool(server, "create_service", "Create a service with a Bash deployment script. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
+	addNoriTool(s, server, "create_service", "Create a service with a Bash deployment script. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
@@ -108,12 +145,12 @@ func (s *Server) newMCPHandler() http.Handler {
 		if err := validateMCPService(ctx, svc, in.EnvFile); err != nil {
 			return nil, err
 		}
-		if err := s.store.SaveServiceConfig(ctx, svc, in.EnvFile, nil); err != nil {
+		if err := s.store.SaveServiceConfigTemplate(ctx, svc, in.EnvFile, nil); err != nil {
 			return nil, errors.New("could not create service; check that its name is unique")
 		}
 		return svc, nil
 	})
-	addNoriTool(server, "update_service", "Update supplied configuration fields; omitted fields are preserved and names are immutable. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
+	addNoriTool(s, server, "update_service", "Update supplied configuration fields; omitted fields are preserved and names are immutable. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, true)
 		if err != nil {
 			return nil, err
@@ -137,7 +174,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		if err := validateMCPService(ctx, svc, in.EnvFile); err != nil {
 			return nil, err
 		}
-		if err := s.store.SaveServiceConfig(ctx, svc, in.EnvFile, &previous); err != nil {
+		if err := s.store.SaveServiceConfigTemplate(ctx, svc, in.EnvFile, &previous); err != nil {
 			if errors.Is(err, store.ErrServiceConflict) {
 				return nil, err
 			}
@@ -146,7 +183,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		return svc, nil
 	})
 	for _, action := range []string{"delete", "start", "stop", "deploy"} {
-		addNoriTool(server, action+"_service", map[string]string{"delete": "Delete service configuration and deployment history; does not remove containers.", "start": "Start existing containers belonging to a service.", "stop": "Stop all containers belonging to a service.", "deploy": "Run the service deployment script asynchronously; returns deployment ID."}[action], mcpauth.ScopeWrite, func(ctx context.Context, in mcpID) (any, error) {
+		addNoriTool(s, server, action+"_service", map[string]string{"delete": "Delete service configuration and deployment history; does not remove containers.", "start": "Start existing containers belonging to a service.", "stop": "Stop all containers belonging to a service.", "deploy": "Run the service deployment script asynchronously; returns deployment ID."}[action], mcpauth.ScopeWrite, func(ctx context.Context, in mcpID) (any, error) {
 			svc, err := s.mcpService(ctx, in.ServiceID, true)
 			if err != nil {
 				return nil, err
@@ -171,7 +208,7 @@ func (s *Server) newMCPHandler() http.Handler {
 			return map[string]any{"service_id": svc.ID, "success": true}, nil
 		})
 	}
-	addNoriTool(server, "list_deployments", "Recent deployment metadata without logs.", mcpauth.ScopeRead, func(ctx context.Context, in mcpHistory) (any, error) {
+	addNoriTool(s, server, "list_deployments", "Recent deployment metadata without logs.", mcpauth.ScopeRead, func(ctx context.Context, in mcpHistory) (any, error) {
 		if _, err := s.mcpService(ctx, in.ServiceID, false); err != nil {
 			return nil, err
 		}
@@ -183,28 +220,41 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return s.store.ListDeploymentSummaries(ctx, in.ServiceID, in.Limit)
 	})
-	addNoriTool(server, "get_deployment", "Deployment details; optional logs may contain sensitive application output and are limited to 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpDeployment) (any, error) {
+	addNoriTool(s, server, "get_deployment", "Deployment details; optional logs redact known dotenv values and are limited to 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpDeployment) (any, error) {
 		if in.DeploymentID <= 0 {
 			return nil, errors.New("invalid deployment_id")
 		}
 		limit := 0
 		if in.IncludeLogs {
-			limit = mcpLogLimit + 1
+			limit = mcpLogLimit + max(1, mcpLogRedactor(ctx).MaxLen)
 		}
 		d, err := s.store.GetDeploymentWithLogLimit(ctx, in.DeploymentID, limit)
 		if err != nil {
 			return nil, err
 		}
+		if in.IncludeLogs {
+			previousMax := mcpLogRedactor(ctx).MaxLen
+			if err := s.refreshMCPRedactor(ctx); err != nil {
+				return nil, err
+			}
+			if mcpLogRedactor(ctx).MaxLen > previousMax && len(d.Log) == limit {
+				return nil, errors.New("environment changed during log read; retry")
+			}
+		}
 		truncated := false
 		if !in.IncludeLogs {
 			d.Log = ""
-		} else if len(d.Log) > mcpLogLimit {
-			d.Log = d.Log[len(d.Log)-mcpLogLimit:]
-			truncated = true
+		} else {
+			truncated = len(d.Log) > mcpLogLimit
+			d.Log = mcpLogRedactor(ctx).Window(d.Log, max(0, len(d.Log)-mcpLogLimit), len(d.Log))
+			if len(d.Log) > mcpLogLimit {
+				d.Log = d.Log[len(d.Log)-mcpLogLimit:]
+				truncated = true
+			}
 		}
 		return map[string]any{"deployment": d, "logs_truncated": truncated}, nil
 	})
-	addNoriTool(server, "get_container_logs", "Read bounded container logs. Output can include application secrets. Maximum 1000 lines and 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpLogs) (any, error) {
+	addNoriTool(s, server, "get_container_logs", "Read bounded container logs with known dotenv values redacted. Maximum 1000 lines and 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpLogs) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -235,16 +285,26 @@ func (s *Server) newMCPHandler() http.Handler {
 			return nil, errors.New("could not read container logs")
 		}
 		defer rc.Close()
-		output, truncated, err := docker.ReadLogsBounded(rc, mcpLogLimit)
+		output, truncated, err := docker.ReadLogsBounded(rc, mcpLogLimit+max(1, mcpLogRedactor(ctx).MaxLen))
 		if err != nil {
 			return nil, errors.New("could not decode container logs")
 		}
-		return map[string]any{"logs": output, "truncated": truncated}, nil
-	})
-	addNoriTool(server, "get_service_environment", "Explicitly reveal a service's plaintext dotenv document. Requires nori:secrets in addition to nori:read.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
-		if err := mcpauth.RequireScope(ctx, mcpauth.ScopeSecrets); err != nil {
+		previousMax := mcpLogRedactor(ctx).MaxLen
+		if err := s.refreshMCPRedactor(ctx); err != nil {
 			return nil, err
 		}
+		if truncated && mcpLogRedactor(ctx).MaxLen > previousMax {
+			return nil, errors.New("environment changed during log read; retry")
+		}
+		truncated = truncated || len(output) > mcpLogLimit
+		output = mcpLogRedactor(ctx).Window(output, 0, min(len(output), mcpLogLimit))
+		if len(output) > mcpLogLimit {
+			output = output[:mcpLogLimit]
+			truncated = true
+		}
+		return map[string]any{"logs": output, "truncated": truncated}, nil
+	})
+	addNoriTool(s, server, "get_service_environment", "Read the service dotenv structure with [REDACTED] placeholders for all values. Comments are omitted. Never returns secrets.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -256,9 +316,13 @@ func (s *Server) newMCPHandler() http.Handler {
 		if err != nil {
 			return nil, errors.New("could not read environment")
 		}
-		return map[string]any{"env_file": env}, nil
+		template, err := envfile.Template(env)
+		if err != nil {
+			return nil, errors.New("could not read environment structure")
+		}
+		return map[string]any{"env_file": template}, nil
 	})
-	addNoriTool(server, "set_service_environment", "Replace a service's entire dotenv document, encrypted at rest. Does not return the values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpEnv) (any, error) {
+	addNoriTool(s, server, "set_service_environment", "Replace the dotenv structure using [REDACTED] for every value. Preserves existing values by name; new keys start empty; omitted keys are removed. Use set_service_secret to insert values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpEnv) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, true)
 		if err != nil {
 			return nil, err
@@ -267,15 +331,87 @@ func (s *Server) newMCPHandler() http.Handler {
 		if len(in.EnvFile) > 128*1024 {
 			return nil, errors.New("environment must be at most 128 KiB")
 		}
-		if _, err := envfile.Parse(in.EnvFile); err != nil {
-			return nil, errors.New("invalid dotenv syntax")
+		if _, err := envfile.ResolveTemplate("", in.EnvFile); err != nil {
+			return nil, err
 		}
-		if err := s.store.SetEnvFile(ctx, svc.ID, in.EnvFile); err != nil {
+		if err := s.store.SetEnvTemplate(ctx, svc.ID, in.EnvFile); err != nil {
 			return nil, errors.New("could not save environment")
 		}
 		return map[string]any{"success": true}, nil
 	})
+
+	addNoriTool(s, server, "set_service_secret", "Set a literal value for an environment variable already declared in the service configuration. Write-only: never reads or returns values. Requires nori:write and nori:secrets.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpSecret) (any, error) {
+		if err := mcpauth.RequireScope(ctx, mcpauth.ScopeSecrets); err != nil {
+			return nil, err
+		}
+		svc, err := s.mcpService(ctx, in.ServiceID, true)
+		if err != nil {
+			return nil, err
+		}
+		if len(in.Value) > envfile.MaxSize {
+			return nil, errors.New("environment value must be at most 128 KiB")
+		}
+		if err := s.store.SetEnvSecret(ctx, svc.ID, in.Key, in.Value); err != nil {
+			return nil, errors.New("could not set secret; check the variable exists, its value is valid dotenv, and the environment is at most 128 KiB")
+		}
+		return map[string]any{"success": true}, nil
+	})
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20})
+}
+
+type mcpRedactorKey struct{}
+
+func mcpLogRedactor(ctx context.Context) *envfile.Redactor {
+	return ctx.Value(mcpRedactorKey{}).(*envfile.Redactor)
+}
+
+func (s *Server) refreshMCPRedactor(ctx context.Context) error {
+	current, err := s.mcpRedactor(ctx)
+	if err != nil {
+		return errors.New("could not safely read environment values for redaction")
+	}
+	mcpLogRedactor(ctx).Merge(current)
+	return nil
+}
+
+// Snapshot before mutations so deleted/replaced values cannot leak in a result.
+// Include all services: scripts can print another service's environment.
+func (s *Server) mcpRedactor(ctx context.Context) (*envfile.Redactor, error) {
+	services, err := s.store.ListServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r := &envfile.Redactor{}
+	for _, svc := range services {
+		content, err := s.store.GetEnvFile(ctx, svc.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.Add(content); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+func redactMCPResult(value any, r *envfile.Redactor, logsRedacted bool) any {
+	switch v := value.(type) {
+	case string:
+		return r.Redact(v)
+	case []any:
+		for i := range v {
+			v[i] = redactMCPResult(v[i], r, logsRedacted)
+		}
+	case map[string]any:
+		for key := range v {
+			// Logs have already been redacted with their truncation context.
+			if logsRedacted && (key == "Log" || key == "logs") {
+				continue
+			}
+			v[key] = redactMCPResult(v[key], r, logsRedacted)
+		}
+	}
+	return value
 }
 
 func (s *Server) mcpService(ctx context.Context, id int64, mutation bool) (*store.Service, error) {
@@ -323,6 +459,9 @@ func validateMCPService(ctx context.Context, svc *store.Service, env *string) er
 			return errors.New("environment must be at most 128 KiB")
 		}
 		*env = executor.NormalizeNewlines(*env)
+		if _, err := envfile.ResolveTemplate("", *env); err != nil {
+			return err
+		}
 		form.EnvFile = *env
 	}
 	if err := validateServiceForm(ctx, form); err != nil {

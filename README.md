@@ -319,22 +319,34 @@ authorization, code exchange, and refresh.
 |-------|--------|
 | `nori:read` | Service configuration and status, deployment history, explicitly requested logs |
 | `nori:write` | Create/update/delete services, replace environment configuration, start/stop containers, deploy |
-| `nori:secrets` | Read plaintext service environment files; also requires `nori:read` |
+| `nori:secrets` | Set a value for an existing environment variable; also requires `nori:write`. Never permits reading values. |
 
 The default connection requests read and write access. Clients can explicitly
 request only `nori:read` for inspection, or additionally request `nori:secrets`
-when reading environment contents is necessary. Environment files are excluded
-from ordinary service responses and remain encrypted in SQLite. Logs and deploy
-scripts may themselves contain sensitive data. Write access can execute scripts
-with Nori's permissions, including control of the Docker host; the consent page
-explains this before approval. A client with `nori:write` can also read host
-secrets through its scripts. `nori:secrets` gates direct environment reads in
-the API; it does not sandbox a client that already has write access.
+to insert environment values. No scope allows reading plaintext dotenv values.
+Environment files remain encrypted in SQLite.
+
+`get_service_environment` returns a normalized dotenv template such as
+`API_KEY="[REDACTED]"`. All values, including empty and non-sensitive ones, use
+this placeholder; comments are omitted because they may contain secrets.
+`set_service_environment` and the `env_file` fields on create/update accept only
+placeholders. Saving preserves current values by variable name, removes omitted
+keys, and initializes new keys to empty strings. Then use
+`set_service_secret` with `service_id`, `key` (the exact variable name), and
+`value` to insert a literal value. It rejects undeclared keys and returns only
+success, never the value. Declare renamed keys and set their values explicitly.
+
+MCP responses, including deployment and container logs, redact known current
+dotenv values from all services. Redaction covers multiline and overlapping
+values and secrets crossing the log byte limit. It cannot identify unknown,
+encoded, or previously removed/rotated credentials; avoid logging credentials.
+Write access can execute scripts with Nori's permissions, including control of
+the Docker host. These tools do not sandbox a client granted write access.
 
 Available tools: `list_services`, `get_service`, `create_service`,
 `update_service`, `delete_service`, `start_service`, `stop_service`,
 `deploy_service`, `list_deployments`, `get_deployment`, `get_container_logs`,
-`get_service_environment`, and `set_service_environment`. Tools use numeric
+`get_service_environment`, `set_service_environment`, and `set_service_secret`. Tools use numeric
 service IDs, validate configuration, and save service/environment changes
 atomically. Creating a service defaults to manual deployment.
 Concurrent configuration edits return a conflict instead of overwriting a newer
@@ -366,7 +378,7 @@ If connection fails, check the response:
 |----------|---------------|
 | `404` on `/mcp` or OAuth endpoints | MCP is enabled and the proxy routes the path to Nori. |
 | `403 invalid_host` | The request's `Host`, as preserved by the proxy, must match the configured public URL. |
-| `403 invalid_origin` | Consent approval/denial POSTs must originate from Nori's configured public URL. MCP requests with an `Origin` header must also use that origin. Opening the consent page with GET from another app is allowed. |
+| `403 invalid_origin` | Consent approval/denial POSTs must originate from Nori's configured public URL. MCP requests with an `Origin` header must also use that origin. Opening the consent page with GET from another app is allowed. If a consent form sends `Origin: null`, check that a proxy has not replaced its `Referrer-Policy: same-origin` header with `no-referrer`. |
 | `400 invalid_grant` | Exact resource URL, redirect URI and PKCE verifier; expired/replayed credentials require fresh authorization. |
 | `401 invalid_client` | Client registration and credentials; after global revocation, register again. |
 | `429 slow_down` | Respect `Retry-After`. Anonymous registration is limited separately from existing grants. |

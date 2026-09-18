@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -42,7 +44,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 13 {
+	if len(listed.Tools) != 14 {
 		t.Fatalf("tools=%d", len(listed.Tools))
 	}
 	call := func(name string, args map[string]any, wantError bool) *mcp.CallToolResult {
@@ -56,12 +58,16 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		return res
 	}
-	call("create_service", map[string]any{"name": "app", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET=unlisted"}, false)
+	call("create_service", map[string]any{"name": "app", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
 	svc, err := st.GetServiceByName(ctx, "app")
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := map[string]any{"service_id": svc.ID}
+	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "SECRET", "value": "unlisted"}, false)
+	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "UNKNOWN", "value": "never-echo"}, true)
+	call("update_service", map[string]any{"service_id": svc.ID, "env_file": "SECRET=plaintext"}, true)
+	call("set_service_environment", map[string]any{"service_id": svc.ID, "env_file": "SECRET=plaintext"}, true)
 	for _, name := range []string{"list_services", "get_service"} {
 		a := args
 		if name == "list_services" {
@@ -79,7 +85,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		t.Fatal("partial update lost fields")
 	}
 	env, _ := st.GetEnvFile(ctx, svc.ID)
-	if env != "SECRET=unlisted" {
+	if env != "SECRET=\"unlisted\"\n" {
 		t.Fatal("partial update lost environment")
 	}
 	call("stop_service", args, false)
@@ -92,7 +98,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	}
 	call("start_service", map[string]any{"service_id": 999}, true)
 	call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "another-service"}, true)
-	d := &store.Deployment{ServiceID: svc.ID, Trigger: store.TriggerManual, Status: store.DeployRunning, Log: "sensitive-log-output"}
+	d := &store.Deployment{ServiceID: svc.ID, Trigger: store.TriggerManual, Status: store.DeployRunning, Log: "sensitive-log-output unlisted"}
 	if err := st.CreateDeployment(ctx, d); err != nil {
 		t.Fatal(err)
 	}
@@ -109,20 +115,101 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	}
 	logResult := call("get_deployment", map[string]any{"deployment_id": d.ID, "include_logs": true}, false)
 	logJSON, _ := json.Marshal(logResult)
+	if bytes.Contains(logJSON, []byte("unlisted")) || !bytes.Contains(logJSON, []byte("[REDACTED]")) {
+		t.Fatal("deployment log exposed secret")
+	}
 	if !bytes.Contains(logJSON, []byte("sensitive-log-output")) {
 		t.Fatal("explicit logs missing")
 	}
 
+	// Both text and structured content must be redacted, including values from
+	// other services and secrets split by the byte limit.
+	other := &store.Service{Name: "other", WatchedImage: "nginx", Policy: store.PolicyManual}
+	if err := st.CreateService(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvFile(ctx, other.ID, "TOKEN=cross-service-secret"); err != nil {
+		t.Fatal(err)
+	}
+	dk.LogData = map[string]string{"c1": "unlisted cross-service-secret"}
+	res := call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1"}, false)
+	raw, _ := json.Marshal(res)
+	if bytes.Contains(raw, []byte("unlisted")) || bytes.Contains(raw, []byte("cross-service-secret")) || !bytes.Contains(raw, []byte("[REDACTED]")) {
+		t.Fatal("container logs leaked values")
+	}
+	if err := st.SetEnvFile(ctx, other.ID, "TOKEN=cross-service-secret\nMULTILINE='first-line\nsecond-line'"); err != nil {
+		t.Fatal(err)
+	}
+	// Model Docker's tail=1 response: the preceding secret line is already gone.
+	dk.LogData["c1"] = "second-line\n"
+	res = call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1", "tail": 1}, false)
+	raw, _ = json.Marshal(res)
+	if bytes.Contains(raw, []byte("second-line")) {
+		t.Fatal("Docker line tail exposed multiline secret suffix")
+	}
+	dk.LogData["c1"] = strings.Repeat("x", mcpLogLimit-3) + "unlisted suffix"
+	res = call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1"}, false)
+	structured := res.StructuredContent.(map[string]any)
+	if strings.Contains(structured["logs"].(string), "unl") || len(structured["logs"].(string)) > mcpLogLimit || structured["truncated"] != true {
+		t.Fatal("container log truncation leaked secret prefix")
+	}
+	boundary := &store.Deployment{ServiceID: svc.ID, Trigger: store.TriggerManual, Status: store.DeployRunning, Log: "unlisted" + strings.Repeat("x", mcpLogLimit-3)}
+	if err := st.CreateDeployment(ctx, boundary); err != nil {
+		t.Fatal(err)
+	}
+	res = call("get_deployment", map[string]any{"deployment_id": boundary.ID, "include_logs": true}, false)
+	structured = res.StructuredContent.(map[string]any)
+	logText := structured["deployment"].(map[string]any)["Log"].(string)
+	if strings.Contains(logText, "ted") || len(logText) > mcpLogLimit || structured["logs_truncated"] != true {
+		t.Fatal("deployment log truncation leaked secret suffix")
+	}
+	// Unknown values are not heuristically censored; the guarantee is known
+	// dotenv values. If decryption fails, fail closed instead of exposing logs.
+	dk.LogData["c1"] = "unlisted"
+	if err := st.SetEnvFile(ctx, other.ID, "INVALID"); err != nil {
+		t.Fatal(err)
+	}
+	call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1"}, true)
+	if err := st.SetEnvFile(ctx, other.ID, "TOKEN=cross-service-secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	dk.LogData["c1"] = "newly-rotated-secret"
+	s.docker = &mcpUpdatingDocker{Fake: dk, beforeLogs: func() error {
+		return st.SetEnvSecret(ctx, svc.ID, "SECRET", "newly-rotated-secret")
+	}}
+	res = call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1"}, false)
+	raw, _ = json.Marshal(res)
+	if bytes.Contains(raw, []byte("newly-rotated-secret")) {
+		t.Fatal("secret rotated during log read leaked")
+	}
+	if err := st.SetEnvSecret(ctx, svc.ID, "SECRET", "unlisted"); err != nil {
+		t.Fatal(err)
+	}
+	longer := strings.Repeat("long-new-secret", 10)
+	dk.LogData["c1"] = strings.Repeat("x", mcpLogLimit-3) + longer
+	s.docker = &mcpUpdatingDocker{Fake: dk, beforeLogs: func() error {
+		return st.SetEnvSecret(ctx, svc.ID, "SECRET", longer)
+	}}
+	call("get_container_logs", map[string]any{"service_id": svc.ID, "container_id": "c1"}, true)
+	s.docker = dk
+	if err := st.SetEnvSecret(ctx, svc.ID, "SECRET", "unlisted"); err != nil {
+		t.Fatal(err)
+	}
+
 	scopes.Store("nori:read")
-	call("get_service_environment", args, true)
+	call("get_service_environment", args, false)
+	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "SECRET", "value": "forbidden"}, true)
 	call("delete_service", args, true)
 	scopes.Store("nori:read nori:secrets")
-	res := call("get_service_environment", args, false)
+	res = call("get_service_environment", args, false)
 	data, _ := json.Marshal(res)
-	if !bytes.Contains(data, []byte("unlisted")) {
-		t.Fatal("explicit environment unavailable")
+	if bytes.Contains(data, []byte("unlisted")) || !bytes.Contains(data, []byte("[REDACTED]")) {
+		t.Fatal("environment must only expose placeholders")
 	}
 	scopes.Store("nori:read nori:write")
+	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "SECRET", "value": "forbidden"}, true)
+	scopes.Store("nori:read nori:write nori:secrets")
 	self, err := st.EnsureSelfService(ctx, "nginx:latest")
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +217,11 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	for _, name := range []string{"delete_service", "start_service", "stop_service", "deploy_service"} {
 		call(name, map[string]any{"service_id": self.ID}, true)
 	}
+	call("set_service_secret", map[string]any{"service_id": self.ID, "key": "SECRET", "value": "forbidden"}, true)
+	call("get_service_environment", map[string]any{"service_id": self.ID}, true)
 	call("update_service", map[string]any{"service_id": self.ID, "deploy_script": "echo unsafe"}, true)
 	call("set_service_environment", map[string]any{"service_id": self.ID, "env_file": "A=B"}, true)
-	call("set_service_environment", map[string]any{"service_id": svc.ID, "env_file": "NEW=value"}, false)
+	call("set_service_environment", map[string]any{"service_id": svc.ID, "env_file": "NEW='[REDACTED]'"}, false)
 	call("delete_service", args, false)
 	if _, err := st.GetService(ctx, svc.ID); err != store.ErrNotFound {
 		t.Fatalf("not deleted: %v", err)
@@ -159,4 +248,17 @@ func TestValidateMCPService(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Mutate between the tool's initial snapshot and receipt of external log data.
+type mcpUpdatingDocker struct {
+	*docker.Fake
+	beforeLogs func() error
+}
+
+func (d *mcpUpdatingDocker) Logs(ctx context.Context, id string, tail int) (io.ReadCloser, error) {
+	if err := d.beforeLogs(); err != nil {
+		return nil, err
+	}
+	return d.Fake.Logs(ctx, id, tail)
 }

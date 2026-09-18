@@ -96,7 +96,7 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 					if mcpConfig.Enabled {
 						<p class="field-help">Connect your MCP client to <code style="overflow-wrap:anywhere">{ mcpConfig.PublicURL + "/mcp" }</code>. Sign in to Nori and approve the requested permissions.</p>
 					}
-					<p class="field-help">Read access includes logs, which may contain secrets. Write access can deploy scripts with Nori’s permissions on the Docker host. Approve only clients you trust.</p>
+					<p class="field-help">Read access includes logs with known dotenv values redacted; other sensitive output may remain. Write access can deploy scripts with Nori’s permissions on the Docker host. Approve only clients you trust.</p>
 				</div>
 			</div>
 		</section>

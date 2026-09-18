@@ -66,7 +66,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, c store.MCPCo
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		// no-referrer makes browsers send Origin: null on the consent form
+		// POST. same-origin preserves that security check while withholding
+		// the authorization URL from cross-origin client callbacks.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		params := url.Values{}
 		for _, k := range []string{"client_id", "redirect_uri", "response_type", "code_challenge_method", "code_challenge", "resource", "scope", "state"} {

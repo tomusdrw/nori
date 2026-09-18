@@ -119,3 +119,58 @@ func TestEnvFile_ReadsLegacyPerVariableRows(t *testing.T) {
 		t.Fatalf("legacy env rows were not removed: %d", legacyCount)
 	}
 }
+
+func TestEnvTemplateAndSecretUpdates(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	svc := &Service{Name: "template", WatchedImage: "x", Policy: PolicyManual}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvVar(ctx, &EnvVar{ServiceID: svc.ID, Key: "TOKEN", Value: "legacy", IsSecret: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvTemplate(ctx, svc.ID, "TOKEN='[REDACTED]'\nNEW='[REDACTED]'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvSecret(ctx, svc.ID, "TOKEN", "rotated"); err != nil {
+		t.Fatal(err)
+	}
+	// A template read before rotation must preserve the current value on save.
+	previous := *svc
+	if err := st.SaveServiceConfigTemplate(ctx, svc, ptrEnv("TOKEN='[REDACTED]'\nNEW='[REDACTED]'"), &previous); err != nil {
+		t.Fatal(err)
+	}
+	content, err := st.GetEnvFile(ctx, svc.ID)
+	if err != nil || content != "NEW=\"\"\nTOKEN=\"rotated\"\n" {
+		t.Fatal("template did not preserve current values")
+	}
+	for _, err := range []error{
+		st.SetEnvSecret(ctx, svc.ID, "UNKNOWN", "never-insert"),
+		st.SetEnvSecret(ctx, svc.ID, "TOKEN", strings.Repeat("x", 128*1024)),
+		st.SetEnvTemplate(ctx, svc.ID, "TOKEN=plaintext"),
+	} {
+		if err == nil {
+			t.Fatal("invalid mutation succeeded")
+		}
+	}
+	after, _ := st.GetEnvFile(ctx, svc.ID)
+	if after != content {
+		t.Fatal("failed mutation changed environment")
+	}
+	var raw []byte
+	if err := st.db.QueryRowContext(ctx, `SELECT content FROM service_env WHERE service_id=?`, svc.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "rotated") {
+		t.Fatal("secret not encrypted")
+	}
+	if err := st.SetEnvTemplate(ctx, svc.ID, "NEW='[REDACTED]'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvSecret(ctx, svc.ID, "TOKEN", "removed"); err == nil {
+		t.Fatal("removed key reintroduced")
+	}
+}
+
+func ptrEnv(v string) *string { return &v }
