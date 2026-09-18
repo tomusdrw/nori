@@ -59,6 +59,18 @@ func (s *Store) updateEnvFile(ctx context.Context, serviceID int64, update func(
 }
 
 func (s *Store) writeEnvFile(ctx context.Context, tx *sql.Tx, serviceID int64, content string) error {
+	current, err := s.getEnvFile(ctx, tx, serviceID)
+	if err != nil {
+		return err
+	}
+	if current != "" {
+		if err := s.recordEnvRevision(ctx, tx, serviceID, current); err != nil {
+			return err
+		}
+	}
+	if err := s.recordEnvRevision(ctx, tx, serviceID, content); err != nil {
+		return err
+	}
 	stored, err := crypto.Encrypt(s.key, []byte(content))
 	if err != nil {
 		return err
@@ -119,6 +131,20 @@ func (s *Store) getEnvFile(ctx context.Context, q envQuerier, serviceID int64) (
 }
 
 func (s *Store) SetEnvVar(ctx context.Context, ev *EnvVar) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err := s.getEnvFile(ctx, tx, ev.ServiceID)
+	if err != nil {
+		return err
+	}
+	if current != "" {
+		if err := s.recordEnvRevision(ctx, tx, ev.ServiceID, current); err != nil {
+			return err
+		}
+	}
 	stored := []byte(ev.Value)
 	if ev.IsSecret {
 		enc, err := crypto.Encrypt(s.key, []byte(ev.Value))
@@ -127,11 +153,21 @@ func (s *Store) SetEnvVar(ctx context.Context, ev *EnvVar) error {
 		}
 		stored = enc
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO env_var (service_id, key, value, is_secret) VALUES (?,?,?,?)
 		 ON CONFLICT(service_id, key) DO UPDATE SET value=excluded.value, is_secret=excluded.is_secret`,
 		ev.ServiceID, ev.Key, stored, boolToInt(ev.IsSecret))
-	return err
+	if err != nil {
+		return err
+	}
+	content, err := s.getEnvFile(ctx, tx, ev.ServiceID)
+	if err != nil {
+		return err
+	}
+	if err := s.recordEnvRevision(ctx, tx, ev.ServiceID, content); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ListEnvVars(ctx context.Context, serviceID int64) ([]*EnvVar, error) {

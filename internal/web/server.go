@@ -85,6 +85,8 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Post("/services", s.handleServiceCreate)
 		r.Get("/services/{name}", s.handleServiceDetail)
 		r.Get("/services/{name}/edit", s.handleServiceEdit)
+		r.Get("/services/{name}/history/{kind}", s.handleConfigHistory)
+		r.Get("/services/{name}/history/{kind}/{version}", s.handleConfigHistory)
 		r.Post("/services/{name}", s.handleServiceUpdate)
 		r.Post("/services/{name}/delete", s.handleServiceDelete)
 		r.Post("/services/{name}/deploy", s.handleDeploy)
@@ -400,10 +402,16 @@ func (s *Server) handleServicesPartial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceNew(w http.ResponseWriter, r *http.Request) {
-	_ = ServiceFormPage(ServiceFormData{Policy: "manual"}, s.csrf(r), false, "/services", "").Render(r.Context(), w)
+	w.Header().Set("Cache-Control", "no-store")
+	form, ok := s.newServiceForm(w, r)
+	if !ok {
+		return
+	}
+	_ = ServiceFormPage(form, s.csrf(r), false, "/services", "").Render(r.Context(), w)
 }
 
 func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -421,12 +429,8 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		DeployScript: form.DeployScript,
 		HealthURL:    form.HealthURL,
 	}
-	if err := s.store.CreateService(r.Context(), svc); err != nil {
+	if err := s.store.SaveServiceConfig(r.Context(), svc, &form.EnvFile, nil); err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
-		return
-	}
-	if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	log.Printf("service: created %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
@@ -434,6 +438,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceEdit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	svc, err := s.getServiceByName(w, r)
 	if err != nil {
 		return
@@ -447,6 +452,7 @@ func (s *Server) handleServiceEdit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	svc, err := s.getServiceByName(w, r)
 	if err != nil {
 		return
@@ -476,23 +482,14 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript
 	svc.HealthURL = form.HealthURL
-	if err := s.store.UpdateService(r.Context(), svc); err != nil {
+	if svc.IsSelf {
+		err = s.saveSelfConfig(r.Context(), svc, &previous, form.EnvFile)
+	} else {
+		err = s.store.SaveServiceConfig(r.Context(), svc, &form.EnvFile, &previous)
+	}
+	if err != nil {
 		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
 		return
-	}
-	if svc.IsSelf {
-		if err := s.selfEnvironment.ReplaceEditableEnvironment(form.EnvFile); err != nil {
-			if rollbackErr := s.store.UpdateService(r.Context(), &previous); rollbackErr != nil {
-				err = fmt.Errorf("%w; restoring prior service settings: %v", err, rollbackErr)
-			}
-			_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
-			return
-		}
-	} else {
-		if err := s.store.SetEnvFile(r.Context(), svc.ID, form.EnvFile); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 	}
 	log.Printf("service: updated %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
 	http.Redirect(w, r, "/services/"+svc.Name, http.StatusSeeOther)
@@ -720,6 +717,9 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 		content, err = s.store.GetEnvFile(ctx, svc.ID)
 	}
 	if err != nil {
+		return ServiceFormData{}, err
+	}
+	if err := s.store.RecordEnvRevision(ctx, svc.ID, content); err != nil {
 		return ServiceFormData{}, err
 	}
 	form := serviceForm(svc)

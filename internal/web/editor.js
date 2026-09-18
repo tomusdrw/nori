@@ -125,6 +125,12 @@ function setupEditor(textarea) {
   textarea.hidden = true;
   textarea.insertAdjacentElement("afterend", host);
   const view = new EditorView({ state, parent: host });
+  textarea.addEventListener("input", () => {
+    if (!readOnly && textarea.value !== view.state.doc.toString()) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: textarea.value } });
+      view.focus();
+    }
+  });
   form?.addEventListener("submit", () => {
     textarea.value = view.state.doc.toString();
   });
@@ -146,4 +152,85 @@ function setupPolicyField() {
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("textarea[data-editor]").forEach(setupEditor);
   setupPolicyField();
+  document.querySelectorAll("[data-history-kind]").forEach(setupHistory);
 });
+
+
+function setupHistory(panel) {
+  const select = panel.querySelector("[data-history-select]");
+  const preview = panel.querySelector("[data-history-preview]");
+  const use = panel.querySelector("[data-history-use]");
+  const copy = panel.querySelector("[data-history-copy]");
+  const create = panel.querySelector("[data-history-new]");
+  const status = panel.querySelector("[data-history-status]");
+  let loaded = false;
+  let loading = false;
+  let request = 0;
+  const enable = (enabled) => {
+    if (use) use.disabled = !enabled;
+    copy.disabled = !enabled;
+    create.hidden = !enabled;
+  };
+  const readJSON = async (url) => {
+    const response = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+      throw new Error("Could not load history. Sign in again or retry.");
+    }
+    return response.json();
+  };
+  const loadVersion = async () => {
+    const currentRequest = ++request;
+    enable(false);
+    preview.value = "";
+    status.textContent = "Loading version…";
+    try {
+      const version = await readJSON(`${panel.dataset.historyUrl}/${select.value}`);
+      if (currentRequest !== request) return;
+      preview.value = version.content || "";
+      create.href = `/services/new?${new URLSearchParams({ source: panel.dataset.historySource, kind: panel.dataset.historyKind, version: String(version.version) })}`;
+      enable(true);
+      status.textContent = "";
+    } catch (error) {
+      if (currentRequest === request) status.textContent = error.message;
+    }
+  };
+  panel.addEventListener("toggle", async () => {
+    if (!panel.open || loaded || loading) return;
+    loading = true;
+    status.textContent = "Loading history…";
+    try {
+      const versions = await readJSON(panel.dataset.historyUrl);
+      select.replaceChildren();
+      for (const [index, version] of versions.entries()) {
+        const label = `v${version.version} · ${new Date(version.created_at).toLocaleString()}${index === 0 ? " · Latest" : ""}`;
+        select.add(new Option(label, String(version.version)));
+      }
+      loaded = true;
+      select.disabled = versions.length === 0;
+      if (versions.length) await loadVersion();
+      else status.textContent = "No saved versions yet.";
+    } catch (error) {
+      status.textContent = error.message + " Close and reopen history to retry.";
+    } finally {
+      loading = false;
+    }
+  });
+  select.addEventListener("change", loadVersion);
+  use?.addEventListener("click", () => {
+    const target = panel.closest("form").elements.namedItem(panel.dataset.historyTarget);
+    if (!target || target.readOnly) return;
+    target.value = preview.value;
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    status.textContent = `Version ${select.value} copied to the editor. Save to keep it.`;
+  });
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(preview.value);
+      status.textContent = "Contents copied.";
+    } catch {
+      preview.focus();
+      preview.select();
+      status.textContent = "Contents selected. Press Ctrl+C or ⌘C to copy.";
+    }
+  });
+}

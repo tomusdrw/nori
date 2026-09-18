@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"net/url"
 
@@ -83,7 +84,16 @@ func Open(path string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, key: key}, nil
+	if _, err := db.Exec(revisionSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	st := &Store{db: db, key: key}
+	if err := st.backfillEnvRevisions(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

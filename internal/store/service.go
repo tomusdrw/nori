@@ -147,8 +147,5 @@ func (s *Store) EnsureSelfService(ctx context.Context, image string) (*Service, 
 	if err := s.CreateService(ctx, svc); err != nil {
 		return nil, err
 	}
-	if err := s.SetEnvFile(ctx, svc.ID, ""); err != nil {
-		return nil, err
-	}
 	return svc, nil
 }
