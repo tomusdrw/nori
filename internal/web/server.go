@@ -658,7 +658,7 @@ func readLogLines(rc io.Reader) []string {
 		if len(line) >= 8 && (line[0] == 1 || line[0] == 2) && line[1] == 0 && line[2] == 0 && line[3] == 0 {
 			line = line[8:]
 		}
-		lines = append(lines, line)
+		lines = append(lines, formatLogLine(line))
 	}
 	return lines
 }
