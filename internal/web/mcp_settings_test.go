@@ -117,8 +117,8 @@ func TestMCPOAuthEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "get_service_environment", Arguments: map[string]any{"service_id": svc.ID}})
-	if err != nil || !result.IsError {
-		t.Fatalf("default grant revealed secrets: %+v %v", result, err)
+	if err != nil || result.IsError {
+		t.Fatalf("default grant cannot read environment structure: %+v %v", result, err)
 	}
 	postAuthed(t, srv, cookies, "/settings/mcp/revoke", url.Values{"csrf_token": {csrfFromBody(page.Body.String())}}.Encode())
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_services", Arguments: map[string]any{}}); err == nil {

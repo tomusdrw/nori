@@ -12,9 +12,9 @@
       <p>The application <strong>{{.Name}}</strong> ({{.ID}}) requests access to this Nori instance.</p>
       <p>Requested permissions: <strong>{{.Scope}}</strong></p>
       <ul>
-        <li>nori:read: services, configuration, deployment history and logs. Logs can contain sensitive data.</li>
+        <li>nori:read: services, configuration, deployment history and logs. Known dotenv values are redacted; logs may contain other sensitive data.</li>
         <li>nori:write: create and modify services, scripts and environment variables, trigger deployments. Deployment scripts can control the Docker host and read its secrets.</li>
-        <li>nori:secrets: read environment variable contents, including secrets.</li>
+        <li>nori:secrets: set values for existing environment variables (also requires nori:write). Values are never returned.</li>
       </ul>
       <p>Redirect destination: {{.Redirect}}</p>
       <form class="login-form" method="post" action="/oauth/authorize">

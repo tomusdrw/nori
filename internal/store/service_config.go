@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"deploybot/internal/crypto"
+	"deploybot/internal/envfile"
 )
 
 var ErrServiceConflict = errors.New("service configuration changed; read it again and retry")
@@ -14,19 +15,40 @@ var ErrServiceConflict = errors.New("service configuration changed; read it agai
 // its encrypted environment. Existing names and managed status are immutable;
 // updates require the previous configuration to detect concurrent edits.
 func (s *Store) SaveServiceConfig(ctx context.Context, svc *Service, env *string, previous *Service) error {
-	var encrypted []byte
-	var err error
-	if env != nil {
-		encrypted, err = crypto.Encrypt(s.key, []byte(*env))
-		if err != nil {
-			return err
-		}
-	}
+	return s.saveServiceConfig(ctx, svc, env, previous, false)
+}
+
+// SaveServiceConfigTemplate resolves placeholders inside the same transaction
+// as the service save, so a stale template cannot restore older secret values.
+func (s *Store) SaveServiceConfigTemplate(ctx context.Context, svc *Service, env *string, previous *Service) error {
+	return s.saveServiceConfig(ctx, svc, env, previous, true)
+}
+
+func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string, previous *Service, template bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var encrypted []byte
+	if env != nil {
+		content := *env
+		if template {
+			current, err := s.getEnvFile(ctx, tx, svc.ID)
+			if err != nil {
+				return err
+			}
+			content, err = envfile.ResolveTemplate(current, content)
+			if err != nil {
+				return err
+			}
+		}
+		encrypted, err = crypto.Encrypt(s.key, []byte(content))
+		if err != nil {
+			return err
+		}
+	}
+
 	now := time.Now().UTC()
 	id := svc.ID
 	if id == 0 {
