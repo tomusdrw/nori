@@ -376,6 +376,11 @@ notifications are sent, independent of which channels are configured:
 The toggle takes effect on the next deploy; no restart needed. It only has an
 effect when at least one channel is configured.
 
+Note for existing installations: successful deployments now notify too. If you
+run with `always` (the default) and a channel configured, upgrading sends a
+message for every deploy — switch to `auto-only` if manual redeploy noise
+bothers you, or `never` to keep the old failure-only behavior.
+
 ## MCP agent access
 
 The instance-wide **Settings → Agent access (MCP)** option enables a Streamable
