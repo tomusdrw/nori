@@ -405,30 +405,42 @@ func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
 	}
 }
 
-// capturingNotifier records every service-down event it receives.
+// capturingNotifier records every notification event it receives.
 type capturingNotifier struct {
 	mu     sync.Mutex
-	events []notify.Event
+	events []capturedNotifyEvent
+}
+
+type capturedNotifyEvent struct {
+	kind string
+	evt  notify.Event
 }
 
 func (c *capturingNotifier) NotifyServiceDown(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.events = append(c.events, evt)
+	c.events = append(c.events, capturedNotifyEvent{kind: "down", evt: evt})
 	return nil
 }
 
 func (c *capturingNotifier) NotifyServiceRecovered(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.events = append(c.events, evt)
+	c.events = append(c.events, capturedNotifyEvent{kind: "recovered", evt: evt})
 	return nil
 }
 
-func (c *capturingNotifier) snapshot() []notify.Event {
+func (c *capturingNotifier) NotifyDeploySuccess(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]notify.Event, len(c.events))
+	c.events = append(c.events, capturedNotifyEvent{kind: "success", evt: evt})
+	return nil
+}
+
+func (c *capturingNotifier) snapshot() []capturedNotifyEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]capturedNotifyEvent, len(c.events))
 	copy(out, c.events)
 	return out
 }
@@ -478,7 +490,7 @@ func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("got %d notify events, want 1: %+v", len(events), events)
 	}
-	evt := events[0]
+	evt := events[0].evt
 	if evt.ServiceName != "app" || evt.Trigger != store.TriggerManual {
 		t.Errorf("unexpected event: %+v", evt)
 	}
@@ -488,9 +500,12 @@ func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
 	if evt.BotName != "staging" {
 		t.Errorf("BotName = %q, want staging", evt.BotName)
 	}
+	if events[0].kind != "down" {
+		t.Errorf("kind = %q, want down", events[0].kind)
+	}
 }
 
-func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
+func TestExecutor_SuccessFiresSuccessNotifier(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
@@ -499,32 +514,159 @@ func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
 	}
 	cap := &capturingNotifier{}
 	ex := New(st, &fakeRunner{log: "ok"}, func(context.Context, string) (string, error) {
-		return "sha256:good", nil
+		return "sha256:good0123456789", nil
 	}, 0)
+	ex.SetNotifier(cap)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerAuto)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	waitForSuccess(t, st, ctx, id)
+	got := cap.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("got %d notify events, want 1: %+v", len(got), got)
+	}
+	if got[0].kind != "success" {
+		t.Errorf("kind = %q, want success", got[0].kind)
+	}
+	evt := got[0].evt
+	if evt.ServiceName != "app" || evt.Trigger != store.TriggerAuto {
+		t.Errorf("unexpected event: %+v", evt)
+	}
+	if evt.Digest == "" || evt.Reason != "" {
+		t.Errorf("success event must carry a digest and no reason: %+v", evt)
+	}
+}
+
+func TestExecutor_SuccessModeNeverSuppressesAllTriggers(t *testing.T) {
+	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
+		t.Run(trigger, func(t *testing.T) {
+			st := openTestStore(t)
+			ctx := context.Background()
+			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeNever)); err != nil {
+				t.Fatal(err)
+			}
+			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
+			if err := st.CreateService(ctx, svc); err != nil {
+				t.Fatal(err)
+			}
+			cap := &capturingNotifier{}
+			ex := New(st, &fakeRunner{log: "ok"},
+				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+			ex.SetNotifier(cap)
+
+			id, err := ex.Deploy(ctx, svc.ID, trigger)
+			if err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+			waitForSuccess(t, st, ctx, id)
+			if got := cap.snapshot(); len(got) != 0 {
+				t.Fatalf("mode=never must suppress %s success; got %+v", trigger, got)
+			}
+		})
+	}
+}
+
+func TestExecutor_SuccessModeAutoOnlySuppressesManualOnly(t *testing.T) {
+	cases := []struct {
+		trigger string
+		want    int
+	}{
+		{store.TriggerManual, 0},
+		{store.TriggerAuto, 1},
+		{store.TriggerScheduled, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.trigger, func(t *testing.T) {
+			st := openTestStore(t)
+			ctx := context.Background()
+			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAutoOnly)); err != nil {
+				t.Fatal(err)
+			}
+			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
+			if err := st.CreateService(ctx, svc); err != nil {
+				t.Fatal(err)
+			}
+			cap := &capturingNotifier{}
+			ex := New(st, &fakeRunner{log: "ok"},
+				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
+			ex.SetNotifier(cap)
+
+			id, err := ex.Deploy(ctx, svc.ID, tc.trigger)
+			if err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+			waitForSuccess(t, st, ctx, id)
+			if got := len(cap.snapshot()); got != tc.want {
+				t.Fatalf("mode=auto-only trigger=%s: got %d events, want %d", tc.trigger, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeploy_SelfHandoffSuccessDoesNotNotify(t *testing.T) {
+	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
+	t.Setenv("DEPLOYBOT_SELF_IMAGE", "image")
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: store.SelfServiceName, WatchedImage: "image", Policy: store.PolicyManual, DeployScript: "echo ok", IsSelf: true}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{}, 1)
+	cap := &capturingNotifier{}
+	ex := New(st, runnerFunc(func(_ context.Context, _ string, _ []string, _ io.Writer, _ io.Writer) error {
+		done <- struct{}{}
+		return nil
+	}), func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
 	ex.SetNotifier(cap)
 
 	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
 	if err != nil {
-		t.Fatalf("Deploy: %v", err)
+		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		d, derr := st.GetDeployment(ctx, id)
-		if derr != nil {
-			t.Fatal(derr)
-		}
-		if d.Status == store.DeploySuccess {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("self handoff did not execute")
 	}
+	// The handoff record stays running until the replacement instance
+	// resolves it; nothing about the handoff may notify.
 	time.Sleep(50 * time.Millisecond)
 	if got := cap.snapshot(); len(got) != 0 {
-		t.Fatalf("success must not notify; got %+v", got)
+		t.Fatalf("self handoff must not notify; got %+v", got)
+	}
+	d, err := st.GetDeployment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != store.DeployRunning || d.FinishedAt != nil {
+		t.Fatalf("self deployment was finalized before replacement: %+v", d)
 	}
 }
 
-// waitForFailure blocks until the deploy record for id reaches DeployFailed,
+// waitForSuccess blocks until the deploy record for id reaches DeploySuccess,
+// giving the notifier call inside alertSuccess time to land.
+func waitForSuccess(t *testing.T, st *store.Store, ctx context.Context, id int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		d, err := st.GetDeployment(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Status == store.DeploySuccess {
+			// alertSuccess runs after finish(); a tiny cushion lets the
+			// notifier call return before we read the capture.
+			time.Sleep(20 * time.Millisecond)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("deploy did not finish as success")
+}
+
 // giving the synchronous notifier call inside alertFailure time to land.
 func waitForFailure(t *testing.T, st *store.Store, ctx context.Context, id int64) {
 	t.Helper()

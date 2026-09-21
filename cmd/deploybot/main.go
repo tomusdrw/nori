@@ -116,18 +116,28 @@ func main() {
 	_ = httpSrv.Shutdown(context.Background())
 }
 
-// buildNotifier returns the service-down notifier chosen by configuration.
-// When Twilio is not configured, the no-op notifier keeps the app behaving
-// exactly as before. When fully configured, the Twilio notifier is wrapped
-// in LogFailures so a Twilio outage can never fail a deploy.
+// buildNotifier returns the notifier chosen by configuration. When no
+// channel is configured, the no-op notifier keeps the app behaving exactly
+// as before. Every enabled channel is wrapped in a Multi inside LogFailures
+// so a channel outage can never fail a deploy.
 func buildNotifier(cfg config.Config) notify.Notifier {
-	if !cfg.Twilio.Enabled() {
+	var notifiers []notify.Notifier
+	if cfg.Twilio.Enabled() {
+		notifiers = append(notifiers, notify.NewTwilio(
+			cfg.Twilio.AccountSID,
+			cfg.Twilio.AuthToken,
+			cfg.Twilio.From,
+			cfg.Twilio.To,
+		))
+	}
+	if cfg.Telegram.Enabled() {
+		notifiers = append(notifiers, notify.NewTelegram(
+			cfg.Telegram.BotToken,
+			cfg.Telegram.ChatID,
+		))
+	}
+	if len(notifiers) == 0 {
 		return notify.Noop{}
 	}
-	return &notify.LogFailures{Inner: notify.NewTwilio(
-		cfg.Twilio.AccountSID,
-		cfg.Twilio.AuthToken,
-		cfg.Twilio.From,
-		cfg.Twilio.To,
-	)}
+	return &notify.LogFailures{Inner: &notify.Multi{Notifiers: notifiers}}
 }

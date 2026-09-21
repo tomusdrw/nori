@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,101 @@ import (
 func TestNoop_NeverErrors(t *testing.T) {
 	if err := (Noop{}).NotifyServiceDown(context.Background(), Event{ServiceName: "app"}); err != nil {
 		t.Fatalf("noop must never error: %v", err)
+	}
+	if err := (Noop{}).NotifyDeploySuccess(context.Background(), Event{ServiceName: "app"}); err != nil {
+		t.Fatalf("noop must never error: %v", err)
+	}
+}
+
+func TestSuccessMessageBody_HasNoReason(t *testing.T) {
+	got := SuccessMessageBody(Event{
+		BotName:     "prod",
+		ServiceName: "billing",
+		Trigger:     "scheduled",
+		Digest:      "sha256:abc12345",
+		Reason:      "must be ignored",
+	})
+	for _, want := range []string{"[prod]", "billing", "deploy OK", "trigger=scheduled", "sha256:abc12345"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("body missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "must be ignored") {
+		t.Errorf("success body must not include a reason: %q", got)
+	}
+}
+
+func TestSuccessMessageBody_DefaultsBotName(t *testing.T) {
+	got := SuccessMessageBody(Event{ServiceName: "x"})
+	if !strings.HasPrefix(got, "[Nori]") {
+		t.Errorf("body should default to [Nori]: %q", got)
+	}
+}
+
+// recordingNotifier records the calls it receives and optionally fails.
+type recordingNotifier struct {
+	name  string
+	err   error
+	calls []string
+}
+
+func (r *recordingNotifier) NotifyServiceDown(_ context.Context, _ Event) error {
+	r.calls = append(r.calls, "down")
+	return r.err
+}
+
+func (r *recordingNotifier) NotifyServiceRecovered(_ context.Context, _ Event) error {
+	r.calls = append(r.calls, "recovered")
+	return r.err
+}
+
+func (r *recordingNotifier) NotifyDeploySuccess(_ context.Context, _ Event) error {
+	r.calls = append(r.calls, "success")
+	return r.err
+}
+
+func TestMulti_DeliversToAllNotifiers(t *testing.T) {
+	a := &recordingNotifier{name: "a"}
+	b := &recordingNotifier{name: "b"}
+	m := &Multi{Notifiers: []Notifier{a, b}}
+
+	if err := m.NotifyServiceDown(context.Background(), Event{}); err != nil {
+		t.Fatalf("NotifyServiceDown: %v", err)
+	}
+	if err := m.NotifyServiceRecovered(context.Background(), Event{}); err != nil {
+		t.Fatalf("NotifyServiceRecovered: %v", err)
+	}
+	if err := m.NotifyDeploySuccess(context.Background(), Event{}); err != nil {
+		t.Fatalf("NotifyDeploySuccess: %v", err)
+	}
+	for _, n := range []*recordingNotifier{a, b} {
+		if want := []string{"down", "recovered", "success"}; strings.Join(n.calls, ",") != strings.Join(want, ",") {
+			t.Errorf("notifier %s calls = %v, want %v", n.name, n.calls, want)
+		}
+	}
+}
+
+func TestMulti_ContinuesAfterFailure(t *testing.T) {
+	failing := &recordingNotifier{name: "failing", err: errors.New("channel down")}
+	healthy := &recordingNotifier{name: "healthy"}
+	m := &Multi{Notifiers: []Notifier{failing, healthy}}
+
+	err := m.NotifyServiceDown(context.Background(), Event{ServiceName: "app"})
+	if err == nil {
+		t.Fatal("expected the joined error from the failing notifier")
+	}
+	if !strings.Contains(err.Error(), "channel down") {
+		t.Errorf("error = %v, want it to mention the failure", err)
+	}
+	if len(healthy.calls) != 1 {
+		t.Fatalf("healthy notifier calls = %v, want it to still receive the event", healthy.calls)
+	}
+}
+
+func TestMulti_EmptyBehavesLikeNoop(t *testing.T) {
+	m := &Multi{}
+	if err := m.NotifyServiceDown(context.Background(), Event{}); err != nil {
+		t.Fatalf("empty Multi must not error: %v", err)
 	}
 }
 
@@ -200,6 +296,26 @@ func TestLogFailures_NotifyServiceRecovered_SwallowsButLogs(t *testing.T) {
 	}
 	wrapped := &LogFailures{Inner: tw}
 	if err := wrapped.NotifyServiceRecovered(context.Background(), Event{ServiceName: "app"}); err != nil {
+		t.Errorf("LogFailures must not propagate: %v", err)
+	}
+}
+
+func TestLogFailures_NotifyDeploySuccess_SwallowsButLogs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	tw := &Twilio{
+		BaseURL:    srv.URL,
+		AccountSID: "AC",
+		AuthToken:  "t",
+		From:       "+1",
+		To:         "+2",
+		Client:     srv.Client(),
+	}
+	wrapped := &LogFailures{Inner: tw}
+	if err := wrapped.NotifyDeploySuccess(context.Background(), Event{ServiceName: "app"}); err != nil {
 		t.Errorf("LogFailures must not propagate: %v", err)
 	}
 }

@@ -33,6 +33,11 @@ func (c *capturingNotifier) NotifyServiceRecovered(_ context.Context, evt notify
 	return nil
 }
 
+func (c *capturingNotifier) NotifyDeploySuccess(_ context.Context, evt notify.Event) error {
+	c.events = append(c.events, capturedEvent{Kind: "success", E: evt})
+	return nil
+}
+
 func openTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(t.TempDir()+"/test.db", make([]byte, 32))

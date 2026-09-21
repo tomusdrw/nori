@@ -1,6 +1,8 @@
 // Package notify delivers out-of-band alerts for significant deploy events.
 // The default Notifier is a no-op; the Twilio implementation sends an SMS via
-// the Twilio REST API when fully configured.
+// the Twilio REST API and the Telegram implementation posts via the Telegram
+// Bot API when fully configured. Several notifiers can run side by side
+// through Multi.
 package notify
 
 import (
@@ -32,7 +34,7 @@ type Event struct {
 	Reason string
 }
 
-// Notifier sends service-down and service-recovered alerts. Implementations
+// Notifier sends deployment and service-health alerts. Implementations
 // must be safe for concurrent use.
 type Notifier interface {
 	// NotifyServiceDown alerts that a service is down: a deploy failure or
@@ -41,13 +43,16 @@ type Notifier interface {
 	// NotifyServiceRecovered alerts that a previously down service is back
 	// up. It is only sent for services a down alert was sent for.
 	NotifyServiceRecovered(ctx context.Context, evt Event) error
+	// NotifyDeploySuccess reports a successful deployment.
+	NotifyDeploySuccess(ctx context.Context, evt Event) error
 }
 
-// Noop discards every event. It is the default when Twilio is not configured.
+// Noop discards every event. It is the default when no notifier is configured.
 type Noop struct{}
 
 func (Noop) NotifyServiceDown(context.Context, Event) error      { return nil }
 func (Noop) NotifyServiceRecovered(context.Context, Event) error { return nil }
+func (Noop) NotifyDeploySuccess(context.Context, Event) error    { return nil }
 
 // MessageBody formats a short, SMS-friendly body for a service-down event.
 // Newlines are kept so most SMS clients render a compact multi-line preview.
@@ -70,6 +75,17 @@ func RecoveredMessageBody(evt Event) string {
 	}
 	return fmt.Sprintf("[%s] %q service RECOVERED (trigger=%s, digest=%s): %s",
 		bot, evt.ServiceName, evt.Trigger, evt.Digest, evt.Reason)
+}
+
+// SuccessMessageBody formats a short body for a successful deployment.
+// No reason is included; a successful deploy has nothing to explain.
+func SuccessMessageBody(evt Event) string {
+	bot := strings.TrimSpace(evt.BotName)
+	if bot == "" {
+		bot = "Nori"
+	}
+	return fmt.Sprintf("[%s] %q deploy OK (trigger=%s, digest=%s)",
+		bot, evt.ServiceName, evt.Trigger, evt.Digest)
 }
 
 // Twilio sends SMS via the Twilio Messages REST API. Construct one with
@@ -112,6 +128,11 @@ func (t *Twilio) NotifyServiceDown(ctx context.Context, evt Event) error {
 // NotifyServiceDown with the recovery body.
 func (t *Twilio) NotifyServiceRecovered(ctx context.Context, evt Event) error {
 	return t.send(ctx, RecoveredMessageBody(evt))
+}
+
+// NotifyDeploySuccess POSTs the success message to Twilio.
+func (t *Twilio) NotifyDeploySuccess(ctx context.Context, evt Event) error {
+	return t.send(ctx, SuccessMessageBody(evt))
 }
 
 // send POSTs a preformatted SMS body to the Twilio Messages API.
@@ -193,4 +214,41 @@ func (l *LogFailures) NotifyServiceRecovered(ctx context.Context, evt Event) err
 		log.Printf("notify: service-recovered alert for %q failed: %v", evt.ServiceName, err)
 	}
 	return nil
+}
+
+func (l *LogFailures) NotifyDeploySuccess(ctx context.Context, evt Event) error {
+	err := l.Inner.NotifyDeploySuccess(ctx, evt)
+	if err != nil {
+		log.Printf("notify: deploy-success alert for %q failed: %v", evt.ServiceName, err)
+	}
+	return nil
+}
+
+// Multi fans every event out to all configured notifiers. A notifier that
+// fails does not stop the others; the joined errors are returned for the
+// caller to log. An empty Multi behaves like Noop.
+type Multi struct {
+	Notifiers []Notifier
+}
+
+func (m *Multi) NotifyServiceDown(ctx context.Context, evt Event) error {
+	return m.each(func(n Notifier) error { return n.NotifyServiceDown(ctx, evt) })
+}
+
+func (m *Multi) NotifyServiceRecovered(ctx context.Context, evt Event) error {
+	return m.each(func(n Notifier) error { return n.NotifyServiceRecovered(ctx, evt) })
+}
+
+func (m *Multi) NotifyDeploySuccess(ctx context.Context, evt Event) error {
+	return m.each(func(n Notifier) error { return n.NotifyDeploySuccess(ctx, evt) })
+}
+
+func (m *Multi) each(send func(Notifier) error) error {
+	var errs []error
+	for _, n := range m.Notifiers {
+		if err := send(n); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

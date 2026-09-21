@@ -280,22 +280,42 @@ the service's expression. Invalid expressions saved by older dashboard versions
 are skipped and logged once per change. `scheduler: reload` indicates that the
 scheduler could not read configuration; it retries on the next refresh.
 
-## SMS alerts (optional, Twilio)
+## Notifications (optional)
+
+Nori can notify external channels about four kinds of events:
+
+- successful deployments;
+- failed deployments;
+- services detected as down or unhealthy by the monitor;
+- service recovery after a down alert.
+
+A message contains only concise operational information: the Nori instance
+name, the service name, the event type, the deployment trigger, a shortened
+image digest, and a failure or recovery reason when applicable. Deployment
+logs and environment values are never included.
+
+Twilio SMS and Telegram are independent channels; either or both can be
+enabled at the same time. Every enabled channel receives the same events,
+subject to the `notify_mode` setting described below. Send failures are
+logged but never fail or delay a deployment, and requests to notification
+providers use bounded timeouts.
+
+### Twilio SMS
 
 Nori sends an SMS to a preconfigured number when a deploy script exits non-zero.
-Deploy-failure alerts still work as before; additionally a built-in monitor now
-checks every managed service's containers (the same `deploybot.service` label
-used by the dashboard) every `DEPLOYBOT_MONITOR_INTERVAL` (default 60s). A
-service counts as down when no container for the service is running and healthy
-(a container whose Docker HEALTHCHECK reports `unhealthy` counts as down even
-while running) for two consecutive checks — so a single transient restart does
-not alert, but a crash loop does. Nori then sends an SMS when the service goes
-down and one recovery SMS when it comes back up. A service that is already down
-when Nori starts alerts once shortly after startup. Per-service alerts are
-throttled to at most one per 15 minutes. Stopping a service from the dashboard
-also counts as down (it is, after all, down); starting it again sends the
-recovery. Monitor alerts respect the same `notify_mode` setting as deploy
-alerts — `auto-only` includes them, `never` suppresses them.
+A built-in monitor checks every managed service's containers (the same
+`deploybot.service` label used by the dashboard) every `DEPLOYBOT_MONITOR_INTERVAL`
+(default 60s). A service counts as down when no container for the service is
+running and healthy (a container whose Docker HEALTHCHECK reports `unhealthy`
+counts as down even while running) for two consecutive checks — so a single
+transient restart does not alert, but a crash loop does. Nori then sends an SMS
+when the service goes down and one recovery SMS when it comes back up. A service
+that is already down when Nori starts alerts once shortly after startup.
+Per-service alerts are throttled to at most one per 15 minutes. Stopping a
+service from the dashboard also counts as down (it is, after all, down);
+starting it again sends the recovery. Monitor alerts respect the same
+`notify_mode` setting as deploy alerts — `auto-only` includes them, `never`
+suppresses them.
 
 Each service may also set an optional **Health URL** in its service form. When
 set, the monitor GETs that URL on every check and the service only counts as
@@ -317,21 +337,49 @@ DEPLOYBOT_TWILIO_FROM=+15551234567
 DEPLOYBOT_TWILIO_TO=+15559876543
 ```
 
-Send failures are logged but never fail a deploy. The per-service failure
-cooldown already prevents SMS spam during repeated auto-deploy retries of the
-same digest; manual deploys are not rate-limited.
+The per-service failure cooldown already prevents SMS spam during repeated
+auto-deploy retries of the same digest; manual deploys are not rate-limited.
 
-The **Settings** page exposes an in-app toggle that further controls when SMS
-is sent, independent of Twilio being configured:
+### Telegram
+
+Telegram is the low-friction channel for routine operational updates, including
+successful deployments that would be too chatty as SMS. Create a bot with
+[@BotFather](https://t.me/BotFather) to get a bot token, then set:
+
+```
+DEPLOYBOT_TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+DEPLOYBOT_TELEGRAM_CHAT_ID=-1001234567890
+```
+
+The chat ID identifies the conversation that receives the messages. To find it,
+message the bot once and open
+`https://api.telegram.org/bot<token>/getUpdates` in a browser — the response
+includes the chat's `id`. For a group or channel, add the bot as a member
+(admin for channels) first; IDs of group and channel chats are negative. A
+partial configuration is rejected at startup, mirroring Twilio.
+
+Messages are delivered through Telegram's `sendMessage` Bot API with a bounded
+HTTP timeout. The bot token and chat ID are never written to logs, and API
+errors are logged without their secret material.
+
+### Notification mode
+
+The **Settings** page exposes an in-app toggle that further controls when
+notifications are sent, independent of which channels are configured:
 
 | Mode | Behavior |
 |------|----------|
-| `always` (default) | Alert on every failure (same as above). |
-| `auto-only` | Suppress alerts for manually triggered deploys. Automatic, scheduled, and monitor alerts still alert. |
-| `never` | Suppress all alerts. |
+| `always` (default) | Notify on every deployment success and failure, and on monitor down/recovery events. |
+| `auto-only` | Suppress notifications for manually triggered deploys. Automatic, scheduled, and monitor events still send. |
+| `never` | Suppress all notifications. |
 
 The toggle takes effect on the next deploy; no restart needed. It only has an
-effect when Twilio is configured.
+effect when at least one channel is configured.
+
+Note for existing installations: successful deployments now notify too. If you
+run with `always` (the default) and a channel configured, upgrading sends a
+message for every deploy — switch to `auto-only` if manual redeploy noise
+bothers you, or `never` to keep the old failure-only behavior.
 
 ## MCP agent access
 
@@ -458,10 +506,12 @@ For implementation boundaries, regression tests and proposed follow-ups, see
 | `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
 | `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
 | `DEPLOYBOT_MONITOR_INTERVAL` | no | Container health check interval (default: `60s`) |
-| `DEPLOYBOT_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `DEPLOYBOT_TWILIO_*` to enable SMS on deploy failure. |
+| `DEPLOYBOT_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `DEPLOYBOT_TWILIO_*` to enable SMS notifications. |
 | `DEPLOYBOT_TWILIO_AUTH_TOKEN` | no | Twilio auth token. |
 | `DEPLOYBOT_TWILIO_FROM` | no | Sender number (Twilio-owned, E.164, e.g. `+15551234567`). |
 | `DEPLOYBOT_TWILIO_TO` | no | Recipient number (E.164). Partial config is an error. |
+| `DEPLOYBOT_TELEGRAM_BOT_TOKEN` | no | Bot API token from [@BotFather](https://t.me/BotFather). Set both `DEPLOYBOT_TELEGRAM_*` to enable Telegram notifications. |
+| `DEPLOYBOT_TELEGRAM_CHAT_ID` | no | Target chat, group, or channel ID. Partial config is an error. |
 
 When started by the launcher, `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
 `DEPLOYBOT_ADMIN_HASH` are generated once and read from `/config/deploybot.env`.
