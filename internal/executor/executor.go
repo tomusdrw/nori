@@ -190,6 +190,7 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 	}
 	log.Printf("deploy: %s %q succeeded (id=%d)", deploy.Trigger, svc.Name, deploy.ID)
 	e.finish(ctx, deploy, store.DeploySuccess, "")
+	e.alertSuccess(svc, deploy)
 }
 
 func shortDigest(digest string) string {
@@ -325,6 +326,34 @@ func (e *Executor) alertFailure(svc *store.Service, deploy *store.Deployment, ca
 		Reason:      truncateReason(cause.Error()),
 	}
 	_ = e.notify.NotifyServiceDown(ctx, evt)
+}
+
+// alertSuccess sends a deploy-success notification with the same mode
+// gating, timeout, and error-swallowing contract as alertFailure.
+func (e *Executor) alertSuccess(svc *store.Service, deploy *store.Deployment) {
+	if e.notify == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	raw := e.store.NotifyMode(ctx)
+	mode, err := notify.NormalizeMode(raw)
+	if err != nil {
+		log.Printf("notify: ignoring invalid stored mode %q: %v", raw, err)
+		mode = notify.DefaultMode
+	}
+	if !notify.ShouldSend(mode, deploy.Trigger) {
+		return
+	}
+
+	evt := notify.Event{
+		BotName:     e.botName,
+		ServiceName: svc.Name,
+		Trigger:     deploy.Trigger,
+		Digest:      shortDigest(deploy.TargetDigest),
+	}
+	_ = e.notify.NotifyDeploySuccess(ctx, evt)
 }
 
 // truncateReason keeps the SMS body short. Twilio rejects bodies longer than

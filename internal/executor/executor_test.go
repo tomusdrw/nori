@@ -405,30 +405,42 @@ func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
 	}
 }
 
-// capturingNotifier records every service-down event it receives.
+// capturingNotifier records every notification event it receives.
 type capturingNotifier struct {
 	mu     sync.Mutex
-	events []notify.Event
+	events []capturedNotifyEvent
+}
+
+type capturedNotifyEvent struct {
+	kind string
+	evt  notify.Event
 }
 
 func (c *capturingNotifier) NotifyServiceDown(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.events = append(c.events, evt)
+	c.events = append(c.events, capturedNotifyEvent{kind: "down", evt: evt})
 	return nil
 }
 
 func (c *capturingNotifier) NotifyServiceRecovered(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.events = append(c.events, evt)
+	c.events = append(c.events, capturedNotifyEvent{kind: "recovered", evt: evt})
 	return nil
 }
 
-func (c *capturingNotifier) snapshot() []notify.Event {
+func (c *capturingNotifier) NotifyDeploySuccess(_ context.Context, evt notify.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]notify.Event, len(c.events))
+	c.events = append(c.events, capturedNotifyEvent{kind: "success", evt: evt})
+	return nil
+}
+
+func (c *capturingNotifier) snapshot() []capturedNotifyEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]capturedNotifyEvent, len(c.events))
 	copy(out, c.events)
 	return out
 }
@@ -478,7 +490,7 @@ func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("got %d notify events, want 1: %+v", len(events), events)
 	}
-	evt := events[0]
+	evt := events[0].evt
 	if evt.ServiceName != "app" || evt.Trigger != store.TriggerManual {
 		t.Errorf("unexpected event: %+v", evt)
 	}
@@ -488,9 +500,12 @@ func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
 	if evt.BotName != "staging" {
 		t.Errorf("BotName = %q, want staging", evt.BotName)
 	}
+	if events[0].kind != "down" {
+		t.Errorf("kind = %q, want down", events[0].kind)
+	}
 }
 
-func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
+func TestExecutor_SuccessFiresSuccessNotifier(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
@@ -499,11 +514,11 @@ func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
 	}
 	cap := &capturingNotifier{}
 	ex := New(st, &fakeRunner{log: "ok"}, func(context.Context, string) (string, error) {
-		return "sha256:good", nil
+		return "sha256:good0123456789", nil
 	}, 0)
 	ex.SetNotifier(cap)
 
-	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerAuto)
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
@@ -514,13 +529,26 @@ func TestExecutor_SuccessDoesNotFireNotifier(t *testing.T) {
 			t.Fatal(derr)
 		}
 		if d.Status == store.DeploySuccess {
+			// alertSuccess runs after finish(); a tiny cushion lets the
+			// notifier call land before we read the capture.
+			time.Sleep(20 * time.Millisecond)
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if got := cap.snapshot(); len(got) != 0 {
-		t.Fatalf("success must not notify; got %+v", got)
+	got := cap.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("got %d notify events, want 1: %+v", len(got), got)
+	}
+	if got[0].kind != "success" {
+		t.Errorf("kind = %q, want success", got[0].kind)
+	}
+	evt := got[0].evt
+	if evt.ServiceName != "app" || evt.Trigger != store.TriggerAuto {
+		t.Errorf("unexpected event: %+v", evt)
+	}
+	if evt.Digest == "" || evt.Reason != "" {
+		t.Errorf("success event must carry a digest and no reason: %+v", evt)
 	}
 }
 

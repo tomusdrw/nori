@@ -19,6 +19,7 @@ type Config struct {
 	PollInterval      time.Duration
 	MonitorInterval   time.Duration
 	Twilio            TwilioConfig
+	Telegram          TelegramConfig
 }
 
 // TwilioConfig holds optional Twilio SMS settings. When every field is empty,
@@ -34,6 +35,19 @@ type TwilioConfig struct {
 // Enabled reports whether all required Twilio fields are present.
 func (t TwilioConfig) Enabled() bool {
 	return t.AccountSID != "" && t.AuthToken != "" && t.From != "" && t.To != ""
+}
+
+// TelegramConfig holds optional Telegram notification settings. When both
+// fields are empty, Telegram notifications are disabled. Partial
+// configuration is rejected so a typo does not silently disable alerts.
+type TelegramConfig struct {
+	BotToken string
+	ChatID   string
+}
+
+// Enabled reports whether all required Telegram fields are present.
+func (t TelegramConfig) Enabled() bool {
+	return t.BotToken != "" && t.ChatID != ""
 }
 
 func Load() (Config, error) {
@@ -95,6 +109,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c.Twilio = tw
+
+	tg, err := loadTelegram(os.Getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Telegram = tg
 	return c, nil
 }
 
@@ -110,6 +130,12 @@ func ValidateEnvironment(values map[string]string) error {
 		}
 	}
 	_, err := loadTwilio(func(name string) string {
+		return values[name]
+	})
+	if err != nil {
+		return err
+	}
+	_, err = loadTelegram(func(name string) string {
 		return values[name]
 	})
 	return err
@@ -156,6 +182,31 @@ func loadTwilio(get func(string) string) (TwilioConfig, error) {
 	if len(missing) > 0 {
 		return TwilioConfig{}, fmt.Errorf(
 			"DEPLOYBOT_TWILIO_* partially configured: missing %s", strings.Join(missing, ", "))
+	}
+	return t, nil
+}
+
+func loadTelegram(get func(string) string) (TelegramConfig, error) {
+	t := TelegramConfig{
+		BotToken: get("DEPLOYBOT_TELEGRAM_BOT_TOKEN"),
+		ChatID:   strings.TrimSpace(get("DEPLOYBOT_TELEGRAM_CHAT_ID")),
+	}
+	// Treat "all empty" as "intentionally disabled", mirroring Twilio: a
+	// half-configured channel would silently never fire and defeat the
+	// purpose of wiring it up.
+	if t.BotToken == "" && t.ChatID == "" {
+		return TelegramConfig{}, nil
+	}
+	var missing []string
+	if t.BotToken == "" {
+		missing = append(missing, "DEPLOYBOT_TELEGRAM_BOT_TOKEN")
+	}
+	if t.ChatID == "" {
+		missing = append(missing, "DEPLOYBOT_TELEGRAM_CHAT_ID")
+	}
+	if len(missing) > 0 {
+		return TelegramConfig{}, fmt.Errorf(
+			"DEPLOYBOT_TELEGRAM_* partially configured: missing %s", strings.Join(missing, ", "))
 	}
 	return t, nil
 }

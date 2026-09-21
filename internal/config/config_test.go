@@ -107,6 +107,70 @@ func TestLoad_TwilioPartialConfigRejected(t *testing.T) {
 	}
 }
 
+func TestLoad_TelegramDisabledByDefault(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Telegram.Enabled() {
+		t.Fatal("Telegram must be disabled when env vars are absent")
+	}
+}
+
+func TestLoad_TelegramEnabledWhenFullyConfigured(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TELEGRAM_BOT_TOKEN", "123:abc")
+	t.Setenv("DEPLOYBOT_TELEGRAM_CHAT_ID", "-1001234567890")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Telegram.Enabled() {
+		t.Fatal("Telegram must be enabled when both vars are set")
+	}
+	if cfg.Telegram.BotToken != "123:abc" || cfg.Telegram.ChatID != "-1001234567890" {
+		t.Errorf("unexpected telegram config: %+v", cfg.Telegram)
+	}
+}
+
+func TestLoad_TelegramPartialConfigRejected(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TELEGRAM_BOT_TOKEN", "123:abc")
+	// ChatID intentionally omitted.
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for partially configured Telegram")
+	}
+}
+
+func TestLoad_TelegramAndTwilioCoexist(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DEPLOYBOT_TWILIO_ACCOUNT_SID", "AC123")
+	t.Setenv("DEPLOYBOT_TWILIO_AUTH_TOKEN", "tok")
+	t.Setenv("DEPLOYBOT_TWILIO_FROM", "+15551234567")
+	t.Setenv("DEPLOYBOT_TWILIO_TO", "+15559876543")
+	t.Setenv("DEPLOYBOT_TELEGRAM_BOT_TOKEN", "123:abc")
+	t.Setenv("DEPLOYBOT_TELEGRAM_CHAT_ID", "-1001234567890")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Twilio.Enabled() || !cfg.Telegram.Enabled() {
+		t.Fatalf("both channels must be enabled: twilio=%+v telegram=%+v", cfg.Twilio, cfg.Telegram)
+	}
+}
+
+func mergeMaps(ms ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range ms {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func TestLoad_MonitorInterval_Defaults(t *testing.T) {
 	setRequiredEnv(t)
 	cfg, err := Load()
@@ -159,6 +223,10 @@ func TestValidateEnvironment(t *testing.T) {
 		"DEPLOYBOT_TWILIO_FROM":        "+15551234567",
 		"DEPLOYBOT_TWILIO_TO":          "+15559876543",
 	}
+	validTelegram := map[string]string{
+		"DEPLOYBOT_TELEGRAM_BOT_TOKEN": "123:abc",
+		"DEPLOYBOT_TELEGRAM_CHAT_ID":   "-1001234567890",
+	}
 	tests := []struct {
 		name    string
 		values  map[string]string
@@ -178,6 +246,10 @@ func TestValidateEnvironment(t *testing.T) {
 		{name: "Twilio disabled", values: map[string]string{}},
 		{name: "Twilio complete", values: validTwilio},
 		{name: "Twilio partial", values: map[string]string{"DEPLOYBOT_TWILIO_ACCOUNT_SID": "AC123"}, wantErr: true},
+		{name: "Telegram disabled", values: map[string]string{}},
+		{name: "Telegram complete", values: validTelegram},
+		{name: "Telegram partial", values: map[string]string{"DEPLOYBOT_TELEGRAM_BOT_TOKEN": "tok"}, wantErr: true},
+		{name: "Twilio and Telegram complete", values: mergeMaps(validTwilio, validTelegram)},
 	}
 
 	for _, test := range tests {
