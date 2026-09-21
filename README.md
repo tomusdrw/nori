@@ -4,6 +4,43 @@ Self-hosted deployment control panel for Docker-based services. Watches containe
 registries for new images, runs your bash deploy scripts, and provides a dashboard to
 manage services.
 
+## Why Nori?
+
+Nori is for operators whose CI already produces container images and who want the last
+mile of deployment to stay small, explicit, and easy to inspect. The registry digest
+selects exactly what should run, a Bash script describes how it should be deployed, and
+the dashboard or MCP interface provides a focused operational view.
+
+- **Small and predictable** — one Go application, SQLite, and the Docker daemon you
+  already operate.
+- **Explicit deployments** — use ordinary Bash for container replacement, migrations,
+  backups, or any service-specific step without learning a platform-specific workflow.
+- **Useful automation without a platform layer** — deploy manually, immediately after
+  an image update, or on a schedule.
+- **Operator and agent friendly** — the same focused service model is available through
+  the dashboard and the OAuth-protected MCP interface.
+- **Easy to leave and easy to debug** — services remain normal Docker containers, and
+  deployment behavior is visible in scripts and logs.
+
+### Nori and Coolify
+
+Nori and [Coolify](https://coolify.io/) both help run containerized software on your own
+infrastructure, but they optimize for different operating styles. Coolify is a broad
+self-hosted platform for managing the application lifecycle. Nori deliberately focuses
+on the shorter path from a published image to a running service on one Docker host.
+
+| | Nori | Coolify |
+|---|---|---|
+| Primary goal | A focused, transparent deployment controller | A comprehensive self-hosted application platform |
+| Starting point | A container image already built by CI | Source code, Compose definitions, or container images |
+| Deployment model | An explicit Bash script owned by the operator | Standardized workflows managed by the platform |
+| Operational model | One Docker host with minimal supporting infrastructure | A control plane coordinating application infrastructure |
+| Best fit | Operators who value simplicity, direct control, and a small trusted surface | Teams who want a platform to own more of the application lifecycle |
+
+Choose Nori when simplicity is part of the reliability model: the build happens in CI,
+the deployment remains understandable end to end, and the tool does not try to become
+the infrastructure itself.
+
 ## Requirements
 
 - Docker socket access (`/var/run/docker.sock`)
