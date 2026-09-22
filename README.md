@@ -180,9 +180,10 @@ the mounted socket.
 
 ### Existing installations
 
-The Nori rename changes the default binary, container, volume, database,
-launcher-env filename, and service label. To reuse volumes created with the old
-defaults, select them explicitly before running the new Compose configuration:
+Nori only reads `NORI_*` configuration, the `nori.env` launcher-environment
+filename, and the `nori.service` container label; former `DEPLOYBOT_*` names
+are not recognized. To reuse volumes created with the old defaults, select them
+explicitly before running the new Compose configuration:
 
 ```bash
 export NORI_CONFIG_VOLUME=deploybot-config
@@ -190,10 +191,7 @@ export NORI_DATA_VOLUME=deploybot-data
 docker compose run --rm -it launcher up --image "$NORI_IMAGE"
 ```
 
-The launcher migrates `deploybot.env` to `nori.env` and updates its own persisted
-service label automatically. Values inside that file may continue using
-`DEPLOYBOT_*` names during the compatibility period; each used fallback logs a
-deprecation warning. Update stored service deployment scripts from
+Update stored service deployment scripts from
 `deploybot.service` to `nori.service` and redeploy those services so Nori can
 discover their containers.
 
@@ -528,11 +526,6 @@ For implementation boundaries, regression tests and proposed follow-ups, see
 | `NORI_TWILIO_TO` | no | Recipient number (E.164). Partial config is an error. |
 | `NORI_TELEGRAM_BOT_TOKEN` | no | Bot API token from [@BotFather](https://t.me/BotFather). Set both `NORI_TELEGRAM_*` to enable Telegram notifications. |
 | `NORI_TELEGRAM_CHAT_ID` | no | Target chat, group, or channel ID. Partial config is an error. |
-
-The former `DEPLOYBOT_*` names remain supported as one-to-one fallbacks for
-backward compatibility (`DEPLOYBOT_KEY` maps to `NORI_KEY`, and so on). Nori logs
-a deprecation warning whenever it uses a legacy value. If both forms are set,
-the `NORI_*` value takes precedence and no legacy warning is emitted.
 
 When started by the launcher, `NORI_KEY`, `NORI_SESSION_KEY`, and
 `NORI_ADMIN_HASH` are generated once and read from `/config/nori.env`.

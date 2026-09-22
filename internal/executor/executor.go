@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"nori/internal/envcompat"
 	"nori/internal/envfile"
 	"nori/internal/notify"
 	"nori/internal/store"
@@ -225,7 +224,7 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 	}
 	if svc.IsSelf {
 		for _, key := range []string{"NORI_CONFIG_VOLUME", "NORI_SELF_IMAGE"} {
-			value := envcompat.Get(key)
+			value := os.Getenv(key)
 			if value == "" {
 				return nil, "", fmt.Errorf("self-update requires %s", key)
 			}

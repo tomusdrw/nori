@@ -2,7 +2,7 @@ services:
   launcher:
     # Run this one-shot service with `docker compose run --rm -it launcher up …`.
     # It creates the long-running nori container from its persistent config.
-    image: ${NORI_IMAGE:-${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/nori:latest}}
+    image: ${NORI_IMAGE:-ghcr.io/tomusdrw/nori:latest}
     build: .
     volumes:
       # Required: gives both the launcher and resulting bot root-equivalent
@@ -15,14 +15,10 @@ services:
       NORI_PORT: ${NORI_PORT:-}
       NORI_CONFIG_VOLUME: ${NORI_CONFIG_VOLUME:-}
       NORI_DATA_VOLUME: ${NORI_DATA_VOLUME:-}
-      DEPLOYBOT_IMAGE: ${DEPLOYBOT_IMAGE:-}
-      DEPLOYBOT_PORT: ${DEPLOYBOT_PORT:-}
-      DEPLOYBOT_CONFIG_VOLUME: ${DEPLOYBOT_CONFIG_VOLUME:-}
-      DEPLOYBOT_DATA_VOLUME: ${DEPLOYBOT_DATA_VOLUME:-}
     profiles: ["launcher"]
 
 volumes:
   nori-data:
-    name: ${NORI_DATA_VOLUME:-${DEPLOYBOT_DATA_VOLUME:-nori-data}}
+    name: ${NORI_DATA_VOLUME:-nori-data}
   nori-config:
-    name: ${NORI_CONFIG_VOLUME:-${DEPLOYBOT_CONFIG_VOLUME:-nori-config}}
+    name: ${NORI_CONFIG_VOLUME:-nori-config}
