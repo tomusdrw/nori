@@ -44,10 +44,11 @@ type Server struct {
 	auth            *auth.Auth
 	terminal        terminalsession.Attacher
 	selfEnvironment selfEnvironmentStore
+	channels        Channels
 	router          chi.Router
 }
 
-func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, terminals ...terminalsession.Attacher) *Server {
+func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, channels Channels, terminals ...terminalsession.Attacher) *Server {
 	term := terminalsession.Attacher(terminalsession.New("nori", "."))
 	if len(terminals) > 0 && terminals[0] != nil {
 		term = terminals[0]
@@ -55,6 +56,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	s := &Server{
 		store: st, docker: dk, executor: ex, poller: pl, auth: a, terminal: term,
 		selfEnvironment: launcher.New(),
+		channels:        channels,
 	}
 	r := chi.NewRouter()
 	r.Use(s.botNameMiddleware)
@@ -141,13 +143,13 @@ func (s *Server) mcpSecureCookies(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
-	mode, _ := notify.NormalizeMode(s.store.NotifyMode(r.Context()))
+	routing := notify.EffectiveRouting(s.store.NotifyRoutingRaw(r.Context()), s.store.NotifyMode(r.Context()))
 	cfg, err := s.store.GetMCPConfig(r.Context())
 	if err != nil {
 		http.Error(w, "could not load MCP settings", http.StatusInternalServerError)
 		return
 	}
-	_ = SettingsPage(BotName(r.Context()), string(mode), s.csrf(r), "", r.URL.Query().Get("saved") == "1", cfg).Render(r.Context(), w)
+	_ = SettingsPage(BotName(r.Context()), s.csrf(r), "", r.URL.Query().Get("saved") == "1", cfg, s.channels, routing).Render(r.Context(), w)
 }
 
 func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
@@ -156,37 +158,53 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Parse the routing checkboxes first so an error re-render can preserve
+	// what the user toggled.
+	routing := parseRoutingForm(s.channels, r.Form)
 	name, err := store.NormalizeBotName(r.FormValue("bot_name"))
 	if err != nil {
-		s.renderSettingsError(w, r, r.FormValue("bot_name"), r.FormValue("notify_mode"), err.Error())
-		return
-	}
-	mode, err := notify.NormalizeMode(r.FormValue("notify_mode"))
-	if err != nil {
-		s.renderSettingsError(w, r, name, r.FormValue("notify_mode"), err.Error())
+		s.renderSettingsError(w, r, r.FormValue("bot_name"), routing, err.Error())
 		return
 	}
 	if err := s.store.SetMCPConfig(r.Context(), r.FormValue("mcp_enabled") == "1", r.FormValue("mcp_public_url"), false); err != nil {
-		s.renderSettingsError(w, r, name, string(mode), err.Error())
+		s.renderSettingsError(w, r, name, routing, err.Error())
 		return
 	}
 	if err := s.store.SetSetting(r.Context(), store.SettingBotName, name); err != nil {
-		s.renderSettingsError(w, r, name, string(mode), err.Error())
+		s.renderSettingsError(w, r, name, routing, err.Error())
 		return
 	}
-	if err := s.store.SetSetting(r.Context(), store.SettingNotifyMode, string(mode)); err != nil {
-		s.renderSettingsError(w, r, name, string(mode), err.Error())
-		return
+	// parseRoutingForm only produces table entries for configured channels, so
+	// an empty table means nothing is configured and the matrix offered no
+	// editable choices. Keep the legacy mode as the active fallback then, so
+	// an explicit opt-out survives until a channel exists and the matrix can
+	// express a real decision.
+	if len(routing) > 0 {
+		raw, err := notify.MarshalRouting(routing)
+		if err != nil {
+			s.renderSettingsError(w, r, name, routing, err.Error())
+			return
+		}
+		if err := s.store.SetSetting(r.Context(), store.SettingNotifyRouting, raw); err != nil {
+			s.renderSettingsError(w, r, name, routing, err.Error())
+			return
+		}
+		// The legacy mode is superseded by the routing table; clear it so the
+		// fallback translation never resurrects an outdated choice.
+		if err := s.store.SetSetting(r.Context(), store.SettingNotifyMode, ""); err != nil {
+			s.renderSettingsError(w, r, name, routing, err.Error())
+			return
+		}
 	}
-	log.Printf("settings: bot name set to %q, notify mode set to %q", name, mode)
+	log.Printf("settings: bot name set to %q, notification routing updated", name)
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
 }
 
-func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, botName, rawMode, errMsg string) {
+func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, botName string, routing notify.Routing, errMsg string) {
 	// Preserve whatever the user typed (not the normalized value) so they can
 	// see and fix their input on re-render.
 	cfg := store.MCPConfig{Enabled: r.FormValue("mcp_enabled") == "1", PublicURL: r.FormValue("mcp_public_url")}
-	_ = SettingsPage(botName, rawMode, s.csrf(r), errMsg, false, cfg).Render(r.Context(), w)
+	_ = SettingsPage(botName, s.csrf(r), errMsg, false, cfg, s.channels, routing).Render(r.Context(), w)
 }
 
 func (s *Server) handleMCPRevoke(w http.ResponseWriter, r *http.Request) {

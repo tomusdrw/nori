@@ -37,7 +37,7 @@ func TestDashboard_RendersServiceWithUpdate(t *testing.T) {
 
 	hash, _ := auth.HashPassword("test")
 	a, _ := auth.New(hash, make([]byte, 32))
-	srv := NewServer(st, dk, ex, pl, a)
+	srv := NewServer(st, dk, ex, pl, a, Channels{})
 
 	loginRR := httptest.NewRecorder()
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=test"))
@@ -86,7 +86,7 @@ func TestServiceDetail_NoUpdateWhenDigestsMatch(t *testing.T) {
 
 	hash, _ := auth.HashPassword("test")
 	a, _ := auth.New(hash, make([]byte, 32))
-	srv := NewServer(st, dk, ex, pl, a)
+	srv := NewServer(st, dk, ex, pl, a, Channels{})
 
 	loginRR := httptest.NewRecorder()
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=test"))

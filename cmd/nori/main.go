@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"nori/internal/auth"
 	"nori/internal/config"
@@ -74,7 +75,7 @@ func main() {
 		return registry.LatestDigest(image)
 	}
 	// Build a single notifier instance to share with monitor.
-	nf := buildNotifier(cfg)
+	nf := buildNotifier(cfg, st)
 	ex := executor.New(st, executor.OSRunner{}, latest, 0)
 	ex.SetNotifier(nf)
 	ex.SetBotName(st.BotName(context.Background()))
@@ -99,7 +100,8 @@ func main() {
 	defer sched.Stop()
 
 	term := terminalsession.New("nori", cfg.TerminalDir)
-	srv := web.NewServer(st, dk, ex, pl, a, term)
+	channels := web.Channels{Twilio: cfg.Twilio.Enabled(), Telegram: cfg.Telegram.Enabled()}
+	srv := web.NewServer(st, dk, ex, pl, a, channels, term)
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
 
 	go func() {
@@ -118,23 +120,40 @@ func main() {
 
 // buildNotifier returns the notifier chosen by configuration. When no
 // channel is configured, the no-op notifier keeps the app behaving exactly
-// as before. Every enabled channel is wrapped in a Multi inside LogFailures
-// so a channel outage can never fail a deploy.
-func buildNotifier(cfg config.Config) notify.Notifier {
+// as before. Every enabled channel is gated by a Route that consults the
+// stored per-event routing table at send time, and the channels are fanned
+// out through a Multi inside LogFailures so a channel outage can never fail
+// a deploy.
+func buildNotifier(cfg config.Config, st *store.Store) notify.Notifier {
+	approve := func(channel string) func(notify.EventKind) bool {
+		return func(kind notify.EventKind) bool {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return notify.EffectiveRouting(st.NotifyRoutingRaw(ctx), st.NotifyMode(ctx)).Allowed(channel, kind)
+		}
+	}
 	var notifiers []notify.Notifier
 	if cfg.Twilio.Enabled() {
-		notifiers = append(notifiers, notify.NewTwilio(
-			cfg.Twilio.AccountSID,
-			cfg.Twilio.AuthToken,
-			cfg.Twilio.From,
-			cfg.Twilio.To,
-		))
+		notifiers = append(notifiers, &notify.Route{
+			Channel: notify.ChannelTwilio,
+			Approve: approve(notify.ChannelTwilio),
+			Inner: notify.NewTwilio(
+				cfg.Twilio.AccountSID,
+				cfg.Twilio.AuthToken,
+				cfg.Twilio.From,
+				cfg.Twilio.To,
+			),
+		})
 	}
 	if cfg.Telegram.Enabled() {
-		notifiers = append(notifiers, notify.NewTelegram(
-			cfg.Telegram.BotToken,
-			cfg.Telegram.ChatID,
-		))
+		notifiers = append(notifiers, &notify.Route{
+			Channel: notify.ChannelTelegram,
+			Approve: approve(notify.ChannelTelegram),
+			Inner: notify.NewTelegram(
+				cfg.Telegram.BotToken,
+				cfg.Telegram.ChatID,
+			),
+		})
 	}
 	if len(notifiers) == 0 {
 		return notify.Noop{}

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"nori/internal/notify"
 )
 
 func TestParseServiceFormReadsCompleteEnvFile(t *testing.T) {
@@ -92,5 +95,45 @@ func TestEditorValidationEndpointReturnsBashDiagnostic(t *testing.T) {
 	}
 	if result.Valid || result.Line == 0 || !strings.Contains(result.Message, "bash syntax") {
 		t.Fatalf("unexpected validation result: %+v", result)
+	}
+}
+
+func TestParseRoutingFormReadsConfiguredChannels(t *testing.T) {
+	form := url.Values{
+		"notify_twilio_down":      {"1"},
+		"notify_telegram_success": {"1"},
+	}
+	routing := parseRoutingForm(Channels{Twilio: true, Telegram: true}, form)
+	if !routing.Allowed(notify.ChannelTwilio, notify.KindDown) {
+		t.Error("twilio/down must be on")
+	}
+	if routing.Allowed(notify.ChannelTwilio, notify.KindRecovered) {
+		t.Error("absent twilio/recovered checkbox means off")
+	}
+	if routing.Allowed(notify.ChannelTelegram, notify.KindDown) {
+		t.Error("absent telegram/down checkbox means off")
+	}
+	if !routing.Allowed(notify.ChannelTelegram, notify.KindSuccess) {
+		t.Error("telegram/success must be on")
+	}
+}
+
+func TestParseRoutingFormOmitsUnconfiguredChannels(t *testing.T) {
+	form := url.Values{"notify_telegram_down": {"1"}}
+	routing := parseRoutingForm(Channels{Twilio: false, Telegram: true}, form)
+	if _, ok := routing[notify.ChannelTwilio]; ok {
+		t.Error("unconfigured channels must get no table entry, so they default on once configured")
+	}
+	if !routing.Allowed(notify.ChannelTelegram, notify.KindDown) {
+		t.Error("configured channel checkbox must be read")
+	}
+}
+
+func TestParseRoutingFormEmptyMeansAllOff(t *testing.T) {
+	routing := parseRoutingForm(Channels{Twilio: true, Telegram: false}, url.Values{})
+	for _, kind := range notify.Kinds {
+		if routing.Allowed(notify.ChannelTwilio, kind) {
+			t.Errorf("empty form must leave %s off", kind)
+		}
 	}
 }

@@ -19,8 +19,8 @@ const (
 	TriggerManual    = "manual"
 	TriggerScheduled = "scheduled"
 	// TriggerMonitor marks container-monitor down/recovery events. It is not
-	// a deployment trigger; it exists so notify.ShouldSend can gate monitor
-	// alerts with the same mode rules.
+	// a deployment trigger; it just gives those alerts a distinct label in
+	// the message body.
 	TriggerMonitor = "monitor"
 )
 

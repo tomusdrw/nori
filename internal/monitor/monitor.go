@@ -137,10 +137,11 @@ func (m *Monitor) Tick(ctx context.Context) {
 		}
 
 		// Alert only on the second consecutive down observation, at most once
-		// per cooldown window; a sustained outage does not re-alert.
+		// per cooldown window; a sustained outage does not re-alert. Whether
+		// a channel actually delivers the event is decided downstream by the
+		// notifier chain (notify.Route).
 		if st.consecutiveDown == 2 &&
-			(st.lastDownAlert.IsZero() || now.Sub(st.lastDownAlert) >= m.cooldown) &&
-			m.shouldSendNotify(ctx, store.TriggerMonitor) {
+			(st.lastDownAlert.IsZero() || now.Sub(st.lastDownAlert) >= m.cooldown) {
 			st.lastDownAlert = now
 			st.downAlertSent = true
 			evt := notify.Event{
@@ -203,29 +204,10 @@ func shortDigest(digest string) string {
 	return digest
 }
 
-// shouldSendNotify runs the gating logic for monitor notifications with a safe
-// 15s timeout like the executor's alert path. Returns true if a notification
-// should be sent for the given trigger.
-func (m *Monitor) shouldSendNotify(ctx context.Context, trigger string) bool {
-	// Build a short-lived ctx to query the notification mode, but do not block
-	// the caller excessively.
-	c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	raw := m.store.NotifyMode(c)
-	mode, err := notify.NormalizeMode(raw)
-	if err != nil {
-		log.Printf("monitor: ignoring invalid stored mode %q: %v", raw, err)
-		mode = notify.DefaultMode
-	}
-	return notify.ShouldSend(mode, trigger)
-}
-
 // maybeSendRecovery emits the recovery half of a down episode. It is only
-// called for services whose down alert was actually sent.
+// called for services the monitor alerted down for; whether a channel
+// receives either half is decided downstream by the notifier chain.
 func (m *Monitor) maybeSendRecovery(ctx context.Context, svc *store.Service, digest string) {
-	if !m.shouldSendNotify(ctx, store.TriggerMonitor) {
-		return
-	}
 	evt := notify.Event{
 		BotName:     m.store.BotName(ctx),
 		ServiceName: svc.Name,

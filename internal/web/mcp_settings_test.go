@@ -33,7 +33,7 @@ func mcpSettingsServer(t *testing.T) (*Server, *store.Store) {
 	a, _ := auth.New(hash, make([]byte, 32))
 	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
 	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
-	return NewServer(st, &docker.Fake{}, ex, pl, a), st
+	return NewServer(st, &docker.Fake{}, ex, pl, a, Channels{}), st
 }
 
 func TestMCPOAuthEndToEnd(t *testing.T) {

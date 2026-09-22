@@ -299,24 +299,15 @@ func (e *Executor) recordFailure(serviceID int64, digest string) {
 // alertFailure sends a service-down notification. The call has its own
 // timeout so a slow notifier cannot stall the deploy pipeline, and the
 // notifier is expected to swallow send errors itself (see notify.LogFailures)
-// so a Twilio outage can never fail a deploy. The in-app notify-mode setting
-// (always / auto-only / never) is consulted first and can suppress the call.
+// so a Twilio outage can never fail a deploy. Which channels receive which
+// events is decided downstream by the notifier chain (notify.Route); the
+// executor forwards unconditionally.
 func (e *Executor) alertFailure(svc *store.Service, deploy *store.Deployment, cause error) {
 	if e.notify == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-
-	raw := e.store.NotifyMode(ctx)
-	mode, err := notify.NormalizeMode(raw)
-	if err != nil {
-		log.Printf("notify: ignoring invalid stored mode %q: %v", raw, err)
-		mode = notify.DefaultMode
-	}
-	if !notify.ShouldSend(mode, deploy.Trigger) {
-		return
-	}
 
 	evt := notify.Event{
 		BotName:     e.botName,
@@ -328,24 +319,14 @@ func (e *Executor) alertFailure(svc *store.Service, deploy *store.Deployment, ca
 	_ = e.notify.NotifyServiceDown(ctx, evt)
 }
 
-// alertSuccess sends a deploy-success notification with the same mode
-// gating, timeout, and error-swallowing contract as alertFailure.
+// alertSuccess sends a deploy-success notification with the same timeout and
+// error-swallowing contract as alertFailure.
 func (e *Executor) alertSuccess(svc *store.Service, deploy *store.Deployment) {
 	if e.notify == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-
-	raw := e.store.NotifyMode(ctx)
-	mode, err := notify.NormalizeMode(raw)
-	if err != nil {
-		log.Printf("notify: ignoring invalid stored mode %q: %v", raw, err)
-		mode = notify.DefaultMode
-	}
-	if !notify.ShouldSend(mode, deploy.Trigger) {
-		return
-	}
 
 	evt := notify.Event{
 		BotName:     e.botName,

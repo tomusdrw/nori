@@ -13,11 +13,17 @@ const (
 	DefaultBotName = "Nori"
 	MaxBotNameLen  = 64
 
-	// SettingNotifyMode stores the in-app notification-mode toggle
-	// (always / auto-only / never). The values and their semantics live in
-	// internal/notify; the store treats it as an opaque string so the lower
-	// layer has no dependency on notification logic.
+	// SettingNotifyMode stores the legacy in-app notification-mode toggle
+	// (always / auto-only / never). It is superseded by SettingNotifyRouting
+	// and only read as a fallback while no routing table has been saved. The
+	// store treats both values as opaque strings so the lower layer has no
+	// dependency on notification logic.
 	SettingNotifyMode = "notify_mode"
+
+	// SettingNotifyRouting stores the per-channel event routing table written
+	// by the settings page. Its schema lives in internal/notify
+	// (notify.Routing); the store treats it as an opaque string.
+	SettingNotifyRouting = "notify_routing"
 )
 
 var (
@@ -55,11 +61,21 @@ func (s *Store) BotName(ctx context.Context) string {
 	return value
 }
 
-// NotifyMode returns the stored notification-mode string (e.g. "always",
-// "auto-only", "never"), or "" when unset. Validation of the value belongs
-// to the caller (see internal/notify.NormalizeMode).
+// NotifyMode returns the stored legacy notification-mode string (e.g.
+// "always", "auto-only", "never"), or "" when unset. Validation of the value
+// belongs to the caller.
 func (s *Store) NotifyMode(ctx context.Context) string {
 	value, err := s.GetSetting(ctx, SettingNotifyMode)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// NotifyRoutingRaw returns the stored notification-routing JSON, or "" when
+// unset. Parsing belongs to the caller (see internal/notify.ParseRouting).
+func (s *Store) NotifyRoutingRaw(ctx context.Context) string {
+	value, err := s.GetSetting(ctx, SettingNotifyRouting)
 	if err != nil {
 		return ""
 	}

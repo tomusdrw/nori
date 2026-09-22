@@ -506,3 +506,16 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
 .history-actions [hidden] { display: none; }
 .history-content p { margin: 0; }
 .history-content [data-history-status]:empty { display: none; }
+
+/* Settings: notification channels */
+.channel-status { display: grid; gap: 10px; margin-bottom: 18px; }
+.channel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.channel-row .field-help { margin: 0; }
+.channel-name { display: inline-flex; align-items: center; gap: 10px; }
+.badge-notify-configured { padding: 7px 10px; border-color: rgba(50, 213, 131, 0.24); background: rgba(50, 213, 131, 0.09); color: #72e5a7; }
+.badge-notify-missing { padding: 7px 10px; background: rgba(255,255,255,0.03); color: var(--text-muted); }
+.notify-matrix-wrap { border: 1px solid var(--border); border-radius: 10px; }
+.notify-matrix th, .notify-matrix td { padding: 10px 14px; text-align: left; }
+.notify-matrix td:not(:first-child), .notify-matrix th:not(:first-child) { width: 120px; text-align: center; }
+.notify-matrix input[type="checkbox"] { width: 1.05em; height: 1.05em; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.notify-matrix input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.35; }
