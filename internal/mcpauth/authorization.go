@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 var challengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)

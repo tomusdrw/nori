@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"deploybot/internal/docker"
+	"nori/internal/docker"
 )
 
 type ServiceView struct {

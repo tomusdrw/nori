@@ -1,5 +1,5 @@
 // Package launcher owns the configuration used to create and replace the
-// deploybot container. It deliberately uses the Docker CLI: the configuration
+// nori container. It deliberately uses the Docker CLI: the configuration
 // maps one-to-one to visible docker run flags and the launcher image already
 // includes that CLI.
 package launcher
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"os"
 	"os/exec"
@@ -20,24 +21,28 @@ import (
 	"sort"
 	"strings"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/config"
 	"golang.org/x/term"
+	"nori/internal/auth"
+	"nori/internal/config"
+	"nori/internal/envcompat"
 )
 
 const (
 	DefaultConfigDir    = "/config"
 	RunSpecFilename     = "run.json"
-	EnvFilename         = "deploybot.env"
-	DefaultConfigVolume = "deploybot-config"
-	DefaultDataVolume   = "deploybot-data"
-	DefaultContainer    = "deploybot"
+	EnvFilename         = "nori.env"
+	legacyEnvFilename   = "deploybot.env"
+	DefaultConfigVolume = "nori-config"
+	DefaultDataVolume   = "nori-data"
+	DefaultContainer    = "nori"
 	DefaultPort         = "8080:8080"
+	serviceLabel        = "nori.service"
+	legacyServiceLabel  = "deploybot.service"
 )
 
 var validEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// RunSpec is the launcher-owned, persistent description of the deploybot
+// RunSpec is the launcher-owned, persistent description of the nori
 // container. The corresponding dotenv file contains the application config
 // and secrets, rather than putting them in this JSON document.
 type RunSpec struct {
@@ -145,11 +150,30 @@ func (l *Launcher) random() io.Reader {
 
 func (l *Launcher) runSpecPath() string { return filepath.Join(l.configDir(), RunSpecFilename) }
 func (l *Launcher) envPath() string     { return filepath.Join(l.configDir(), EnvFilename) }
+func (l *Launcher) legacyEnvPath() string {
+	return filepath.Join(l.configDir(), legacyEnvFilename)
+}
 
-// Up starts deploybot from existing launcher configuration, or performs the
+func (l *Launcher) migrateLegacyEnvironment() error {
+	if _, err := os.Stat(l.envPath()); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Stat(l.legacyEnvPath()); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	log.Printf("warning: %s is deprecated; migrating launcher environment to %s", legacyEnvFilename, EnvFilename)
+	return os.Rename(l.legacyEnvPath(), l.envPath())
+}
+
+// Up starts nori from existing launcher configuration, or performs the
 // interactive first bootstrap before starting it. Existing config is never
 // regenerated; explicit override flags may update non-secret launch settings.
-// DEPLOYBOT_KEY must stay stable because it encrypts the persistent database.
+// NORI_KEY must stay stable because it encrypts the persistent database.
 func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 	exists, err := l.configExists()
 	if err != nil {
@@ -181,7 +205,7 @@ func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 
 // Update pulls a target digest, swaps the old container, then persists enough
 // state for a future rollback. It is run by a detached launcher container, so
-// stopping deploybot cannot terminate this process.
+// stopping nori cannot terminate this process.
 func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 	if !validDigest(targetDigest) {
 		return fmt.Errorf("invalid target digest %q", targetDigest)
@@ -220,7 +244,7 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 	return nil
 }
 
-// Rollback swaps deploybot to the last digest recorded by Update.
+// Rollback swaps nori to the last digest recorded by Update.
 func (l *Launcher) Rollback(ctx context.Context) error {
 	spec, err := l.Load()
 	if err != nil {
@@ -236,6 +260,9 @@ func (l *Launcher) Rollback(ctx context.Context) error {
 // the companion environment file, avoiding a half-written bootstrap from
 // silently generating replacement encryption keys.
 func (l *Launcher) Load() (RunSpec, error) {
+	if err := l.migrateLegacyEnvironment(); err != nil {
+		return RunSpec{}, fmt.Errorf("migrate launcher environment: %w", err)
+	}
 	if _, err := os.Stat(l.envPath()); err != nil {
 		return RunSpec{}, fmt.Errorf("launcher environment: %w", err)
 	}
@@ -247,13 +274,30 @@ func (l *Launcher) Load() (RunSpec, error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return RunSpec{}, fmt.Errorf("parse launcher run spec: %w", err)
 	}
+	migratedLabel := false
+	if spec.Labels[legacyServiceLabel] == "deploybot" {
+		delete(spec.Labels, legacyServiceLabel)
+		if _, exists := spec.Labels[serviceLabel]; !exists {
+			spec.Labels[serviceLabel] = "nori"
+		}
+		migratedLabel = true
+	}
 	if err := validateSpec(spec); err != nil {
 		return RunSpec{}, err
+	}
+	if migratedLabel {
+		log.Printf("warning: %s is deprecated; migrating launcher label to %s", legacyServiceLabel, serviceLabel)
+		if err := l.writeSpec(spec); err != nil {
+			return RunSpec{}, fmt.Errorf("migrate launcher run spec: %w", err)
+		}
 	}
 	return spec, nil
 }
 
 func (l *Launcher) configExists() (bool, error) {
+	if err := l.migrateLegacyEnvironment(); err != nil {
+		return false, fmt.Errorf("migrate launcher environment: %w", err)
+	}
 	_, specErr := os.Stat(l.runSpecPath())
 	_, envErr := os.Stat(l.envPath())
 	specExists := specErr == nil
@@ -265,7 +309,7 @@ func (l *Launcher) configExists() (bool, error) {
 		return false, envErr
 	}
 	if specExists != envExists {
-		return false, errors.New("incomplete launcher config: both run.json and deploybot.env are required")
+		return false, errors.New("incomplete launcher config: both run.json and nori.env are required")
 	}
 	return specExists, nil
 }
@@ -310,11 +354,11 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 
 	key, err := suppliedOrRandomKey(opts.EncryptionKey, l.random())
 	if err != nil {
-		return RunSpec{}, fmt.Errorf("DEPLOYBOT_KEY: %w", err)
+		return RunSpec{}, fmt.Errorf("NORI_KEY: %w", err)
 	}
 	sessionKey, err := suppliedOrRandomKey(opts.SessionKey, l.random())
 	if err != nil {
-		return RunSpec{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY: %w", err)
+		return RunSpec{}, fmt.Errorf("NORI_SESSION_KEY: %w", err)
 	}
 	spec := RunSpec{
 		Image:         opts.Image,
@@ -326,7 +370,7 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 			opts.ConfigVolume + ":/config",
 		}, opts.Volumes),
 		Labels: map[string]string{
-			"deploybot.service": "deploybot",
+			serviceLabel: "nori",
 		},
 		Restart:      "unless-stopped",
 		Network:      opts.Network,
@@ -339,12 +383,12 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 		return RunSpec{}, err
 	}
 	values := map[string]string{
-		"DEPLOYBOT_KEY":           key,
-		"DEPLOYBOT_SESSION_KEY":   sessionKey,
-		"DEPLOYBOT_ADMIN_HASH":    adminHash,
-		"DEPLOYBOT_DB":            "/data/deploybot.db",
-		"DEPLOYBOT_LISTEN":        ":8080",
-		"DEPLOYBOT_POLL_INTERVAL": "60s",
+		"NORI_KEY":           key,
+		"NORI_SESSION_KEY":   sessionKey,
+		"NORI_ADMIN_HASH":    adminHash,
+		"NORI_DB":            "/data/nori.db",
+		"NORI_LISTEN":        ":8080",
+		"NORI_POLL_INTERVAL": "60s",
 	}
 	if err := mergeEnvironment(values, opts.Environment); err != nil {
 		return RunSpec{}, err
@@ -382,9 +426,9 @@ func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string)
 		args = append(args, "--label", key+"="+spec.Labels[key])
 	}
 	args = append(args,
-		"-e", "DEPLOYBOT_CONFIG_VOLUME="+spec.ConfigVolume,
-		"-e", "DEPLOYBOT_SELF_CONTAINER="+spec.ContainerName,
-		"-e", "DEPLOYBOT_SELF_IMAGE="+spec.Image,
+		"-e", "NORI_CONFIG_VOLUME="+spec.ConfigVolume,
+		"-e", "NORI_SELF_CONTAINER="+spec.ContainerName,
+		"-e", "NORI_SELF_IMAGE="+spec.Image,
 		image,
 	)
 	if err := l.runner().Run(ctx, "docker", args...); err != nil {
@@ -443,8 +487,8 @@ func validateSpec(spec RunSpec) error {
 	if !contains(spec.Volumes, spec.ConfigVolume+":/config") {
 		return fmt.Errorf("launcher run spec must mount %s:/config", spec.ConfigVolume)
 	}
-	if spec.Labels["deploybot.service"] != "deploybot" {
-		return errors.New("launcher run spec must label deploybot.service=deploybot")
+	if spec.Labels[serviceLabel] != "nori" {
+		return errors.New("launcher run spec must label nori.service=nori")
 	}
 	return nil
 }
@@ -671,7 +715,9 @@ func validateEnvironmentValue(value string) error {
 
 func isProtectedEnvironmentKey(key string) bool {
 	switch key {
-	case "DEPLOYBOT_KEY", "DEPLOYBOT_SESSION_KEY", "DEPLOYBOT_ADMIN_HASH", "DEPLOYBOT_CONFIG_VOLUME", "DEPLOYBOT_SELF_CONTAINER", "DEPLOYBOT_SELF_IMAGE":
+	case "NORI_KEY", "NORI_SESSION_KEY", "NORI_ADMIN_HASH", "NORI_CONFIG_VOLUME", "NORI_SELF_CONTAINER", "NORI_SELF_IMAGE",
+		envcompat.LegacyName("NORI_KEY"), envcompat.LegacyName("NORI_SESSION_KEY"), envcompat.LegacyName("NORI_ADMIN_HASH"),
+		envcompat.LegacyName("NORI_CONFIG_VOLUME"), envcompat.LegacyName("NORI_SELF_CONTAINER"), envcompat.LegacyName("NORI_SELF_IMAGE"):
 		return true
 	default:
 		return false
@@ -753,7 +799,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".deploybot-")
+	tmp, err := os.CreateTemp(dir, ".nori-")
 	if err != nil {
 		return err
 	}

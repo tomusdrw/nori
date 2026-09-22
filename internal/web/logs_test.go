@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"deploybot/internal/docker"
 	"github.com/go-chi/chi/v5"
+	"nori/internal/docker"
 )
 
 func TestReadLogLinesFormatsJSON(t *testing.T) {

@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/envfile"
-	"deploybot/internal/executor"
-	"deploybot/internal/mcpauth"
-	"deploybot/internal/store"
 	"github.com/distribution/reference"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/robfig/cron/v3"
+	"nori/internal/docker"
+	"nori/internal/envfile"
+	"nori/internal/executor"
+	"nori/internal/mcpauth"
+	"nori/internal/store"
 )
 
 const mcpLogLimit = 256 * 1024

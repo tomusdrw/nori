@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"deploybot/internal/launcher"
+	"nori/internal/envcompat"
+	"nori/internal/launcher"
 )
 
 func runLauncherCommand(ctx context.Context, args []string) error {
@@ -16,7 +17,7 @@ func runLauncherCommand(ctx context.Context, args []string) error {
 		return errors.New("launcher command is required")
 	}
 	l := launcher.New()
-	if dir := os.Getenv("DEPLOYBOT_CONFIG_DIR"); dir != "" {
+	if dir := envcompat.Get("NORI_CONFIG_DIR"); dir != "" {
 		l.ConfigDir = dir
 	}
 
@@ -27,7 +28,7 @@ func runLauncherCommand(ctx context.Context, args []string) error {
 		return runUpdate(ctx, l, args[1:])
 	case "rollback":
 		if len(args) != 1 {
-			return errors.New("usage: deploybot rollback")
+			return errors.New("usage: nori rollback")
 		}
 		return l.Rollback(ctx)
 	default:
@@ -38,26 +39,35 @@ func runLauncherCommand(ctx context.Context, args []string) error {
 func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	image := fs.String("image", os.Getenv("DEPLOYBOT_SELF_IMAGE"), "deploybot image to run (required on first boot)")
-	configVolume := fs.String("config-volume", envOr("DEPLOYBOT_CONFIG_VOLUME", launcher.DefaultConfigVolume), "external Docker volume mounted at /config")
-	containerName := fs.String("container-name", envOr("DEPLOYBOT_SELF_CONTAINER", launcher.DefaultContainer), "deploybot container name")
-	dataVolume := fs.String("data-volume", envOr("DEPLOYBOT_DATA_VOLUME", launcher.DefaultDataVolume), "external Docker volume mounted at /data")
+	defaultImage := envcompat.Get("NORI_SELF_IMAGE")
+	if defaultImage == "" {
+		defaultImage = envcompat.Get("NORI_IMAGE")
+	}
+	image := fs.String("image", defaultImage, "nori image to run (required on first boot)")
+	configVolume := fs.String("config-volume", envOr("NORI_CONFIG_VOLUME", launcher.DefaultConfigVolume), "external Docker volume mounted at /config")
+	containerName := fs.String("container-name", envOr("NORI_SELF_CONTAINER", launcher.DefaultContainer), "nori container name")
+	dataVolume := fs.String("data-volume", envOr("NORI_DATA_VOLUME", launcher.DefaultDataVolume), "external Docker volume mounted at /data")
 	noPort := fs.Bool("no-port", false, "do not publish a host port (for reverse proxies)")
-	network := fs.String("network", "", "Docker network for the deploybot container")
-	encryptionKey := fs.String("key", os.Getenv("DEPLOYBOT_KEY"), "existing base64 encryption key (migration only)")
-	sessionKey := fs.String("session-key", os.Getenv("DEPLOYBOT_SESSION_KEY"), "existing base64 session key (migration only)")
-	adminHash := fs.String("admin-password-hash", os.Getenv("DEPLOYBOT_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
+	network := fs.String("network", "", "Docker network for the nori container")
+	encryptionKey := fs.String("key", envcompat.Get("NORI_KEY"), "existing base64 encryption key (migration only)")
+	sessionKey := fs.String("session-key", envcompat.Get("NORI_SESSION_KEY"), "existing base64 session key (migration only)")
+	adminHash := fs.String("admin-password-hash", envcompat.Get("NORI_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
 	var ports stringList
 	fs.Var(&ports, "port", "host:container port mapping (repeatable)")
 	var volumes stringList
 	fs.Var(&volumes, "volume", "extra host bind or named volume mount (src:dst[:opts], repeatable)")
 	var environment stringList
-	fs.Var(&environment, "env", "environment variable for deploybot (KEY=VALUE, repeatable)")
+	fs.Var(&environment, "env", "environment variable for nori (KEY=VALUE, repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if len(ports) == 0 && !*noPort {
+		if port := envcompat.Get("NORI_PORT"); port != "" {
+			ports = append(ports, port+":8080")
+		}
 	}
 	return l.Up(ctx, launcher.UpOptions{
 		Image:             *image,
@@ -103,7 +113,7 @@ func (s *stringList) Set(value string) error {
 }
 
 func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
+	if value := envcompat.Get(key); value != "" {
 		return value
 	}
 	return fallback

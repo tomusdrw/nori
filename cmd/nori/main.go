@@ -9,18 +9,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/config"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	monitorpkg "deploybot/internal/monitor"
-	"deploybot/internal/notify"
-	"deploybot/internal/poller"
-	"deploybot/internal/registry"
-	"deploybot/internal/scheduler"
-	"deploybot/internal/store"
-	terminalsession "deploybot/internal/terminal"
-	"deploybot/internal/web"
+	"nori/internal/auth"
+	"nori/internal/config"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	monitorpkg "nori/internal/monitor"
+	"nori/internal/notify"
+	"nori/internal/poller"
+	"nori/internal/registry"
+	"nori/internal/scheduler"
+	"nori/internal/store"
+	terminalsession "nori/internal/terminal"
+	"nori/internal/web"
 )
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
 		if len(os.Args) < 3 {
-			log.Fatal("usage: deploybot hash-password <password>")
+			log.Fatal("usage: nori hash-password <password>")
 		}
 		hash, err := auth.HashPassword(os.Args[2])
 		if err != nil {
@@ -98,7 +98,7 @@ func main() {
 	}
 	defer sched.Stop()
 
-	term := terminalsession.New("deploybot", cfg.TerminalDir)
+	term := terminalsession.New("nori", cfg.TerminalDir)
 	srv := web.NewServer(st, dk, ex, pl, a, term)
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
 

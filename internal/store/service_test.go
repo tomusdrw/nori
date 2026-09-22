@@ -59,7 +59,7 @@ func TestGetService_NotFound(t *testing.T) {
 func TestEnsureSelfServiceIsManagedAndKeepsPolicy(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/deploybot:latest")
+	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/nori:latest")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +74,42 @@ func TestEnsureSelfServiceIsManagedAndKeepsPolicy(t *testing.T) {
 	if err := st.UpdateService(ctx, self); err != nil {
 		t.Fatal(err)
 	}
-	again, err := st.EnsureSelfService(ctx, "ghcr.io/acme/deploybot:v2")
+	again, err := st.EnsureSelfService(ctx, "ghcr.io/acme/nori:v2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.ID != self.ID || again.Policy != PolicyScheduled || again.WatchedImage != "ghcr.io/acme/deploybot:v2" {
+	if again.ID != self.ID || again.Policy != PolicyScheduled || again.WatchedImage != "ghcr.io/acme/nori:v2" {
 		t.Fatalf("self service was not safely refreshed: %+v", again)
+	}
+}
+
+func TestEnsureSelfServiceRenamesPersistedManagedService(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	legacy := &Service{
+		Name:         "legacy-self",
+		WatchedImage: "ghcr.io/acme/legacy:latest",
+		Policy:       PolicyManual,
+		DeployScript: "exit 1",
+		IsSelf:       true,
+	}
+	if err := st.CreateService(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/nori:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if self.Name != SelfServiceName {
+		t.Fatalf("self service name = %q, want %q", self.Name, SelfServiceName)
+	}
+	persisted, err := st.GetService(ctx, legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Name != SelfServiceName {
+		t.Fatalf("persisted self service name = %q, want %q", persisted.Name, SelfServiceName)
 	}
 }
 

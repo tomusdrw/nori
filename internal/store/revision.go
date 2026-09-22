@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"deploybot/internal/crypto"
+	"nori/internal/crypto"
 )
 
 // Script revisions follow every write path, including launcher refreshes.

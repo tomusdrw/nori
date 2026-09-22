@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/poller"
+	"nori/internal/store"
 )
 
 func TestDashboard_RendersServiceWithUpdate(t *testing.T) {

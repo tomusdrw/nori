@@ -61,7 +61,7 @@ power the dashboard; everything else stays in the opaque bash script:
    several images; the app must be told which one's new digest means "a new version
    shipped" (drives "update available" and immediate auto-deploy).
 2. **Container-grouping label** — the app injects `$SERVICE` into the script's
-   environment, and the script adds `--label deploybot.service=$SERVICE` to each
+   environment, and the script adds `--label nori.service=$SERVICE` to each
    `docker run`. The dashboard finds a service's containers by this label for
    status / logs / start / stop.
 

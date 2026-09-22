@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"strings"
 
-	"deploybot/internal/crypto"
-	"deploybot/internal/envfile"
 	"github.com/joho/godotenv"
+	"nori/internal/crypto"
+	"nori/internal/envfile"
 )
 
 // SetEnvFile stores one complete dotenv document. The entire file is encrypted

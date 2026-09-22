@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/notify"
-	"deploybot/internal/store"
+	"nori/internal/notify"
+	"nori/internal/store"
 )
 
 // envFileValue returns the ENV_FILE=... path from a script environment.
@@ -190,7 +190,7 @@ func TestBuildEnv_InjectsImageAndEnvFile(t *testing.T) {
 
 	// The materialized file is a docker --env-file: resolved KEY=VALUE lines
 	// (quotes already stripped), holding only the service env — not the
-	// deploybot metadata variables.
+	// nori metadata variables.
 	info, err := os.Stat(envFile)
 	if err != nil {
 		t.Fatalf("stat env file: %v", err)
@@ -321,13 +321,13 @@ func TestDeploy_FailureCooldown(t *testing.T) {
 }
 
 func TestDeploy_SelfHandoffStaysRunningAndGetsLauncherEnv(t *testing.T) {
-	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
-	t.Setenv("DEPLOYBOT_SELF_IMAGE", "ghcr.io/acme/deploybot:latest")
+	t.Setenv("NORI_CONFIG_VOLUME", "nori-config")
+	t.Setenv("NORI_SELF_IMAGE", "ghcr.io/acme/nori:latest")
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{
 		Name:         store.SelfServiceName,
-		WatchedImage: "ghcr.io/acme/deploybot:latest",
+		WatchedImage: "ghcr.io/acme/nori:latest",
 		Policy:       store.PolicyManual,
 		DeployScript: store.SelfDeployScript,
 		IsSelf:       true,
@@ -365,7 +365,7 @@ func TestDeploy_SelfHandoffStaysRunningAndGetsLauncherEnv(t *testing.T) {
 		t.Fatalf("self deployment was finalized before replacement: %+v", d)
 	}
 	joined := strings.Join(env, "\n")
-	for _, want := range []string{"DEPLOYBOT_CONFIG_VOLUME=deploybot-config", "DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/deploybot:latest"} {
+	for _, want := range []string{"NORI_CONFIG_VOLUME=nori-config", "NORI_SELF_IMAGE=ghcr.io/acme/nori:latest"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q from handoff environment: %v", want, env)
 		}
@@ -373,8 +373,8 @@ func TestDeploy_SelfHandoffStaysRunningAndGetsLauncherEnv(t *testing.T) {
 }
 
 func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
-	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
-	t.Setenv("DEPLOYBOT_SELF_IMAGE", "image")
+	t.Setenv("NORI_CONFIG_VOLUME", "nori-config")
+	t.Setenv("NORI_SELF_IMAGE", "image")
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{Name: store.SelfServiceName, WatchedImage: "image", Policy: store.PolicyManual, DeployScript: "exit 1", IsSelf: true}
@@ -606,8 +606,8 @@ func TestExecutor_SuccessModeAutoOnlySuppressesManualOnly(t *testing.T) {
 }
 
 func TestDeploy_SelfHandoffSuccessDoesNotNotify(t *testing.T) {
-	t.Setenv("DEPLOYBOT_CONFIG_VOLUME", "deploybot-config")
-	t.Setenv("DEPLOYBOT_SELF_IMAGE", "image")
+	t.Setenv("NORI_CONFIG_VOLUME", "nori-config")
+	t.Setenv("NORI_SELF_IMAGE", "image")
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{Name: store.SelfServiceName, WatchedImage: "image", Policy: store.PolicyManual, DeployScript: "echo ok", IsSelf: true}

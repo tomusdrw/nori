@@ -11,11 +11,11 @@ import (
 var ErrNotFound = errors.New("not found")
 
 const (
-	SelfServiceName  = "deploybot"
+	SelfServiceName  = "nori"
 	SelfDeployScript = `docker run --rm -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$DEPLOYBOT_CONFIG_VOLUME:/config" \
-  "$DEPLOYBOT_SELF_IMAGE@$TARGET_DIGEST" \
+  -v "$NORI_CONFIG_VOLUME:/config" \
+  "$NORI_SELF_IMAGE@$TARGET_DIGEST" \
   update --target-digest "$TARGET_DIGEST"`
 )
 
@@ -121,6 +121,7 @@ func (s *Store) GetSelfService(ctx context.Context) (*Service, error) {
 func (s *Store) EnsureSelfService(ctx context.Context, image string) (*Service, error) {
 	svc, err := s.GetSelfService(ctx)
 	if err == nil {
+		svc.Name = SelfServiceName
 		svc.WatchedImage = image
 		svc.DeployScript = SelfDeployScript
 		svc.IsSelf = true

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 func TestScheduledCallbackLookupErrors(t *testing.T) {

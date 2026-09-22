@@ -1,22 +1,28 @@
 services:
   launcher:
     # Run this one-shot service with `docker compose run --rm -it launcher up …`.
-    # It creates the long-running deploybot container from its persistent config.
-    image: ${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/nori:latest}
+    # It creates the long-running nori container from its persistent config.
+    image: ${NORI_IMAGE:-${DEPLOYBOT_IMAGE:-ghcr.io/tomusdrw/nori:latest}}
     build: .
     volumes:
       # Required: gives both the launcher and resulting bot root-equivalent
       # control over host containers.
       - /var/run/docker.sock:/var/run/docker.sock
-      - deploybot-data:/data
-      - deploybot-config:/config
+      - nori-data:/data
+      - nori-config:/config
     environment:
-      DEPLOYBOT_CONFIG_VOLUME: ${DEPLOYBOT_CONFIG_VOLUME:-deploybot-config}
-      DEPLOYBOT_DATA_VOLUME: ${DEPLOYBOT_DATA_VOLUME:-deploybot-data}
+      NORI_IMAGE: ${NORI_IMAGE:-}
+      NORI_PORT: ${NORI_PORT:-}
+      NORI_CONFIG_VOLUME: ${NORI_CONFIG_VOLUME:-}
+      NORI_DATA_VOLUME: ${NORI_DATA_VOLUME:-}
+      DEPLOYBOT_IMAGE: ${DEPLOYBOT_IMAGE:-}
+      DEPLOYBOT_PORT: ${DEPLOYBOT_PORT:-}
+      DEPLOYBOT_CONFIG_VOLUME: ${DEPLOYBOT_CONFIG_VOLUME:-}
+      DEPLOYBOT_DATA_VOLUME: ${DEPLOYBOT_DATA_VOLUME:-}
     profiles: ["launcher"]
 
 volumes:
-  deploybot-data:
-    name: ${DEPLOYBOT_DATA_VOLUME:-deploybot-data}
-  deploybot-config:
-    name: ${DEPLOYBOT_CONFIG_VOLUME:-deploybot-config}
+  nori-data:
+    name: ${NORI_DATA_VOLUME:-${DEPLOYBOT_DATA_VOLUME:-nori-data}}
+  nori-config:
+    name: ${NORI_CONFIG_VOLUME:-${DEPLOYBOT_CONFIG_VOLUME:-nori-config}}

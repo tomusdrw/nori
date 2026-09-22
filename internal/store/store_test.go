@@ -45,12 +45,12 @@ func TestOpenAppliesPragmasToEveryPooledConnection(t *testing.T) {
 	}
 }
 
-// The default DBPath is relative ("deploybot.db"), so the DSN must not turn the
+// The default DBPath is relative ("nori.db"), so the DSN must not turn the
 // filename into a URI authority.
 func TestOpenAcceptsRelativePath(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	st, err := Open("deploybot.db", make([]byte, 32))
+	st, err := Open("nori.db", make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Open with relative path: %v", err)
 	}

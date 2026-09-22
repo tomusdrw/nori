@@ -14,24 +14,24 @@ import (
 	"strings"
 	"testing"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/launcher"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/launcher"
+	"nori/internal/poller"
+	"nori/internal/store"
 )
 
 var protectedLauncherEnvironment = []struct {
 	key   string
 	value string
 }{
-	{"DEPLOYBOT_KEY", "encryption-secret"},
-	{"DEPLOYBOT_SESSION_KEY", "session-secret"},
-	{"DEPLOYBOT_ADMIN_HASH", "admin-secret"},
-	{"DEPLOYBOT_CONFIG_VOLUME", "config-volume-secret"},
-	{"DEPLOYBOT_SELF_CONTAINER", "self-container-secret"},
-	{"DEPLOYBOT_SELF_IMAGE", "self-image-secret"},
+	{"NORI_KEY", "encryption-secret"},
+	{"NORI_SESSION_KEY", "session-secret"},
+	{"NORI_ADMIN_HASH", "admin-secret"},
+	{"NORI_CONFIG_VOLUME", "config-volume-secret"},
+	{"NORI_SELF_CONTAINER", "self-container-secret"},
+	{"NORI_SELF_IMAGE", "self-image-secret"},
 }
 
 func TestSelfServiceConfigureEditsLauncherEnvironmentAndKeepsRedeployAvailable(t *testing.T) {
@@ -43,7 +43,7 @@ func TestSelfServiceConfigureEditsLauncherEnvironmentAndKeepsRedeployAvailable(t
 	for _, protected := range protectedLauncherEnvironment {
 		initial.WriteString(protected.key + "=" + protected.value + "\n")
 	}
-	initial.WriteString("DEPLOYBOT_POLL_INTERVAL=60s\nVIRTUAL_HOST=old.example.com\n")
+	initial.WriteString("NORI_POLL_INTERVAL=60s\nVIRTUAL_HOST=old.example.com\n")
 	if err := os.WriteFile(launcherEnvPath, []byte(initial.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestSelfServiceConfigureEditsLauncherEnvironmentAndKeepsRedeployAvailable(t
 
 	body := getAuthed(t, srv, cookies, "/services/"+self.Name+"/edit")
 	for _, want := range []string{
-		"DEPLOYBOT_POLL_INTERVAL=60s",
+		"NORI_POLL_INTERVAL=60s",
 		"VIRTUAL_HOST=old.example.com",
 		"Save these values, then use Re-deploy",
 	} {
@@ -99,7 +99,7 @@ func TestSelfServiceConfigureEditsLauncherEnvironmentAndKeepsRedeployAvailable(t
 		"policy":        {"manual"},
 		"deploy_script": {store.SelfDeployScript},
 		"env_file": {
-			"DEPLOYBOT_POLL_INTERVAL=15s\n" +
+			"NORI_POLL_INTERVAL=15s\n" +
 				"VIRTUAL_HOST=new.example.com\n",
 		},
 	}
@@ -115,7 +115,7 @@ func TestSelfServiceConfigureEditsLauncherEnvironmentAndKeepsRedeployAvailable(t
 			t.Errorf("persisted launcher environment missing %q:\n%s", want, persisted)
 		}
 	}
-	for _, want := range []string{"DEPLOYBOT_POLL_INTERVAL=15s", "VIRTUAL_HOST=new.example.com"} {
+	for _, want := range []string{"NORI_POLL_INTERVAL=15s", "VIRTUAL_HOST=new.example.com"} {
 		if !strings.Contains(string(persisted), want) {
 			t.Errorf("persisted launcher environment missing %q:\n%s", want, persisted)
 		}

@@ -3,9 +3,10 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
-	"os"
 	"strings"
 	"time"
+
+	"nori/internal/envcompat"
 )
 
 type Config struct {
@@ -52,65 +53,65 @@ func (t TelegramConfig) Enabled() bool {
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:      getenv("DEPLOYBOT_LISTEN", ":8080"),
-		DBPath:          getenv("DEPLOYBOT_DB", "deploybot.db"),
-		DockerHost:      os.Getenv("DEPLOYBOT_DOCKER_HOST"),
-		TerminalDir:     getenv("DEPLOYBOT_TERMINAL_DIR", "."),
+		ListenAddr:      getenv("NORI_LISTEN", ":8080"),
+		DBPath:          getenv("NORI_DB", "nori.db"),
+		DockerHost:      envcompat.Get("NORI_DOCKER_HOST"),
+		TerminalDir:     getenv("NORI_TERMINAL_DIR", "."),
 		PollInterval:    60 * time.Second,
 		MonitorInterval: 60 * time.Second,
 	}
-	keyB64 := os.Getenv("DEPLOYBOT_KEY")
+	keyB64 := envcompat.Get("NORI_KEY")
 	if keyB64 == "" {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY is required (base64-encoded 32 bytes)")
+		return Config{}, fmt.Errorf("NORI_KEY is required (base64-encoded 32 bytes)")
 	}
 	key, err := base64.StdEncoding.DecodeString(keyB64)
 	if err != nil {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY: %w", err)
+		return Config{}, fmt.Errorf("NORI_KEY: %w", err)
 	}
 	if len(key) != 32 {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY must decode to 32 bytes, got %d", len(key))
+		return Config{}, fmt.Errorf("NORI_KEY must decode to 32 bytes, got %d", len(key))
 	}
 	c.EncryptionKey = key
 
-	sessionB64 := os.Getenv("DEPLOYBOT_SESSION_KEY")
+	sessionB64 := envcompat.Get("NORI_SESSION_KEY")
 	if sessionB64 == "" {
-		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY is required (base64-encoded 32 bytes)")
+		return Config{}, fmt.Errorf("NORI_SESSION_KEY is required (base64-encoded 32 bytes)")
 	}
 	sessionKey, err := base64.StdEncoding.DecodeString(sessionB64)
 	if err != nil {
-		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY: %w", err)
+		return Config{}, fmt.Errorf("NORI_SESSION_KEY: %w", err)
 	}
 	if len(sessionKey) < 32 {
-		return Config{}, fmt.Errorf("DEPLOYBOT_SESSION_KEY must decode to at least 32 bytes, got %d", len(sessionKey))
+		return Config{}, fmt.Errorf("NORI_SESSION_KEY must decode to at least 32 bytes, got %d", len(sessionKey))
 	}
 	c.SessionKey = sessionKey
 
-	c.AdminPasswordHash = os.Getenv("DEPLOYBOT_ADMIN_HASH")
+	c.AdminPasswordHash = envcompat.Get("NORI_ADMIN_HASH")
 	if c.AdminPasswordHash == "" {
-		return Config{}, fmt.Errorf("DEPLOYBOT_ADMIN_HASH is required (bcrypt hash of admin password)")
+		return Config{}, fmt.Errorf("NORI_ADMIN_HASH is required (bcrypt hash of admin password)")
 	}
 
-	if v := os.Getenv("DEPLOYBOT_POLL_INTERVAL"); v != "" {
-		c.PollInterval, err = parsePositiveDuration("DEPLOYBOT_POLL_INTERVAL", v)
+	if v := envcompat.Get("NORI_POLL_INTERVAL"); v != "" {
+		c.PollInterval, err = parsePositiveDuration("NORI_POLL_INTERVAL", v)
 		if err != nil {
 			return Config{}, err
 		}
 	}
 
-	if v := os.Getenv("DEPLOYBOT_MONITOR_INTERVAL"); v != "" {
-		c.MonitorInterval, err = parsePositiveDuration("DEPLOYBOT_MONITOR_INTERVAL", v)
+	if v := envcompat.Get("NORI_MONITOR_INTERVAL"); v != "" {
+		c.MonitorInterval, err = parsePositiveDuration("NORI_MONITOR_INTERVAL", v)
 		if err != nil {
 			return Config{}, err
 		}
 	}
 
-	tw, err := loadTwilio(os.Getenv)
+	tw, err := loadTwilio(envcompat.Get)
 	if err != nil {
 		return Config{}, err
 	}
 	c.Twilio = tw
 
-	tg, err := loadTelegram(os.Getenv)
+	tg, err := loadTelegram(envcompat.Get)
 	if err != nil {
 		return Config{}, err
 	}
@@ -122,21 +123,23 @@ func Load() (Config, error) {
 // may provide through an environment editor. Unknown keys remain valid so
 // Docker, reverse-proxy, and future application settings can pass through.
 func ValidateEnvironment(values map[string]string) error {
-	for _, name := range []string{"DEPLOYBOT_POLL_INTERVAL", "DEPLOYBOT_MONITOR_INTERVAL"} {
-		if value := values[name]; value != "" {
+	for _, name := range []string{"NORI_POLL_INTERVAL", "NORI_MONITOR_INTERVAL"} {
+		if value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name); value != "" {
 			if _, err := parsePositiveDuration(name, value); err != nil {
 				return err
 			}
 		}
 	}
 	_, err := loadTwilio(func(name string) string {
-		return values[name]
+		value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name)
+		return value
 	})
 	if err != nil {
 		return err
 	}
 	_, err = loadTelegram(func(name string) string {
-		return values[name]
+		value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name)
+		return value
 	})
 	return err
 }
@@ -154,10 +157,10 @@ func parsePositiveDuration(name, value string) (time.Duration, error) {
 
 func loadTwilio(get func(string) string) (TwilioConfig, error) {
 	t := TwilioConfig{
-		AccountSID: strings.TrimSpace(get("DEPLOYBOT_TWILIO_ACCOUNT_SID")),
-		AuthToken:  get("DEPLOYBOT_TWILIO_AUTH_TOKEN"),
-		From:       strings.TrimSpace(get("DEPLOYBOT_TWILIO_FROM")),
-		To:         strings.TrimSpace(get("DEPLOYBOT_TWILIO_TO")),
+		AccountSID: strings.TrimSpace(get("NORI_TWILIO_ACCOUNT_SID")),
+		AuthToken:  get("NORI_TWILIO_AUTH_TOKEN"),
+		From:       strings.TrimSpace(get("NORI_TWILIO_FROM")),
+		To:         strings.TrimSpace(get("NORI_TWILIO_TO")),
 	}
 	// Treat "all empty" as "intentionally disabled". Any partial set is an
 	// operator error: half-configured Twilio would silently never fire and
@@ -168,28 +171,28 @@ func loadTwilio(get func(string) string) (TwilioConfig, error) {
 	}
 	var missing []string
 	if t.AccountSID == "" {
-		missing = append(missing, "DEPLOYBOT_TWILIO_ACCOUNT_SID")
+		missing = append(missing, "NORI_TWILIO_ACCOUNT_SID")
 	}
 	if t.AuthToken == "" {
-		missing = append(missing, "DEPLOYBOT_TWILIO_AUTH_TOKEN")
+		missing = append(missing, "NORI_TWILIO_AUTH_TOKEN")
 	}
 	if t.From == "" {
-		missing = append(missing, "DEPLOYBOT_TWILIO_FROM")
+		missing = append(missing, "NORI_TWILIO_FROM")
 	}
 	if t.To == "" {
-		missing = append(missing, "DEPLOYBOT_TWILIO_TO")
+		missing = append(missing, "NORI_TWILIO_TO")
 	}
 	if len(missing) > 0 {
 		return TwilioConfig{}, fmt.Errorf(
-			"DEPLOYBOT_TWILIO_* partially configured: missing %s", strings.Join(missing, ", "))
+			"NORI_TWILIO_* partially configured: missing %s", strings.Join(missing, ", "))
 	}
 	return t, nil
 }
 
 func loadTelegram(get func(string) string) (TelegramConfig, error) {
 	t := TelegramConfig{
-		BotToken: get("DEPLOYBOT_TELEGRAM_BOT_TOKEN"),
-		ChatID:   strings.TrimSpace(get("DEPLOYBOT_TELEGRAM_CHAT_ID")),
+		BotToken: get("NORI_TELEGRAM_BOT_TOKEN"),
+		ChatID:   strings.TrimSpace(get("NORI_TELEGRAM_CHAT_ID")),
 	}
 	// Treat "all empty" as "intentionally disabled", mirroring Twilio: a
 	// half-configured channel would silently never fire and defeat the
@@ -199,20 +202,20 @@ func loadTelegram(get func(string) string) (TelegramConfig, error) {
 	}
 	var missing []string
 	if t.BotToken == "" {
-		missing = append(missing, "DEPLOYBOT_TELEGRAM_BOT_TOKEN")
+		missing = append(missing, "NORI_TELEGRAM_BOT_TOKEN")
 	}
 	if t.ChatID == "" {
-		missing = append(missing, "DEPLOYBOT_TELEGRAM_CHAT_ID")
+		missing = append(missing, "NORI_TELEGRAM_CHAT_ID")
 	}
 	if len(missing) > 0 {
 		return TelegramConfig{}, fmt.Errorf(
-			"DEPLOYBOT_TELEGRAM_* partially configured: missing %s", strings.Join(missing, ", "))
+			"NORI_TELEGRAM_* partially configured: missing %s", strings.Join(missing, ", "))
 	}
 	return t, nil
 }
 
 func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
+	if v := envcompat.Get(k); v != "" {
 		return v
 	}
 	return def

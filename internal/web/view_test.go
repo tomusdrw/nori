@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/docker"
+	"nori/internal/docker"
 )
 
 func TestRepoOf(t *testing.T) {

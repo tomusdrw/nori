@@ -4,19 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/store"
+	"nori/internal/docker"
+	"nori/internal/envcompat"
+	"nori/internal/store"
 )
 
 // initializeSelfService only runs in launcher-managed installations. It seeds
 // the managed self-service before polling begins, then resolves any handoff
 // left running by the instance that was just replaced.
 func initializeSelfService(ctx context.Context, st *store.Store, dk docker.Client) error {
-	image := os.Getenv("DEPLOYBOT_SELF_IMAGE")
-	configVolume := os.Getenv("DEPLOYBOT_CONFIG_VOLUME")
-	containerName := os.Getenv("DEPLOYBOT_SELF_CONTAINER")
+	image := envcompat.Get("NORI_SELF_IMAGE")
+	configVolume := envcompat.Get("NORI_CONFIG_VOLUME")
+	containerName := envcompat.Get("NORI_SELF_CONTAINER")
 	if image == "" && configVolume == "" && containerName == "" {
 		return nil
 	}

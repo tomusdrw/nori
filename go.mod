@@ -1,4 +1,4 @@
-module deploybot
+module nori
 
 go 1.25.0
 

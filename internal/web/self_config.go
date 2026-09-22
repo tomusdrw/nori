@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 func (s *Server) saveSelfConfig(ctx context.Context, svc, previous *store.Service, content string) error {

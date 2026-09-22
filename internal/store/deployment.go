@@ -77,7 +77,7 @@ func (s *Store) ListDeployments(ctx context.Context, serviceID int64, limit int)
 }
 
 // ReconcileSelfDeployments resolves handoffs that were intentionally left
-// running while the old deploybot process was replaced. A deployment is only
+// running while the old nori process was replaced. A deployment is only
 // successful when the newly running container reports its target digest.
 func (s *Store) ReconcileSelfDeployments(ctx context.Context, runningDigest string) error {
 	self, err := s.GetSelfService(ctx)

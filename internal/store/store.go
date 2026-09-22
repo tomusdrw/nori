@@ -15,7 +15,7 @@ import (
 // busy_timeout=0, which turns concurrent writes into instant SQLITE_BUSY, and
 // foreign_keys=OFF, which silently skips ON DELETE CASCADE.
 // The path is carried as an opaque URI part so it never grows a "//" authority,
-// which would make SQLite read a relative path like "deploybot.db" as a hostname.
+// which would make SQLite read a relative path like "nori.db" as a hostname.
 func dsn(path string) string {
 	u := url.URL{
 		Scheme:   "file",

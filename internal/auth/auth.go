@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	sessionCookie = "deploybot_session"
-	csrfCookie    = "deploybot_csrf"
+	sessionCookie = "nori_session"
+	csrfCookie    = "nori_csrf"
 	sessionTTL    = 24 * time.Hour
 	rememberTTL   = 30 * 24 * time.Hour
 )

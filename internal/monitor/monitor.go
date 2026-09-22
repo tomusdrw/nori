@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/notify"
-	"deploybot/internal/store"
+	"nori/internal/docker"
+	"nori/internal/notify"
+	"nori/internal/store"
 )
 
 type Monitor struct {

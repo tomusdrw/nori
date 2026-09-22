@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -41,7 +43,7 @@ func TestUpBootstrapsOnceAndReusesExistingSecrets(t *testing.T) {
 			return "admin-password", nil
 		},
 	}
-	opts := UpOptions{Image: "ghcr.io/acme/deploybot:latest"}
+	opts := UpOptions{Image: "ghcr.io/acme/nori:latest"}
 	if err := l.Up(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +62,11 @@ func TestUpBootstrapsOnceAndReusesExistingSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := dotenvValues(t, string(env))
-	key, err := base64.StdEncoding.DecodeString(values["DEPLOYBOT_KEY"])
+	key, err := base64.StdEncoding.DecodeString(values["NORI_KEY"])
 	if err != nil || len(key) != 32 {
-		t.Fatalf("DEPLOYBOT_KEY = %q, decoded=%d, err=%v", values["DEPLOYBOT_KEY"], len(key), err)
+		t.Fatalf("NORI_KEY = %q, decoded=%d, err=%v", values["NORI_KEY"], len(key), err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(values["DEPLOYBOT_ADMIN_HASH"]), []byte("admin-password")); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(values["NORI_ADMIN_HASH"]), []byte("admin-password")); err != nil {
 		t.Fatalf("admin hash did not match prompted password: %v", err)
 	}
 	before := string(env)
@@ -88,21 +90,73 @@ func TestUpBootstrapsOnceAndReusesExistingSecrets(t *testing.T) {
 	if len(runner.calls) != 4 { // rm/run for first boot, then rm/run again
 		t.Fatalf("docker calls = %v", runner.calls)
 	}
-	assertContainsArgs(t, runner.calls[1], "DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/deploybot:latest")
-	assertContainsArgs(t, runner.calls[1], "deploybot-config:/config")
+	assertContainsArgs(t, runner.calls[1], "NORI_SELF_IMAGE=ghcr.io/acme/nori:latest")
+	assertContainsArgs(t, runner.calls[1], "nori-config:/config")
+}
+
+func TestLoadMigratesLegacyEnvironmentFilename(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	if err := l.writeSpec(testRunSpec()); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(l.ConfigDir, "deploybot.env")
+	if err := os.WriteFile(legacyPath, []byte("DEPLOYBOT_KEY=legacy-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := l.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	data, err := os.ReadFile(l.envPath())
+	if err != nil {
+		t.Fatalf("read migrated environment: %v", err)
+	}
+	if string(data) != "DEPLOYBOT_KEY=legacy-secret\n" {
+		t.Fatalf("migrated environment = %q", data)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy environment still exists: %v", err)
+	}
+}
+
+func TestLoadMigratesLegacySelfLabel(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	spec := testRunSpec()
+	spec.Labels = map[string]string{"deploybot.service": "deploybot"}
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(l.runSpecPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(l.envPath(), []byte("NORI_KEY=test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := l.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Labels["nori.service"] != "nori" {
+		t.Fatalf("migrated labels = %+v", loaded.Labels)
+	}
+	if _, ok := loaded.Labels["deploybot.service"]; ok {
+		t.Fatalf("legacy label was retained: %+v", loaded.Labels)
+	}
 }
 
 func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
 	runner := &fakeRunner{}
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
 	writeTestConfig(t, l, RunSpec{
-		Image:              "ghcr.io/acme/deploybot:latest",
-		ContainerName:      "deploybot",
+		Image:              "ghcr.io/acme/nori:latest",
+		ContainerName:      "nori",
 		Ports:              []string{"8080:8080"},
-		Volumes:            []string{"/var/run/docker.sock:/var/run/docker.sock", "deploybot-data:/data", "deploybot-config:/config"},
-		Labels:             map[string]string{"deploybot.service": "deploybot"},
+		Volumes:            []string{"/var/run/docker.sock:/var/run/docker.sock", "nori-data:/data", "nori-config:/config"},
+		Labels:             map[string]string{"nori.service": "nori"},
 		Restart:            "unless-stopped",
-		ConfigVolume:       "deploybot-config",
+		ConfigVolume:       "nori-config",
 		CurrentImageDigest: "sha256:old",
 	})
 	if err := l.Update(context.Background(), "sha256:new"); err != nil {
@@ -112,17 +166,17 @@ func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
 		t.Fatalf("calls = %v", runner.calls)
 	}
 	wantPrefixes := [][]string{
-		{"docker", "pull", "ghcr.io/acme/deploybot:latest@sha256:new"},
-		{"docker", "stop", "deploybot"},
-		{"docker", "rm", "deploybot"},
-		{"docker", "run", "-d", "--name", "deploybot"},
+		{"docker", "pull", "ghcr.io/acme/nori:latest@sha256:new"},
+		{"docker", "stop", "nori"},
+		{"docker", "rm", "nori"},
+		{"docker", "run", "-d", "--name", "nori"},
 	}
 	for i, want := range wantPrefixes {
 		if got := runner.calls[i]; len(got) < len(want) || !equal(got[:len(want)], want) {
 			t.Fatalf("call %d = %v, want prefix %v", i, got, want)
 		}
 	}
-	assertContainsArgs(t, runner.calls[3], "ghcr.io/acme/deploybot:latest@sha256:new")
+	assertContainsArgs(t, runner.calls[3], "ghcr.io/acme/nori:latest@sha256:new")
 	spec, err := l.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -134,8 +188,8 @@ func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
 
 func TestUpdateDiscoversPreviousDigestOnFirstSwap(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string]string{
-		"docker inspect --format {{.Image}} deploybot":                           "sha256:image-id\n",
-		"docker image inspect --format {{index .RepoDigests 0}} sha256:image-id": "ghcr.io/acme/deploybot@sha256:old\n",
+		"docker inspect --format {{.Image}} nori":                                "sha256:image-id\n",
+		"docker image inspect --format {{index .RepoDigests 0}} sha256:image-id": "ghcr.io/acme/nori@sha256:old\n",
 	}}
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner}
 	writeTestConfig(t, l, testRunSpec())
@@ -169,7 +223,7 @@ func TestUpPreservesExplicitMigrationKeys(t *testing.T) {
 		},
 	}
 	if err := l.Up(context.Background(), UpOptions{
-		Image:             "ghcr.io/acme/deploybot:latest",
+		Image:             "ghcr.io/acme/nori:latest",
 		EncryptionKey:     key,
 		SessionKey:        sessionKey,
 		AdminPasswordHash: string(hash),
@@ -181,7 +235,7 @@ func TestUpPreservesExplicitMigrationKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := dotenvValues(t, string(env))
-	if values["DEPLOYBOT_KEY"] != key || values["DEPLOYBOT_SESSION_KEY"] != sessionKey || values["DEPLOYBOT_ADMIN_HASH"] != string(hash) {
+	if values["NORI_KEY"] != key || values["NORI_SESSION_KEY"] != sessionKey || values["NORI_ADMIN_HASH"] != string(hash) {
 		t.Fatalf("migration values were not preserved: %+v", values)
 	}
 }
@@ -192,7 +246,7 @@ func TestUpSupportsAndPersistsReverseProxyConfiguration(t *testing.T) {
 	runner := &fakeRunner{}
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner, Random: strings.NewReader("")}
 	if err := l.Up(context.Background(), UpOptions{
-		Image:             "ghcr.io/acme/deploybot:latest",
+		Image:             "ghcr.io/acme/nori:latest",
 		NoPort:            true,
 		Network:           "proxy",
 		Environment:       []string{"VIRTUAL_HOST=deploy.example.com", "VIRTUAL_PORT=8080"},
@@ -235,7 +289,7 @@ func TestUpRepairsExistingConfigurationWithoutRegeneratingSecrets(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\nDEPLOYBOT_ADMIN_HASH="+string(adminHash)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(l.envPath(), []byte("NORI_KEY=test\nNORI_ADMIN_HASH="+string(adminHash)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(l.envPath())
@@ -261,7 +315,7 @@ func TestUpRepairsExistingConfigurationWithoutRegeneratingSecrets(t *testing.T) 
 		t.Fatal(err)
 	}
 	values := dotenvValues(t, string(env))
-	if values["DEPLOYBOT_KEY"] != "test" || values["DEPLOYBOT_ADMIN_HASH"] != string(adminHash) || values["VIRTUAL_HOST"] != "deploy.example.com" || values["VIRTUAL_PORT"] != "8080" {
+	if values["NORI_KEY"] != "test" || values["NORI_ADMIN_HASH"] != string(adminHash) || values["VIRTUAL_HOST"] != "deploy.example.com" || values["VIRTUAL_PORT"] != "8080" {
 		t.Fatalf("updated environment = %+v", values)
 	}
 	if string(before) == string(env) {
@@ -276,7 +330,7 @@ func TestUpBootstrapsWithExtraVolumes(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: runner, Random: strings.NewReader("")}
 	mount := "/home/me/.docker/config.json:/root/.docker/config.json:ro"
 	if err := l.Up(context.Background(), UpOptions{
-		Image:             "ghcr.io/acme/deploybot:latest",
+		Image:             "ghcr.io/acme/nori:latest",
 		Volumes:           []string{mount},
 		EncryptionKey:     key,
 		SessionKey:        sessionKey,
@@ -292,8 +346,8 @@ func TestUpBootstrapsWithExtraVolumes(t *testing.T) {
 		t.Fatalf("extra volume not persisted: %+v", spec.Volumes)
 	}
 	if !contains(spec.Volumes, "/var/run/docker.sock:/var/run/docker.sock") ||
-		!contains(spec.Volumes, "deploybot-config:/config") ||
-		!contains(spec.Volumes, "deploybot-data:/data") {
+		!contains(spec.Volumes, "nori-config:/config") ||
+		!contains(spec.Volumes, "nori-data:/data") {
 		t.Fatalf("mandatory mounts dropped: %+v", spec.Volumes)
 	}
 	assertContainsArgs(t, runner.calls[1], mount)
@@ -314,7 +368,7 @@ func TestUpAddsExtraVolumeToExistingConfig(t *testing.T) {
 	if !contains(spec.Volumes, mount) {
 		t.Fatalf("extra volume not added to existing config: %+v", spec.Volumes)
 	}
-	if !contains(spec.Volumes, "deploybot-config:/config") {
+	if !contains(spec.Volumes, "nori-config:/config") {
 		t.Fatalf("mandatory config mount dropped: %+v", spec.Volumes)
 	}
 	assertContainsArgs(t, runner.calls[1], mount)
@@ -361,7 +415,7 @@ func TestUpdatePreservesExtraVolumes(t *testing.T) {
 func TestUpRejectsInvalidVolume(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}, Random: strings.NewReader("")}
 	err := l.Up(context.Background(), UpOptions{
-		Image:             "ghcr.io/acme/deploybot:latest",
+		Image:             "ghcr.io/acme/nori:latest",
 		Volumes:           []string{"  "},
 		AdminPasswordHash: "already-hashed",
 	})
@@ -376,7 +430,7 @@ func TestUpRejectsInvalidVolume(t *testing.T) {
 func TestUpRejectsPortAndNoPortTogether(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir(), Runner: &fakeRunner{}}
 	err := l.Up(context.Background(), UpOptions{
-		Image:  "ghcr.io/acme/deploybot:latest",
+		Image:  "ghcr.io/acme/nori:latest",
 		Ports:  []string{"8080:8080"},
 		NoPort: true,
 	})
@@ -396,7 +450,7 @@ func TestUpdateKeepsReverseProxyConfiguration(t *testing.T) {
 	spec.Network = "proxy"
 	spec.CurrentImageDigest = "sha256:old"
 	writeTestConfig(t, l, spec)
-	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\nVIRTUAL_HOST=deploy.example.com\nVIRTUAL_PORT=8080\n"), 0o600); err != nil {
+	if err := os.WriteFile(l.envPath(), []byte("NORI_KEY=test\nVIRTUAL_HOST=deploy.example.com\nVIRTUAL_PORT=8080\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(l.envPath())
@@ -434,13 +488,13 @@ func TestUpdateKeepsReverseProxyConfiguration(t *testing.T) {
 func TestEditableEnvironmentHidesLauncherManagedValues(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir()}
 	if err := os.WriteFile(l.envPath(), []byte(
-		"DEPLOYBOT_KEY=encryption-secret\n"+
-			"DEPLOYBOT_SESSION_KEY=session-secret\n"+
-			"DEPLOYBOT_ADMIN_HASH=admin-secret\n"+
-			"DEPLOYBOT_CONFIG_VOLUME=config-volume\n"+
-			"DEPLOYBOT_SELF_CONTAINER=nori\n"+
-			"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
-			"DEPLOYBOT_POLL_INTERVAL=30s\n"+
+		"NORI_KEY=encryption-secret\n"+
+			"NORI_SESSION_KEY=session-secret\n"+
+			"NORI_ADMIN_HASH=admin-secret\n"+
+			"NORI_CONFIG_VOLUME=config-volume\n"+
+			"NORI_SELF_CONTAINER=nori\n"+
+			"NORI_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
+			"NORI_POLL_INTERVAL=30s\n"+
 			"VIRTUAL_HOST=nori.example.com\n",
 	), 0o600); err != nil {
 		t.Fatal(err)
@@ -451,25 +505,25 @@ func TestEditableEnvironmentHidesLauncherManagedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, hidden := range []string{
-		"DEPLOYBOT_KEY",
-		"DEPLOYBOT_SESSION_KEY",
-		"DEPLOYBOT_ADMIN_HASH",
-		"DEPLOYBOT_CONFIG_VOLUME",
-		"DEPLOYBOT_SELF_CONTAINER",
-		"DEPLOYBOT_SELF_IMAGE",
+		"NORI_KEY",
+		"NORI_SESSION_KEY",
+		"NORI_ADMIN_HASH",
+		"NORI_CONFIG_VOLUME",
+		"NORI_SELF_CONTAINER",
+		"NORI_SELF_IMAGE",
 	} {
 		if strings.Contains(content, hidden) {
 			t.Errorf("editable environment exposes protected key %s: %q", hidden, content)
 		}
 	}
-	for _, visible := range []string{"DEPLOYBOT_POLL_INTERVAL=30s", "VIRTUAL_HOST=nori.example.com"} {
+	for _, visible := range []string{"NORI_POLL_INTERVAL=30s", "VIRTUAL_HOST=nori.example.com"} {
 		if !strings.Contains(content, visible) {
 			t.Errorf("editable environment missing %q: %q", visible, content)
 		}
 	}
 }
 
-func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *testing.T) {
+func TestEditableEnvironmentHidesLegacyLauncherManagedValues(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir()}
 	if err := os.WriteFile(l.envPath(), []byte(
 		"DEPLOYBOT_KEY=encryption-secret\n"+
@@ -478,14 +532,40 @@ func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *te
 			"DEPLOYBOT_CONFIG_VOLUME=config-volume\n"+
 			"DEPLOYBOT_SELF_CONTAINER=nori\n"+
 			"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
-			"DEPLOYBOT_POLL_INTERVAL=60s\n"+
+			"CUSTOM_SETTING=visible\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := l.EditableEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "DEPLOYBOT_") {
+		t.Fatalf("editable environment exposes legacy protected values: %q", content)
+	}
+	if !strings.Contains(content, "CUSTOM_SETTING=visible") {
+		t.Fatalf("editable environment omitted user value: %q", content)
+	}
+}
+
+func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *testing.T) {
+	l := &Launcher{ConfigDir: t.TempDir()}
+	if err := os.WriteFile(l.envPath(), []byte(
+		"NORI_KEY=encryption-secret\n"+
+			"NORI_SESSION_KEY=session-secret\n"+
+			"NORI_ADMIN_HASH=admin-secret\n"+
+			"NORI_CONFIG_VOLUME=config-volume\n"+
+			"NORI_SELF_CONTAINER=nori\n"+
+			"NORI_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
+			"NORI_POLL_INTERVAL=60s\n"+
 			"OLD_CUSTOM=value\n",
 	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := l.ReplaceEditableEnvironment(
-		"DEPLOYBOT_POLL_INTERVAL=15s\nVIRTUAL_HOST=nori.example.com\n",
+		"NORI_POLL_INTERVAL=15s\nVIRTUAL_HOST=nori.example.com\n",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -496,14 +576,14 @@ func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *te
 	}
 	values := dotenvValues(t, string(data))
 	for key, want := range map[string]string{
-		"DEPLOYBOT_KEY":            "encryption-secret",
-		"DEPLOYBOT_SESSION_KEY":    "session-secret",
-		"DEPLOYBOT_ADMIN_HASH":     "admin-secret",
-		"DEPLOYBOT_CONFIG_VOLUME":  "config-volume",
-		"DEPLOYBOT_SELF_CONTAINER": "nori",
-		"DEPLOYBOT_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
-		"DEPLOYBOT_POLL_INTERVAL":  "15s",
-		"VIRTUAL_HOST":             "nori.example.com",
+		"NORI_KEY":            "encryption-secret",
+		"NORI_SESSION_KEY":    "session-secret",
+		"NORI_ADMIN_HASH":     "admin-secret",
+		"NORI_CONFIG_VOLUME":  "config-volume",
+		"NORI_SELF_CONTAINER": "nori",
+		"NORI_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
+		"NORI_POLL_INTERVAL":  "15s",
+		"VIRTUAL_HOST":        "nori.example.com",
 	} {
 		if values[key] != want {
 			t.Errorf("%s = %q, want %q", key, values[key], want)
@@ -523,16 +603,16 @@ func TestReplaceEditableEnvironmentPreservesProtectedAndReplacesUserValues(t *te
 
 func TestReplaceEditableEnvironmentRejectsProtectedValuesWithoutChangingFile(t *testing.T) {
 	for _, protected := range []string{
-		"DEPLOYBOT_KEY",
-		"DEPLOYBOT_SESSION_KEY",
-		"DEPLOYBOT_ADMIN_HASH",
-		"DEPLOYBOT_CONFIG_VOLUME",
-		"DEPLOYBOT_SELF_CONTAINER",
-		"DEPLOYBOT_SELF_IMAGE",
+		"NORI_KEY",
+		"NORI_SESSION_KEY",
+		"NORI_ADMIN_HASH",
+		"NORI_CONFIG_VOLUME",
+		"NORI_SELF_CONTAINER",
+		"NORI_SELF_IMAGE",
 	} {
 		t.Run(protected, func(t *testing.T) {
 			l := &Launcher{ConfigDir: t.TempDir()}
-			const original = "DEPLOYBOT_KEY=encryption-secret\nDEPLOYBOT_POLL_INTERVAL=60s\n"
+			const original = "NORI_KEY=encryption-secret\nNORI_POLL_INTERVAL=60s\n"
 			if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -554,12 +634,12 @@ func TestReplaceEditableEnvironmentRejectsProtectedValuesWithoutChangingFile(t *
 
 func TestReplaceEditableEnvironmentEmptyPreservesAllProtectedValues(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir()}
-	const original = "DEPLOYBOT_KEY=encryption-secret\n" +
-		"DEPLOYBOT_SESSION_KEY=session-secret\n" +
-		"DEPLOYBOT_ADMIN_HASH=admin-secret\n" +
-		"DEPLOYBOT_CONFIG_VOLUME=config-volume\n" +
-		"DEPLOYBOT_SELF_CONTAINER=nori\n" +
-		"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n" +
+	const original = "NORI_KEY=encryption-secret\n" +
+		"NORI_SESSION_KEY=session-secret\n" +
+		"NORI_ADMIN_HASH=admin-secret\n" +
+		"NORI_CONFIG_VOLUME=config-volume\n" +
+		"NORI_SELF_CONTAINER=nori\n" +
+		"NORI_SELF_IMAGE=ghcr.io/acme/nori:latest\n" +
 		"VIRTUAL_HOST=nori.example.com\n"
 	if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
 		t.Fatal(err)
@@ -574,12 +654,12 @@ func TestReplaceEditableEnvironmentEmptyPreservesAllProtectedValues(t *testing.T
 	}
 	values := dotenvValues(t, string(data))
 	for key, want := range map[string]string{
-		"DEPLOYBOT_KEY":            "encryption-secret",
-		"DEPLOYBOT_SESSION_KEY":    "session-secret",
-		"DEPLOYBOT_ADMIN_HASH":     "admin-secret",
-		"DEPLOYBOT_CONFIG_VOLUME":  "config-volume",
-		"DEPLOYBOT_SELF_CONTAINER": "nori",
-		"DEPLOYBOT_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
+		"NORI_KEY":            "encryption-secret",
+		"NORI_SESSION_KEY":    "session-secret",
+		"NORI_ADMIN_HASH":     "admin-secret",
+		"NORI_CONFIG_VOLUME":  "config-volume",
+		"NORI_SELF_CONTAINER": "nori",
+		"NORI_SELF_IMAGE":     "ghcr.io/acme/nori:latest",
 	} {
 		if values[key] != want {
 			t.Errorf("%s = %q, want %q", key, values[key], want)
@@ -592,14 +672,14 @@ func TestReplaceEditableEnvironmentEmptyPreservesAllProtectedValues(t *testing.T
 
 func TestReplaceEditableEnvironmentRejectsInvalidRuntimeValuesWithoutChangingFile(t *testing.T) {
 	tests := map[string]string{
-		"invalid duration": "DEPLOYBOT_POLL_INTERVAL=soon\n",
-		"zero duration":    "DEPLOYBOT_MONITOR_INTERVAL=0s\n",
-		"partial Twilio":   "DEPLOYBOT_TWILIO_ACCOUNT_SID=AC123\n",
+		"invalid duration": "NORI_POLL_INTERVAL=soon\n",
+		"zero duration":    "NORI_MONITOR_INTERVAL=0s\n",
+		"partial Twilio":   "NORI_TWILIO_ACCOUNT_SID=AC123\n",
 	}
 	for name, replacement := range tests {
 		t.Run(name, func(t *testing.T) {
 			l := &Launcher{ConfigDir: t.TempDir()}
-			const original = "DEPLOYBOT_KEY=encryption-secret\nDEPLOYBOT_POLL_INTERVAL=60s\n"
+			const original = "NORI_KEY=encryption-secret\nNORI_POLL_INTERVAL=60s\n"
 			if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -648,7 +728,7 @@ func TestUpdateUsesReplacedEditableEnvironmentFile(t *testing.T) {
 
 func TestReplaceEditableEnvironmentDoesNotRewriteUnchangedValues(t *testing.T) {
 	l := &Launcher{ConfigDir: t.TempDir()}
-	const original = "# existing operator note\nVIRTUAL_HOST=nori.example.com\nDEPLOYBOT_KEY=encryption-secret\n"
+	const original = "# existing operator note\nVIRTUAL_HOST=nori.example.com\nNORI_KEY=encryption-secret\n"
 	if err := os.WriteFile(l.envPath(), []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -667,19 +747,19 @@ func TestReplaceEditableEnvironmentDoesNotRewriteUnchangedValues(t *testing.T) {
 
 func testRunSpec() RunSpec {
 	return RunSpec{
-		Image:         "ghcr.io/acme/deploybot:latest",
-		ContainerName: "deploybot",
+		Image:         "ghcr.io/acme/nori:latest",
+		ContainerName: "nori",
 		Ports:         []string{"8080:8080"},
-		Volumes:       []string{"/var/run/docker.sock:/var/run/docker.sock", "deploybot-data:/data", "deploybot-config:/config"},
-		Labels:        map[string]string{"deploybot.service": "deploybot"},
+		Volumes:       []string{"/var/run/docker.sock:/var/run/docker.sock", "nori-data:/data", "nori-config:/config"},
+		Labels:        map[string]string{"nori.service": "nori"},
 		Restart:       "unless-stopped",
-		ConfigVolume:  "deploybot-config",
+		ConfigVolume:  "nori-config",
 	}
 }
 
 func writeTestConfig(t *testing.T, l *Launcher, spec RunSpec) {
 	t.Helper()
-	if err := os.WriteFile(l.envPath(), []byte("DEPLOYBOT_KEY=test\n"), 0o600); err != nil {
+	if err := os.WriteFile(l.envPath(), []byte("NORI_KEY=test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.writeSpec(spec); err != nil {
