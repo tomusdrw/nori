@@ -268,7 +268,7 @@ func newSelfServiceServer(t *testing.T) (*store.Store, *store.Service, *Server, 
 	latest := func(context.Context, string) (string, error) { return "sha256:new", nil }
 	ex := executor.New(st, &executor.OSRunner{}, latest, 0)
 	pl := poller.New(st, latest, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{})
 	return st, self, srv, loginCookies(t, srv), dbPath
 }
 

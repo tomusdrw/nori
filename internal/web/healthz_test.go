@@ -27,7 +27,7 @@ func TestHealthz_Unauthenticated(t *testing.T) {
 	latest := func(context.Context, string) (string, error) { return "", nil }
 	ex := executor.New(st, &executor.OSRunner{}, latest, 0)
 	pl := poller.New(st, latest, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{})
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()

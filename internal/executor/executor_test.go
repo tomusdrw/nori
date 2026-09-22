@@ -539,72 +539,6 @@ func TestExecutor_SuccessFiresSuccessNotifier(t *testing.T) {
 	}
 }
 
-func TestExecutor_SuccessModeNeverSuppressesAllTriggers(t *testing.T) {
-	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
-		t.Run(trigger, func(t *testing.T) {
-			st := openTestStore(t)
-			ctx := context.Background()
-			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeNever)); err != nil {
-				t.Fatal(err)
-			}
-			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
-			if err := st.CreateService(ctx, svc); err != nil {
-				t.Fatal(err)
-			}
-			cap := &capturingNotifier{}
-			ex := New(st, &fakeRunner{log: "ok"},
-				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
-			ex.SetNotifier(cap)
-
-			id, err := ex.Deploy(ctx, svc.ID, trigger)
-			if err != nil {
-				t.Fatalf("Deploy: %v", err)
-			}
-			waitForSuccess(t, st, ctx, id)
-			if got := cap.snapshot(); len(got) != 0 {
-				t.Fatalf("mode=never must suppress %s success; got %+v", trigger, got)
-			}
-		})
-	}
-}
-
-func TestExecutor_SuccessModeAutoOnlySuppressesManualOnly(t *testing.T) {
-	cases := []struct {
-		trigger string
-		want    int
-	}{
-		{store.TriggerManual, 0},
-		{store.TriggerAuto, 1},
-		{store.TriggerScheduled, 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.trigger, func(t *testing.T) {
-			st := openTestStore(t)
-			ctx := context.Background()
-			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAutoOnly)); err != nil {
-				t.Fatal(err)
-			}
-			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
-			if err := st.CreateService(ctx, svc); err != nil {
-				t.Fatal(err)
-			}
-			cap := &capturingNotifier{}
-			ex := New(st, &fakeRunner{log: "ok"},
-				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
-			ex.SetNotifier(cap)
-
-			id, err := ex.Deploy(ctx, svc.ID, tc.trigger)
-			if err != nil {
-				t.Fatalf("Deploy: %v", err)
-			}
-			waitForSuccess(t, st, ctx, id)
-			if got := len(cap.snapshot()); got != tc.want {
-				t.Fatalf("mode=auto-only trigger=%s: got %d events, want %d", tc.trigger, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestDeploy_SelfHandoffSuccessDoesNotNotify(t *testing.T) {
 	t.Setenv("NORI_CONFIG_VOLUME", "nori-config")
 	t.Setenv("NORI_SELF_IMAGE", "image")
@@ -687,105 +621,15 @@ func waitForFailure(t *testing.T, st *store.Store, ctx context.Context, id int64
 	t.Fatal("deploy did not finish as failed")
 }
 
-func TestExecutor_ModeNeverSuppressesAllTriggers(t *testing.T) {
-	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
-		t.Run(trigger, func(t *testing.T) {
-			st := openTestStore(t)
-			ctx := context.Background()
-			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeNever)); err != nil {
-				t.Fatal(err)
-			}
-			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
-			if err := st.CreateService(ctx, svc); err != nil {
-				t.Fatal(err)
-			}
-			cap := &capturingNotifier{}
-			ex := New(st, &fakeRunner{err: errors.New("boom")},
-				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
-			ex.SetNotifier(cap)
-
-			id, err := ex.Deploy(ctx, svc.ID, trigger)
-			if err != nil {
-				t.Fatalf("Deploy: %v", err)
-			}
-			waitForFailure(t, st, ctx, id)
-			if got := cap.snapshot(); len(got) != 0 {
-				t.Fatalf("mode=never must suppress %s trigger; got %+v", trigger, got)
-			}
-		})
-	}
-}
-
-func TestExecutor_ModeAutoOnlySuppressesManualOnly(t *testing.T) {
-	cases := []struct {
-		trigger string
-		want    int
-	}{
-		{store.TriggerManual, 0},
-		{store.TriggerAuto, 1},
-		{store.TriggerScheduled, 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.trigger, func(t *testing.T) {
-			st := openTestStore(t)
-			ctx := context.Background()
-			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAutoOnly)); err != nil {
-				t.Fatal(err)
-			}
-			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
-			if err := st.CreateService(ctx, svc); err != nil {
-				t.Fatal(err)
-			}
-			cap := &capturingNotifier{}
-			ex := New(st, &fakeRunner{err: errors.New("boom")},
-				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
-			ex.SetNotifier(cap)
-
-			id, err := ex.Deploy(ctx, svc.ID, tc.trigger)
-			if err != nil {
-				t.Fatalf("Deploy: %v", err)
-			}
-			waitForFailure(t, st, ctx, id)
-			if got := len(cap.snapshot()); got != tc.want {
-				t.Fatalf("mode=auto-only trigger=%s: got %d events, want %d", tc.trigger, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestExecutor_ModeAlwaysFiresForAllTriggers(t *testing.T) {
-	for _, trigger := range []string{store.TriggerManual, store.TriggerAuto, store.TriggerScheduled} {
-		t.Run(trigger, func(t *testing.T) {
-			st := openTestStore(t)
-			ctx := context.Background()
-			if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAlways)); err != nil {
-				t.Fatal(err)
-			}
-			svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
-			if err := st.CreateService(ctx, svc); err != nil {
-				t.Fatal(err)
-			}
-			cap := &capturingNotifier{}
-			ex := New(st, &fakeRunner{err: errors.New("boom")},
-				func(context.Context, string) (string, error) { return "sha256:x", nil }, 0)
-			ex.SetNotifier(cap)
-
-			id, err := ex.Deploy(ctx, svc.ID, trigger)
-			if err != nil {
-				t.Fatalf("Deploy: %v", err)
-			}
-			waitForFailure(t, st, ctx, id)
-			if got := len(cap.snapshot()); got != 1 {
-				t.Fatalf("mode=always trigger=%s: got %d events, want 1", trigger, got)
-			}
-		})
-	}
-}
-
-func TestExecutor_UnsetModeDefaultsToAlways(t *testing.T) {
+// TestExecutor_AlertsAreNotGatedByLegacyMode locks in that the executor
+// forwards events unconditionally: suppression lives in the notifier chain
+// (notify.Route), not here. A stored legacy notify_mode must not gate it.
+func TestExecutor_AlertsAreNotGatedByLegacyMode(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
-	// Intentionally do NOT set SettingNotifyMode.
+	if err := st.SetSetting(ctx, store.SettingNotifyMode, "never"); err != nil {
+		t.Fatal(err)
+	}
 	svc := &store.Service{Name: "app", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "exit 1"}
 	if err := st.CreateService(ctx, svc); err != nil {
 		t.Fatal(err)
@@ -800,8 +644,8 @@ func TestExecutor_UnsetModeDefaultsToAlways(t *testing.T) {
 		t.Fatalf("Deploy: %v", err)
 	}
 	waitForFailure(t, st, ctx, id)
-	if got := len(cap.snapshot()); got != 1 {
-		t.Fatalf("unset mode must default to always: got %d events, want 1", got)
+	if got := cap.snapshot(); len(got) != 1 {
+		t.Fatalf("executor must forward alerts regardless of stored mode; got %+v", got)
 	}
 }
 

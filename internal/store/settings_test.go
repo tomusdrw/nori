@@ -37,3 +37,17 @@ func TestNormalizeBotName(t *testing.T) {
 		t.Fatalf("too long: got %v", err)
 	}
 }
+
+func TestNotifyRoutingRaw(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	if got := st.NotifyRoutingRaw(ctx); got != "" {
+		t.Fatalf("unset NotifyRoutingRaw = %q, want empty", got)
+	}
+	if err := st.SetSetting(ctx, SettingNotifyRouting, `{"twilio":{"down":true}}`); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if got := st.NotifyRoutingRaw(ctx); got != `{"twilio":{"down":true}}` {
+		t.Fatalf("NotifyRoutingRaw = %q, want the stored JSON", got)
+	}
+}

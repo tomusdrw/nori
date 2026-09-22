@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,7 +29,7 @@ func TestSettings_CustomBotNameInTitleAndBrand(t *testing.T) {
 	a, _ := auth.New(hash, make([]byte, 32))
 	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
 	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{})
 
 	cookies := loginCookies(t, srv)
 
@@ -63,7 +64,7 @@ func TestSettings_CustomBotNameInTitleAndBrand(t *testing.T) {
 	}
 }
 
-func TestSettings_NotificationModeDefaultsToAlways(t *testing.T) {
+func TestSettings_NotificationMatrixDefaultsToAllEvents(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -73,17 +74,23 @@ func TestSettings_NotificationModeDefaultsToAlways(t *testing.T) {
 	a, _ := auth.New(hash, make([]byte, 32))
 	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
 	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{Twilio: true, Telegram: true})
 	cookies := loginCookies(t, srv)
 
 	body := getAuthed(t, srv, cookies, "/settings")
-	// "always" must be the pre-selected option when nothing is stored yet.
-	if !strings.Contains(body, `<option value="always" selected`) {
-		t.Fatalf("expected 'always' to be selected by default; body snippet:\n%s", substring(body, "notify-mode"))
+	// A fresh install routes every event to every configured channel,
+	// matching the historical default behavior.
+	for _, ch := range []string{"twilio", "telegram"} {
+		for _, kind := range []string{"down", "recovered", "success"} {
+			want := fmt.Sprintf(`name="notify_%s_%s" value="1" checked`, ch, kind)
+			if !strings.Contains(body, want) {
+				t.Fatalf("expected %s/%s checked by default; snippet:\n%s", ch, kind, substring(body, "notify_"+ch+"_"+kind))
+			}
+		}
 	}
 }
 
-func TestSettings_PostPersistsNotificationMode(t *testing.T) {
+func TestSettings_ShowsChannelConfigurationStatus(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -93,28 +100,146 @@ func TestSettings_PostPersistsNotificationMode(t *testing.T) {
 	a, _ := auth.New(hash, make([]byte, 32))
 	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
 	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{Twilio: true, Telegram: false})
 	cookies := loginCookies(t, srv)
+
+	body := getAuthed(t, srv, cookies, "/settings")
+	if !strings.Contains(body, "Configured") {
+		t.Fatal("expected a Configured badge for the Twilio channel")
+	}
+	if !strings.Contains(body, "Not configured") {
+		t.Fatal("expected a Not configured badge for the Telegram channel")
+	}
+	// Checkboxes of unconfigured channels render disabled so a configured
+	// look cannot deceive, and disabled inputs cannot submit values.
+	if !strings.Contains(body, `name="notify_telegram_down" value="1" disabled`) {
+		t.Fatalf("expected telegram checkboxes disabled; snippet:\n%s", substring(body, "notify_telegram_down"))
+	}
+}
+
+func TestSettings_MatrixReflectsStoredRouting(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	hash, _ := auth.HashPassword("test")
+	a, _ := auth.New(hash, make([]byte, 32))
+	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
+	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{Twilio: true, Telegram: true})
+	cookies := loginCookies(t, srv)
+
+	if err := st.SetSetting(context.Background(), store.SettingNotifyRouting,
+		`{"twilio":{"down":true,"recovered":false,"success":false},"telegram":{"down":false,"recovered":false,"success":true}}`); err != nil {
+		t.Fatal(err)
+	}
+	body := getAuthed(t, srv, cookies, "/settings")
+	if !strings.Contains(body, `name="notify_twilio_down" value="1" checked`) {
+		t.Fatal("expected twilio/down checked")
+	}
+	if strings.Contains(body, `name="notify_twilio_recovered" value="1" checked`) {
+		t.Fatal("expected twilio/recovered unchecked")
+	}
+	if strings.Contains(body, `name="notify_telegram_down" value="1" checked`) {
+		t.Fatal("expected telegram/down unchecked")
+	}
+	if !strings.Contains(body, `name="notify_telegram_success" value="1" checked`) {
+		t.Fatal("expected telegram/success checked")
+	}
+}
+
+func TestSettings_MatrixFallsBackToLegacyMode(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	hash, _ := auth.HashPassword("test")
+	a, _ := auth.New(hash, make([]byte, 32))
+	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
+	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{Twilio: true, Telegram: true})
+	cookies := loginCookies(t, srv)
+
+	// An installation that had opted out via the legacy mode stays opted out
+	// until the routing table is saved for the first time.
+	if err := st.SetSetting(context.Background(), store.SettingNotifyMode, "never"); err != nil {
+		t.Fatal(err)
+	}
+	body := getAuthed(t, srv, cookies, "/settings")
+	if strings.Contains(body, `name="notify_twilio_down" value="1" checked`) {
+		t.Fatal("legacy never must render all checkboxes unchecked")
+	}
+	if strings.Contains(body, `name="notify_telegram_success" value="1" checked`) {
+		t.Fatal("legacy never must render all checkboxes unchecked")
+	}
+}
+
+func TestSettings_PostPersistsRoutingAndClearsLegacyMode(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	hash, _ := auth.HashPassword("test")
+	a, _ := auth.New(hash, make([]byte, 32))
+	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
+	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{Twilio: true, Telegram: true})
+	cookies := loginCookies(t, srv)
+
+	// A legacy choice exists from before the upgrade.
+	if err := st.SetSetting(context.Background(), store.SettingNotifyMode, "never"); err != nil {
+		t.Fatal(err)
+	}
 
 	csrf := csrfFromBody(getAuthed(t, srv, cookies, "/settings"))
 	form := url.Values{
-		"csrf_token":  {csrf},
-		"bot_name":    {"Nori"},
-		"notify_mode": {"auto-only"},
+		"csrf_token":                {csrf},
+		"bot_name":                  {"Nori"},
+		"notify_twilio_down":        {"1"},
+		"notify_twilio_recovered":   {"1"},
+		"notify_telegram_recovered": {"1"},
+		"notify_telegram_success":   {"1"},
 	}
 	postAuthed(t, srv, cookies, "/settings", form.Encode())
 
-	if got := st.NotifyMode(context.Background()); got != "auto-only" {
-		t.Fatalf("NotifyMode = %q, want auto-only", got)
+	raw := st.NotifyRoutingRaw(context.Background())
+	if raw == "" {
+		t.Fatal("POST must persist the routing table")
+	}
+	routing, err := notify.ParseRouting(raw)
+	if err != nil {
+		t.Fatalf("stored routing must parse: %v", err)
+	}
+	if !routing.Allowed("twilio", "down") || !routing.Allowed("twilio", "recovered") {
+		t.Errorf("twilio down/recovered must be on: %v", raw)
+	}
+	if routing.Allowed("twilio", "success") {
+		t.Errorf("twilio success was unchecked: %v", raw)
+	}
+	if routing.Allowed("telegram", "down") {
+		t.Errorf("telegram down was unchecked: %v", raw)
+	}
+	if !routing.Allowed("telegram", "recovered") || !routing.Allowed("telegram", "success") {
+		t.Errorf("telegram recovered/success must be on: %v", raw)
+	}
+	if got := st.NotifyMode(context.Background()); got != "" {
+		t.Fatalf("saving routing must clear the legacy notify_mode; got %q", got)
 	}
 
+	// The saved matrix renders back with exactly the saved state.
 	body := getAuthed(t, srv, cookies, "/settings")
-	if !strings.Contains(body, `<option value="auto-only" selected`) {
-		t.Fatalf("expected auto-only to be selected after save; body snippet:\n%s", substring(body, "notify-mode"))
+	if !strings.Contains(body, `name="notify_twilio_down" value="1" checked`) {
+		t.Fatal("expected twilio/down checked after save")
+	}
+	if strings.Contains(body, `name="notify_twilio_success" value="1" checked`) {
+		t.Fatal("expected twilio/success unchecked after save")
 	}
 }
 
-func TestSettings_PostRejectsInvalidNotificationMode(t *testing.T) {
+func TestSettings_ZeroChannelsSaveKeepsLegacyOptOut(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "settings.db"), make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -124,34 +249,24 @@ func TestSettings_PostRejectsInvalidNotificationMode(t *testing.T) {
 	a, _ := auth.New(hash, make([]byte, 32))
 	ex := executor.New(st, &executor.OSRunner{}, func(context.Context, string) (string, error) { return "", nil }, 0)
 	pl := poller.New(st, func(context.Context, string) (string, error) { return "", nil }, ex, 0)
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a)
+	// No channels are configured: the matrix offers no editable checkboxes,
+	// so a save must not silently discard a legacy opt-out the operator
+	// cannot currently re-express.
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{})
 	cookies := loginCookies(t, srv)
+	if err := st.SetSetting(context.Background(), store.SettingNotifyMode, "never"); err != nil {
+		t.Fatal(err)
+	}
 
 	csrf := csrfFromBody(getAuthed(t, srv, cookies, "/settings"))
-	form := url.Values{
-		"csrf_token":  {csrf},
-		"bot_name":    {"Nori"},
-		"notify_mode": {"txt-me-instead"},
+	form := url.Values{"csrf_token": {csrf}, "bot_name": {"Nori"}}
+	postAuthed(t, srv, cookies, "/settings", form.Encode())
+
+	if got := st.NotifyMode(context.Background()); got != "never" {
+		t.Fatalf("zero-channel save must keep the legacy opt-out; notify_mode = %q", got)
 	}
-	// Invalid mode must NOT 3xx-redirect; it re-renders the form with an error.
-	req := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for _, c := range cookies {
-		req.AddCookie(c)
-	}
-	rr := httptest.NewRecorder()
-	srv.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (re-rendered form)", rr.Code, http.StatusOK)
-	}
-	if !strings.Contains(rr.Body.String(), "Couldn’t save") {
-		t.Fatalf("expected error banner in body; got:\n%s", rr.Body.String())
-	}
-	if got := st.NotifyMode(context.Background()); got != "" {
-		t.Fatalf("invalid mode must not persist; got %q", got)
-	}
-	if _, err := notify.NormalizeMode("txt-me-instead"); err == nil {
-		t.Fatal("NormalizeMode should reject unknown value")
+	if raw := st.NotifyRoutingRaw(context.Background()); raw != "" {
+		t.Fatalf("zero-channel save must not write a routing table; got %q", raw)
 	}
 }
 

@@ -392,15 +392,19 @@ func TestMonitor_SuppressionAcrossEpisodes(t *testing.T) {
 	}
 }
 
-func TestMonitor_ModeNeverSuppresses(t *testing.T) {
+// TestMonitor_AlertsAreNotGatedByLegacyMode locks in that the monitor
+// forwards events unconditionally: per-event suppression lives in the
+// notifier chain (notify.Route), not here. A stored legacy notify_mode must
+// not gate it.
+func TestMonitor_AlertsAreNotGatedByLegacyMode(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	svc := &store.Service{Name: "svc8", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
 	if err := st.CreateService(ctx, svc); err != nil {
 		t.Fatal(err)
 	}
-	// Set mode never
-	if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeNever)); err != nil {
+	// Legacy mode "never" is stored; the monitor must still forward.
+	if err := st.SetSetting(ctx, store.SettingNotifyMode, "never"); err != nil {
 		t.Fatal(err)
 	}
 	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "exited"}}}}
@@ -408,28 +412,8 @@ func TestMonitor_ModeNeverSuppresses(t *testing.T) {
 	m := New(st, f, n, 10*time.Millisecond)
 	m.Tick(ctx)
 	m.Tick(ctx)
-	if len(n.events) != 0 {
-		t.Fatalf("mode never: expected 0 events, got %d", len(n.events))
-	}
-}
-
-func TestMonitor_ModeAutoOnlySendsWhenMonitor(t *testing.T) {
-	st := openTestStore(t)
-	ctx := context.Background()
-	svc := &store.Service{Name: "svc9", WatchedImage: "img", Policy: store.PolicyManual, DeployScript: "echo ok"}
-	if err := st.CreateService(ctx, svc); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetSetting(ctx, store.SettingNotifyMode, string(notify.ModeAutoOnly)); err != nil {
-		t.Fatal(err)
-	}
-	f := &docker.Fake{Containers: map[string][]docker.Container{svc.Name: {{ID: "c1", Name: "web", State: "exited"}}}}
-	n := &capturingNotifier{}
-	m := New(st, f, n, 20*time.Millisecond)
-	m.Tick(ctx)
-	m.Tick(ctx)
 	if len(n.events) != 1 || n.events[0].Kind != "down" {
-		t.Fatalf("mode auto-only: expected a down event, got %+v", n.events)
+		t.Fatalf("monitor must forward alerts regardless of stored mode; got %+v", n.events)
 	}
 }
 

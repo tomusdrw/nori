@@ -69,7 +69,7 @@ func newTerminalTestServer(t *testing.T, terminal terminalsession.Attacher) (*Se
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(st, &docker.Fake{}, ex, pl, a, terminal)
+	srv := NewServer(st, &docker.Fake{}, ex, pl, a, Channels{}, terminal)
 
 	login := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=test"))

@@ -1,12 +1,15 @@
 package web
 
-import "nori/internal/store"
+import (
+	"nori/internal/notify"
+	"nori/internal/store"
+)
 
-templ SettingsPage(botName string, notifyMode string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig) {
-	@Layout("Settings", csrf, settingsContent(botName, notifyMode, csrf, errMsg, saved, mcpConfig))
+templ SettingsPage(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, channels Channels, routing notify.Routing) {
+	@Layout("Settings", csrf, settingsContent(botName, csrf, errMsg, saved, mcpConfig, channels, routing))
 }
 
-templ settingsContent(botName string, notifyMode string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig) {
+templ settingsContent(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, channels Channels, routing notify.Routing) {
 	<section class="page-heading form-heading">
 		<div>
 			<p class="eyebrow">Instance</p>
@@ -23,7 +26,7 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 	if saved {
 		<div class="alert alert-success" role="status">
 			<strong>Saved</strong>
-			<span>Settings updated. MCP access changes take effect immediately.</span>
+			<span>Settings updated. Notification and MCP access changes take effect immediately.</span>
 		</div>
 	}
 	<form method="post" action="/settings" class="service-form">
@@ -48,20 +51,32 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 			<div class="panel-heading">
 				<div>
 					<h2>Notifications</h2>
-					<p>When to send an SMS when a deploy fails. Requires Twilio to be configured via <code>NORI_TWILIO_*</code> env vars.</p>
+					<p>Choose which events each channel receives. Changes apply to the next event; no restart needed.</p>
 				</div>
 				<span class="step-number">02</span>
 			</div>
-			<div class="form-grid">
-				<div class="field">
-					<label for="notify-mode">SMS on deploy failure</label>
-					<select id="notify-mode" name="notify_mode">
-						<option value="always" selected?={ notifyMode == "always" }>Always (manual + automatic)</option>
-						<option value="auto-only" selected?={ notifyMode == "auto-only" }>Automatic deployments only</option>
-						<option value="never" selected?={ notifyMode == "never" }>Never</option>
-					</select>
-					<span class="field-help">Automatic retries are already deduped per image digest during the failure cooldown; manual deploys are not deduped.</span>
-				</div>
+			<div class="channel-status">
+				@channelStatusRow("Twilio SMS", "NORI_TWILIO_ACCOUNT_SID, NORI_TWILIO_AUTH_TOKEN, NORI_TWILIO_FROM, NORI_TWILIO_TO", channels.Twilio)
+				@channelStatusRow("Telegram", "NORI_TELEGRAM_BOT_TOKEN, NORI_TELEGRAM_CHAT_ID", channels.Telegram)
+			</div>
+			<div class="table-wrap notify-matrix-wrap">
+				<table class="notify-matrix">
+					<thead>
+						<tr>
+							<th scope="col">Event</th>
+							<th scope="col">Twilio SMS</th>
+							<th scope="col">Telegram</th>
+						</tr>
+					</thead>
+					<tbody>
+						@notifyMatrixRow("Deploy failed", notify.KindDown, routing, channels)
+						@notifyMatrixRow("Service recovered", notify.KindRecovered, routing, channels)
+						@notifyMatrixRow("Deploy succeeded", notify.KindSuccess, routing, channels)
+					</tbody>
+				</table>
+			</div>
+			<div class="form-notes">
+				<p class="field-help">Channels are configured through environment variables at startup and cannot be changed here. A channel that is configured later starts with all events enabled.</p>
 			</div>
 		</section>
 		<section class="panel form-panel">
@@ -116,4 +131,35 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 			</form>
 		</section>
 	}
+}
+
+templ channelStatusRow(name string, envVars string, configured bool) {
+	<div class="channel-row">
+		<div class="channel-name">
+			<strong>{ name }</strong>
+			if configured {
+				<span class="badge badge-notify-configured">Configured</span>
+			} else {
+				<span class="badge badge-notify-missing">Not configured</span>
+			}
+		</div>
+		if !configured {
+			<p class="field-help">Set <code>{ envVars }</code> and restart Nori to enable this channel.</p>
+		}
+	</div>
+}
+
+templ notifyMatrixRow(label string, kind notify.EventKind, routing notify.Routing, channels Channels) {
+	<tr>
+		<th scope="row">{ label }</th>
+		for _, ch := range notify.Channels {
+			<td>
+				if channels.has(ch) {
+					<input type="checkbox" name={ "notify_" + ch + "_" + string(kind) } value="1" checked?={ routing.Allowed(ch, kind) } aria-label={ label + " via " + ch }/>
+				} else {
+					<input type="checkbox" name={ "notify_" + ch + "_" + string(kind) } value="1" disabled aria-label={ label + " via " + ch }/>
+				}
+			</td>
+		}
+	</tr>
 }

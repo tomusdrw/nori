@@ -309,10 +309,10 @@ image digest, and a failure or recovery reason when applicable. Deployment
 logs and environment values are never included.
 
 Twilio SMS and Telegram are independent channels; either or both can be
-enabled at the same time. Every enabled channel receives the same events,
-subject to the `notify_mode` setting described below. Send failures are
-logged but never fail or delay a deployment, and requests to notification
-providers use bounded timeouts.
+enabled at the same time. The **Settings** page shows whether each channel is
+configured and lets you choose per channel which events it receives. Send
+failures are logged but never fail or delay a deployment, and requests to
+notification providers use bounded timeouts.
 
 ### Twilio SMS
 
@@ -327,9 +327,8 @@ when the service goes down and one recovery SMS when it comes back up. A service
 that is already down when Nori starts alerts once shortly after startup.
 Per-service alerts are throttled to at most one per 15 minutes. Stopping a
 service from the dashboard also counts as down (it is, after all, down);
-starting it again sends the recovery. Monitor alerts respect the same
-`notify_mode` setting as deploy alerts — `auto-only` includes them, `never`
-suppresses them.
+starting it again sends the recovery. Monitor down/recovery events honor the
+same per-channel event routing as deploy alerts.
 
 Each service may also set an optional **Health URL** in its service form. When
 set, the monitor GETs that URL on every check and the service only counts as
@@ -376,24 +375,26 @@ Messages are delivered through Telegram's `sendMessage` Bot API with a bounded
 HTTP timeout. The bot token and chat ID are never written to logs, and API
 errors are logged without their secret material.
 
-### Notification mode
+### Event routing
 
-The **Settings** page exposes an in-app toggle that further controls when
-notifications are sent, independent of which channels are configured:
+The **Settings** page shows whether each channel is configured (channels are
+wired through environment variables at startup, so this is read-only status)
+and a checkbox matrix that routes each event kind — deploy failed, service
+recovered, deploy succeeded — to each channel independently. For example,
+keep the chatty deploy-success messages on Telegram only, while failures and
+recoveries also go out as SMS. Changes take effect on the next event; no
+restart needed. Clearing every checkbox for a channel silences it completely.
+(The distinction matters only when editing the stored table by hand: a channel
+missing from it delivers all events, while one present with every event off
+delivers none.)
 
-| Mode | Behavior |
-|------|----------|
-| `always` (default) | Notify on every deployment success and failure, and on monitor down/recovery events. |
-| `auto-only` | Suppress notifications for manually triggered deploys. Automatic, scheduled, and monitor events still send. |
-| `never` | Suppress all notifications. |
-
-The toggle takes effect on the next deploy; no restart needed. It only has an
-effect when at least one channel is configured.
-
-Note for existing installations: successful deployments now notify too. If you
-run with `always` (the default) and a channel configured, upgrading sends a
-message for every deploy — switch to `auto-only` if manual redeploy noise
-bothers you, or `never` to keep the old failure-only behavior.
+Channels configured but never touched in Settings deliver all events (the
+historical default). A channel that appears later — say you add the Telegram
+env vars after running with Twilio for a while — also starts with all events
+enabled. If an installation had previously used the old `notify_mode` toggle,
+its value is honored until the routing matrix is saved for the first time:
+`never` keeps everything silenced, `always` and `auto-only` map to all events
+enabled (the manual/auto distinction is retired).
 
 ## MCP agent access
 
