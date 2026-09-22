@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"os"
 	"os/exec"
@@ -24,20 +23,17 @@ import (
 	"golang.org/x/term"
 	"nori/internal/auth"
 	"nori/internal/config"
-	"nori/internal/envcompat"
 )
 
 const (
 	DefaultConfigDir    = "/config"
 	RunSpecFilename     = "run.json"
 	EnvFilename         = "nori.env"
-	legacyEnvFilename   = "deploybot.env"
 	DefaultConfigVolume = "nori-config"
 	DefaultDataVolume   = "nori-data"
 	DefaultContainer    = "nori"
 	DefaultPort         = "8080:8080"
 	serviceLabel        = "nori.service"
-	legacyServiceLabel  = "deploybot.service"
 )
 
 var validEnvironmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -150,25 +146,6 @@ func (l *Launcher) random() io.Reader {
 
 func (l *Launcher) runSpecPath() string { return filepath.Join(l.configDir(), RunSpecFilename) }
 func (l *Launcher) envPath() string     { return filepath.Join(l.configDir(), EnvFilename) }
-func (l *Launcher) legacyEnvPath() string {
-	return filepath.Join(l.configDir(), legacyEnvFilename)
-}
-
-func (l *Launcher) migrateLegacyEnvironment() error {
-	if _, err := os.Stat(l.envPath()); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if _, err := os.Stat(l.legacyEnvPath()); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	log.Printf("warning: %s is deprecated; migrating launcher environment to %s", legacyEnvFilename, EnvFilename)
-	return os.Rename(l.legacyEnvPath(), l.envPath())
-}
 
 // Up starts nori from existing launcher configuration, or performs the
 // interactive first bootstrap before starting it. Existing config is never
@@ -260,9 +237,6 @@ func (l *Launcher) Rollback(ctx context.Context) error {
 // the companion environment file, avoiding a half-written bootstrap from
 // silently generating replacement encryption keys.
 func (l *Launcher) Load() (RunSpec, error) {
-	if err := l.migrateLegacyEnvironment(); err != nil {
-		return RunSpec{}, fmt.Errorf("migrate launcher environment: %w", err)
-	}
 	if _, err := os.Stat(l.envPath()); err != nil {
 		return RunSpec{}, fmt.Errorf("launcher environment: %w", err)
 	}
@@ -274,30 +248,13 @@ func (l *Launcher) Load() (RunSpec, error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return RunSpec{}, fmt.Errorf("parse launcher run spec: %w", err)
 	}
-	migratedLabel := false
-	if spec.Labels[legacyServiceLabel] == "deploybot" {
-		delete(spec.Labels, legacyServiceLabel)
-		if _, exists := spec.Labels[serviceLabel]; !exists {
-			spec.Labels[serviceLabel] = "nori"
-		}
-		migratedLabel = true
-	}
 	if err := validateSpec(spec); err != nil {
 		return RunSpec{}, err
-	}
-	if migratedLabel {
-		log.Printf("warning: %s is deprecated; migrating launcher label to %s", legacyServiceLabel, serviceLabel)
-		if err := l.writeSpec(spec); err != nil {
-			return RunSpec{}, fmt.Errorf("migrate launcher run spec: %w", err)
-		}
 	}
 	return spec, nil
 }
 
 func (l *Launcher) configExists() (bool, error) {
-	if err := l.migrateLegacyEnvironment(); err != nil {
-		return false, fmt.Errorf("migrate launcher environment: %w", err)
-	}
 	_, specErr := os.Stat(l.runSpecPath())
 	_, envErr := os.Stat(l.envPath())
 	specExists := specErr == nil
@@ -715,9 +672,7 @@ func validateEnvironmentValue(value string) error {
 
 func isProtectedEnvironmentKey(key string) bool {
 	switch key {
-	case "NORI_KEY", "NORI_SESSION_KEY", "NORI_ADMIN_HASH", "NORI_CONFIG_VOLUME", "NORI_SELF_CONTAINER", "NORI_SELF_IMAGE",
-		envcompat.LegacyName("NORI_KEY"), envcompat.LegacyName("NORI_SESSION_KEY"), envcompat.LegacyName("NORI_ADMIN_HASH"),
-		envcompat.LegacyName("NORI_CONFIG_VOLUME"), envcompat.LegacyName("NORI_SELF_CONTAINER"), envcompat.LegacyName("NORI_SELF_IMAGE"):
+	case "NORI_KEY", "NORI_SESSION_KEY", "NORI_ADMIN_HASH", "NORI_CONFIG_VOLUME", "NORI_SELF_CONTAINER", "NORI_SELF_IMAGE":
 		return true
 	default:
 		return false

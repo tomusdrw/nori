@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"nori/internal/docker"
-	"nori/internal/envcompat"
 	"nori/internal/store"
 )
 
@@ -14,9 +14,9 @@ import (
 // the managed self-service before polling begins, then resolves any handoff
 // left running by the instance that was just replaced.
 func initializeSelfService(ctx context.Context, st *store.Store, dk docker.Client) error {
-	image := envcompat.Get("NORI_SELF_IMAGE")
-	configVolume := envcompat.Get("NORI_CONFIG_VOLUME")
-	containerName := envcompat.Get("NORI_SELF_CONTAINER")
+	image := os.Getenv("NORI_SELF_IMAGE")
+	configVolume := os.Getenv("NORI_CONFIG_VOLUME")
+	containerName := os.Getenv("NORI_SELF_CONTAINER")
 	if image == "" && configVolume == "" && containerName == "" {
 		return nil
 	}

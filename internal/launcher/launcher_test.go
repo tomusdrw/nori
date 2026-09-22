@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,58 +90,6 @@ func TestUpBootstrapsOnceAndReusesExistingSecrets(t *testing.T) {
 	}
 	assertContainsArgs(t, runner.calls[1], "NORI_SELF_IMAGE=ghcr.io/acme/nori:latest")
 	assertContainsArgs(t, runner.calls[1], "nori-config:/config")
-}
-
-func TestLoadMigratesLegacyEnvironmentFilename(t *testing.T) {
-	l := &Launcher{ConfigDir: t.TempDir()}
-	if err := l.writeSpec(testRunSpec()); err != nil {
-		t.Fatal(err)
-	}
-	legacyPath := filepath.Join(l.ConfigDir, "deploybot.env")
-	if err := os.WriteFile(legacyPath, []byte("DEPLOYBOT_KEY=legacy-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := l.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	data, err := os.ReadFile(l.envPath())
-	if err != nil {
-		t.Fatalf("read migrated environment: %v", err)
-	}
-	if string(data) != "DEPLOYBOT_KEY=legacy-secret\n" {
-		t.Fatalf("migrated environment = %q", data)
-	}
-	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
-		t.Fatalf("legacy environment still exists: %v", err)
-	}
-}
-
-func TestLoadMigratesLegacySelfLabel(t *testing.T) {
-	l := &Launcher{ConfigDir: t.TempDir()}
-	spec := testRunSpec()
-	spec.Labels = map[string]string{"deploybot.service": "deploybot"}
-	data, err := json.Marshal(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(l.runSpecPath(), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(l.envPath(), []byte("NORI_KEY=test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := l.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if loaded.Labels["nori.service"] != "nori" {
-		t.Fatalf("migrated labels = %+v", loaded.Labels)
-	}
-	if _, ok := loaded.Labels["deploybot.service"]; ok {
-		t.Fatalf("legacy label was retained: %+v", loaded.Labels)
-	}
 }
 
 func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
@@ -520,32 +466,6 @@ func TestEditableEnvironmentHidesLauncherManagedValues(t *testing.T) {
 		if !strings.Contains(content, visible) {
 			t.Errorf("editable environment missing %q: %q", visible, content)
 		}
-	}
-}
-
-func TestEditableEnvironmentHidesLegacyLauncherManagedValues(t *testing.T) {
-	l := &Launcher{ConfigDir: t.TempDir()}
-	if err := os.WriteFile(l.envPath(), []byte(
-		"DEPLOYBOT_KEY=encryption-secret\n"+
-			"DEPLOYBOT_SESSION_KEY=session-secret\n"+
-			"DEPLOYBOT_ADMIN_HASH=admin-secret\n"+
-			"DEPLOYBOT_CONFIG_VOLUME=config-volume\n"+
-			"DEPLOYBOT_SELF_CONTAINER=nori\n"+
-			"DEPLOYBOT_SELF_IMAGE=ghcr.io/acme/nori:latest\n"+
-			"CUSTOM_SETTING=visible\n",
-	), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	content, err := l.EditableEnvironment()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(content, "DEPLOYBOT_") {
-		t.Fatalf("editable environment exposes legacy protected values: %q", content)
-	}
-	if !strings.Contains(content, "CUSTOM_SETTING=visible") {
-		t.Fatalf("editable environment omitted user value: %q", content)
 	}
 }
 

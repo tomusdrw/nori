@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"nori/internal/envcompat"
 	"nori/internal/launcher"
 )
 
@@ -17,7 +16,7 @@ func runLauncherCommand(ctx context.Context, args []string) error {
 		return errors.New("launcher command is required")
 	}
 	l := launcher.New()
-	if dir := envcompat.Get("NORI_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv("NORI_CONFIG_DIR"); dir != "" {
 		l.ConfigDir = dir
 	}
 
@@ -39,9 +38,9 @@ func runLauncherCommand(ctx context.Context, args []string) error {
 func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	defaultImage := envcompat.Get("NORI_SELF_IMAGE")
+	defaultImage := os.Getenv("NORI_SELF_IMAGE")
 	if defaultImage == "" {
-		defaultImage = envcompat.Get("NORI_IMAGE")
+		defaultImage = os.Getenv("NORI_IMAGE")
 	}
 	image := fs.String("image", defaultImage, "nori image to run (required on first boot)")
 	configVolume := fs.String("config-volume", envOr("NORI_CONFIG_VOLUME", launcher.DefaultConfigVolume), "external Docker volume mounted at /config")
@@ -49,9 +48,9 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 	dataVolume := fs.String("data-volume", envOr("NORI_DATA_VOLUME", launcher.DefaultDataVolume), "external Docker volume mounted at /data")
 	noPort := fs.Bool("no-port", false, "do not publish a host port (for reverse proxies)")
 	network := fs.String("network", "", "Docker network for the nori container")
-	encryptionKey := fs.String("key", envcompat.Get("NORI_KEY"), "existing base64 encryption key (migration only)")
-	sessionKey := fs.String("session-key", envcompat.Get("NORI_SESSION_KEY"), "existing base64 session key (migration only)")
-	adminHash := fs.String("admin-password-hash", envcompat.Get("NORI_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
+	encryptionKey := fs.String("key", os.Getenv("NORI_KEY"), "existing base64 encryption key (migration only)")
+	sessionKey := fs.String("session-key", os.Getenv("NORI_SESSION_KEY"), "existing base64 session key (migration only)")
+	adminHash := fs.String("admin-password-hash", os.Getenv("NORI_ADMIN_HASH"), "bcrypt admin password hash for non-interactive bootstrap")
 	var ports stringList
 	fs.Var(&ports, "port", "host:container port mapping (repeatable)")
 	var volumes stringList
@@ -65,7 +64,7 @@ func runUp(ctx context.Context, l *launcher.Launcher, args []string) error {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
 	if len(ports) == 0 && !*noPort {
-		if port := envcompat.Get("NORI_PORT"); port != "" {
+		if port := os.Getenv("NORI_PORT"); port != "" {
 			ports = append(ports, port+":8080")
 		}
 	}
@@ -113,7 +112,7 @@ func (s *stringList) Set(value string) error {
 }
 
 func envOr(key, fallback string) string {
-	if value := envcompat.Get(key); value != "" {
+	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return fallback

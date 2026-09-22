@@ -1,10 +1,7 @@
 package config
 
 import (
-	"bytes"
 	"encoding/base64"
-	"log"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,62 +23,18 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NORI_ADMIN_HASH", hash)
 }
 
-func setNoriRequiredEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("DEPLOYBOT_KEY", "")
-	t.Setenv("DEPLOYBOT_SESSION_KEY", "")
-	t.Setenv("DEPLOYBOT_ADMIN_HASH", "")
-	t.Setenv("NORI_KEY", validKey())
-	t.Setenv("NORI_SESSION_KEY", validKey())
-	hash, err := auth.HashPassword("test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("NORI_ADMIN_HASH", hash)
-}
-
-func captureWarnings(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var warnings bytes.Buffer
-	original := log.Writer()
-	log.SetOutput(&warnings)
-	t.Cleanup(func() { log.SetOutput(original) })
-	return &warnings
-}
-
-func TestLoad_NoriEnvironmentTakesPrecedence(t *testing.T) {
-	setNoriRequiredEnv(t)
-	t.Setenv("NORI_TERMINAL_DIR", "/srv/nori")
+// TestLoad_IgnoresLegacyEnvironment pins the removal of Deploybot
+// compatibility: DEPLOYBOT_* names are unknown and never take effect.
+func TestLoad_IgnoresLegacyEnvironment(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("DEPLOYBOT_TERMINAL_DIR", "/srv/legacy")
-	warnings := captureWarnings(t)
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.TerminalDir != "/srv/nori" {
-		t.Errorf("TerminalDir = %q, want /srv/nori", cfg.TerminalDir)
-	}
-	if strings.Contains(warnings.String(), "DEPLOYBOT_TERMINAL_DIR") {
-		t.Errorf("legacy variable was not used but produced warning: %s", warnings.String())
-	}
-}
-
-func TestLoad_LegacyEnvironmentWarns(t *testing.T) {
-	setNoriRequiredEnv(t)
-	t.Setenv("NORI_TERMINAL_DIR", "")
-	t.Setenv("DEPLOYBOT_TERMINAL_DIR", "/srv/legacy")
-	warnings := captureWarnings(t)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.TerminalDir != "/srv/legacy" {
-		t.Errorf("TerminalDir = %q, want /srv/legacy", cfg.TerminalDir)
-	}
-	if got := warnings.String(); !strings.Contains(got, "DEPLOYBOT_TERMINAL_DIR is deprecated; use NORI_TERMINAL_DIR") {
-		t.Errorf("warning = %q, want legacy and replacement names", got)
+	if cfg.TerminalDir != "." {
+		t.Errorf("TerminalDir = %q, want default %q", cfg.TerminalDir, ".")
 	}
 }
 
@@ -196,28 +149,19 @@ func TestLoad_TelegramEnabledWhenFullyConfigured(t *testing.T) {
 	}
 }
 
-func TestLoad_LegacyTelegramEnvironmentWarns(t *testing.T) {
-	setNoriRequiredEnv(t)
-	t.Setenv("NORI_TELEGRAM_BOT_TOKEN", "")
-	t.Setenv("NORI_TELEGRAM_CHAT_ID", "")
+// TestLoad_IgnoresLegacyTelegramEnvironment pins the removal of Deploybot
+// compatibility for notification settings: legacy names stay disabled.
+func TestLoad_IgnoresLegacyTelegramEnvironment(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("DEPLOYBOT_TELEGRAM_BOT_TOKEN", "123:legacy")
 	t.Setenv("DEPLOYBOT_TELEGRAM_CHAT_ID", "-1001234567890")
-	warnings := captureWarnings(t)
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.Telegram.Enabled() || cfg.Telegram.BotToken != "123:legacy" {
-		t.Fatalf("legacy Telegram config was not loaded: %+v", cfg.Telegram)
-	}
-	for _, want := range []string{
-		"DEPLOYBOT_TELEGRAM_BOT_TOKEN is deprecated; use NORI_TELEGRAM_BOT_TOKEN",
-		"DEPLOYBOT_TELEGRAM_CHAT_ID is deprecated; use NORI_TELEGRAM_CHAT_ID",
-	} {
-		if !strings.Contains(warnings.String(), want) {
-			t.Errorf("warning = %q, want %q", warnings.String(), want)
-		}
+	if cfg.Telegram.Enabled() {
+		t.Fatalf("legacy Telegram config must be ignored: %+v", cfg.Telegram)
 	}
 }
 

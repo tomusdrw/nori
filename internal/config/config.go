@@ -3,10 +3,9 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"time"
-
-	"nori/internal/envcompat"
 )
 
 type Config struct {
@@ -55,12 +54,12 @@ func Load() (Config, error) {
 	c := Config{
 		ListenAddr:      getenv("NORI_LISTEN", ":8080"),
 		DBPath:          getenv("NORI_DB", "nori.db"),
-		DockerHost:      envcompat.Get("NORI_DOCKER_HOST"),
+		DockerHost:      os.Getenv("NORI_DOCKER_HOST"),
 		TerminalDir:     getenv("NORI_TERMINAL_DIR", "."),
 		PollInterval:    60 * time.Second,
 		MonitorInterval: 60 * time.Second,
 	}
-	keyB64 := envcompat.Get("NORI_KEY")
+	keyB64 := os.Getenv("NORI_KEY")
 	if keyB64 == "" {
 		return Config{}, fmt.Errorf("NORI_KEY is required (base64-encoded 32 bytes)")
 	}
@@ -73,7 +72,7 @@ func Load() (Config, error) {
 	}
 	c.EncryptionKey = key
 
-	sessionB64 := envcompat.Get("NORI_SESSION_KEY")
+	sessionB64 := os.Getenv("NORI_SESSION_KEY")
 	if sessionB64 == "" {
 		return Config{}, fmt.Errorf("NORI_SESSION_KEY is required (base64-encoded 32 bytes)")
 	}
@@ -86,32 +85,32 @@ func Load() (Config, error) {
 	}
 	c.SessionKey = sessionKey
 
-	c.AdminPasswordHash = envcompat.Get("NORI_ADMIN_HASH")
+	c.AdminPasswordHash = os.Getenv("NORI_ADMIN_HASH")
 	if c.AdminPasswordHash == "" {
 		return Config{}, fmt.Errorf("NORI_ADMIN_HASH is required (bcrypt hash of admin password)")
 	}
 
-	if v := envcompat.Get("NORI_POLL_INTERVAL"); v != "" {
+	if v := os.Getenv("NORI_POLL_INTERVAL"); v != "" {
 		c.PollInterval, err = parsePositiveDuration("NORI_POLL_INTERVAL", v)
 		if err != nil {
 			return Config{}, err
 		}
 	}
 
-	if v := envcompat.Get("NORI_MONITOR_INTERVAL"); v != "" {
+	if v := os.Getenv("NORI_MONITOR_INTERVAL"); v != "" {
 		c.MonitorInterval, err = parsePositiveDuration("NORI_MONITOR_INTERVAL", v)
 		if err != nil {
 			return Config{}, err
 		}
 	}
 
-	tw, err := loadTwilio(envcompat.Get)
+	tw, err := loadTwilio(os.Getenv)
 	if err != nil {
 		return Config{}, err
 	}
 	c.Twilio = tw
 
-	tg, err := loadTelegram(envcompat.Get)
+	tg, err := loadTelegram(os.Getenv)
 	if err != nil {
 		return Config{}, err
 	}
@@ -124,23 +123,17 @@ func Load() (Config, error) {
 // Docker, reverse-proxy, and future application settings can pass through.
 func ValidateEnvironment(values map[string]string) error {
 	for _, name := range []string{"NORI_POLL_INTERVAL", "NORI_MONITOR_INTERVAL"} {
-		if value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name); value != "" {
+		if value := values[name]; value != "" {
 			if _, err := parsePositiveDuration(name, value); err != nil {
 				return err
 			}
 		}
 	}
-	_, err := loadTwilio(func(name string) string {
-		value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name)
-		return value
-	})
+	_, err := loadTwilio(func(name string) string { return values[name] })
 	if err != nil {
 		return err
 	}
-	_, err = loadTelegram(func(name string) string {
-		value, _ := envcompat.Lookup(func(key string) string { return values[key] }, name)
-		return value
-	})
+	_, err = loadTelegram(func(name string) string { return values[name] })
 	return err
 }
 
@@ -215,7 +208,7 @@ func loadTelegram(get func(string) string) (TelegramConfig, error) {
 }
 
 func getenv(k, def string) string {
-	if v := envcompat.Get(k); v != "" {
+	if v := os.Getenv(k); v != "" {
 		return v
 	}
 	return def
