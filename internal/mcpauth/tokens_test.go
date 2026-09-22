@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 type tokenResponse struct {

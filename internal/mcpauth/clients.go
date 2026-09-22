@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 type client struct {

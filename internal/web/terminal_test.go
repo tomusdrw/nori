@@ -15,12 +15,12 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
-	terminalsession "deploybot/internal/terminal"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/poller"
+	"nori/internal/store"
+	terminalsession "nori/internal/terminal"
 )
 
 type fakeTerminal struct {

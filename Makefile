@@ -12,8 +12,8 @@ generate:
 tidy: generate
 	go mod tidy
 build: generate
-	go build -o bin/deploybot ./cmd/deploybot
+	go build -o bin/nori ./cmd/nori
 test: generate
 	go test ./...
 run: build
-	./bin/deploybot
+	./bin/nori

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"deploybot/internal/executor"
-	"deploybot/internal/store"
+	"nori/internal/executor"
+	"nori/internal/store"
 )
 
 type Poller struct {

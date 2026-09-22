@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/notify"
-	"deploybot/internal/store"
+	"nori/internal/docker"
+	"nori/internal/notify"
+	"nori/internal/store"
 )
 
 type capturedEvent struct {

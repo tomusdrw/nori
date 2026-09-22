@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/mcpauth"
-	"deploybot/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"nori/internal/docker"
+	"nori/internal/mcpauth"
+	"nori/internal/store"
 )
 
 func TestMCPServiceLifecycleAndScopes(t *testing.T) {

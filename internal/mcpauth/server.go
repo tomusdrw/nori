@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/store"
 )
 
 const (

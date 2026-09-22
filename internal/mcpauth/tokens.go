@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)

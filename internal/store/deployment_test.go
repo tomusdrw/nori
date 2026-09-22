@@ -41,7 +41,7 @@ func TestDeploymentCRUD(t *testing.T) {
 func TestReconcileSelfDeploymentsUsesRunningDigest(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/deploybot:latest")
+	self, err := st.EnsureSelfService(ctx, "ghcr.io/acme/nori:latest")
 	if err != nil {
 		t.Fatal(err)
 	}

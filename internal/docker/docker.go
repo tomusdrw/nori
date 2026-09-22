@@ -13,7 +13,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-const ServiceLabel = "deploybot.service"
+const ServiceLabel = "nori.service"
 
 type Container struct {
 	ID     string

@@ -10,12 +10,12 @@
 
 ## Global Constraints
 
-- **Go version:** 1.23. Module path: `deploybot` (bare — this is a private application, not a library).
+- **Go version:** 1.23. Module path: `nori` (bare — this is a private application, not a library).
 - **No cgo:** use `modernc.org/sqlite` (driver name `"sqlite"`), never `mattn/go-sqlite3`.
-- **Container grouping label:** the exact constant is `deploybot.service` (package `docker`, exported as `docker.ServiceLabel`).
+- **Container grouping label:** the exact constant is `nori.service` (package `docker`, exported as `docker.ServiceLabel`).
 - **Auto-deploy policy enum values (verbatim):** `immediate`, `manual`, `scheduled`.
 - **Timestamps** are stored in SQLite as INTEGER Unix seconds and converted to/from `time.Time` (UTC) in Go — never rely on the driver's DATETIME parsing.
-- **Encryption:** secret env values are encrypted at rest with AES-256-GCM. The 32-byte key comes from env var `DEPLOYBOT_KEY` (base64-encoded); it is never stored in the DB.
+- **Encryption:** secret env values are encrypted at rest with AES-256-GCM. The 32-byte key comes from env var `NORI_KEY` (base64-encoded); it is never stored in the DB.
 - **templ codegen:** run `templ generate` before any `go build`/`go test`/`go mod tidy`. The `Makefile` targets do this for you.
 - Every task ends with `go build ./...` and `go test ./...` passing (via `make build` / `make test`, which generate templ first).
 
@@ -27,7 +27,7 @@
 - Create: `go.mod`
 - Create: `Makefile`
 - Create: `.gitignore`
-- Create: `cmd/deploybot/main.go`
+- Create: `cmd/nori/main.go`
 - Create: `internal/config/config.go`
 - Test: `internal/config/config_test.go`
 
@@ -37,7 +37,7 @@
 - [ ] **Step 1: Create `go.mod`**
 
 ```
-module deploybot
+module nori
 
 go 1.23
 ```
@@ -59,11 +59,11 @@ generate:
 tidy: generate
 	go mod tidy
 build: generate
-	go build -o bin/deploybot ./cmd/deploybot
+	go build -o bin/nori ./cmd/nori
 test: generate
 	go test ./...
 run: build
-	./bin/deploybot
+	./bin/nori
 ```
 
 - [ ] **Step 4: Write the failing test** — `internal/config/config_test.go`
@@ -81,7 +81,7 @@ func validKey() string {
 }
 
 func TestLoad_Defaults(t *testing.T) {
-	t.Setenv("DEPLOYBOT_KEY", validKey())
+	t.Setenv("NORI_KEY", validKey())
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -95,14 +95,14 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_MissingKey(t *testing.T) {
-	t.Setenv("DEPLOYBOT_KEY", "")
+	t.Setenv("NORI_KEY", "")
 	if _, err := Load(); err == nil {
-		t.Fatal("expected error for missing DEPLOYBOT_KEY")
+		t.Fatal("expected error for missing NORI_KEY")
 	}
 }
 
 func TestLoad_BadKeyLength(t *testing.T) {
-	t.Setenv("DEPLOYBOT_KEY", base64.StdEncoding.EncodeToString(make([]byte, 16)))
+	t.Setenv("NORI_KEY", base64.StdEncoding.EncodeToString(make([]byte, 16)))
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for 16-byte key")
 	}
@@ -136,27 +136,27 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:   getenv("DEPLOYBOT_LISTEN", ":8080"),
-		DBPath:       getenv("DEPLOYBOT_DB", "deploybot.db"),
-		DockerHost:   os.Getenv("DEPLOYBOT_DOCKER_HOST"),
+		ListenAddr:   getenv("NORI_LISTEN", ":8080"),
+		DBPath:       getenv("NORI_DB", "nori.db"),
+		DockerHost:   os.Getenv("NORI_DOCKER_HOST"),
 		PollInterval: 60 * time.Second,
 	}
-	keyB64 := os.Getenv("DEPLOYBOT_KEY")
+	keyB64 := os.Getenv("NORI_KEY")
 	if keyB64 == "" {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY is required (base64-encoded 32 bytes)")
+		return Config{}, fmt.Errorf("NORI_KEY is required (base64-encoded 32 bytes)")
 	}
 	key, err := base64.StdEncoding.DecodeString(keyB64)
 	if err != nil {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY: %w", err)
+		return Config{}, fmt.Errorf("NORI_KEY: %w", err)
 	}
 	if len(key) != 32 {
-		return Config{}, fmt.Errorf("DEPLOYBOT_KEY must decode to 32 bytes, got %d", len(key))
+		return Config{}, fmt.Errorf("NORI_KEY must decode to 32 bytes, got %d", len(key))
 	}
 	c.EncryptionKey = key
-	if v := os.Getenv("DEPLOYBOT_POLL_INTERVAL"); v != "" {
+	if v := os.Getenv("NORI_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return Config{}, fmt.Errorf("DEPLOYBOT_POLL_INTERVAL: %w", err)
+			return Config{}, fmt.Errorf("NORI_POLL_INTERVAL: %w", err)
 		}
 		c.PollInterval = d
 	}
@@ -171,7 +171,7 @@ func getenv(k, def string) string {
 }
 ```
 
-- [ ] **Step 7: Create minimal `cmd/deploybot/main.go`** (expanded in Task 9)
+- [ ] **Step 7: Create minimal `cmd/nori/main.go`** (expanded in Task 9)
 
 ```go
 package main
@@ -179,7 +179,7 @@ package main
 import (
 	"log"
 
-	"deploybot/internal/config"
+	"nori/internal/config"
 )
 
 func main() {
@@ -188,7 +188,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	_ = cfg
-	log.Println("deploybot: config loaded")
+	log.Println("nori: config loaded")
 }
 ```
 
@@ -200,7 +200,7 @@ Expected: PASS; build succeeds.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add go.mod Makefile .gitignore cmd/deploybot/main.go internal/config/
+git add go.mod Makefile .gitignore cmd/nori/main.go internal/config/
 git commit --no-gpg-sign -m "feat: project scaffolding and config loader"
 ```
 
@@ -692,7 +692,7 @@ package store
 import (
 	"context"
 
-	"deploybot/internal/crypto"
+	"nori/internal/crypto"
 )
 
 func (s *Store) SetEnvVar(ctx context.Context, ev *EnvVar) error {
@@ -773,7 +773,7 @@ git commit --no-gpg-sign -m "feat: encrypted env var storage"
 
 **Interfaces:**
 - Produces:
-  - Const `docker.ServiceLabel = "deploybot.service"`.
+  - Const `docker.ServiceLabel = "nori.service"`.
   - Type `docker.Container{ ID, Name, Image, Digest, State string }` (`Digest` is the repo/manifest digest `sha256:...`; `State` is e.g. `running`, `exited`).
   - Interface `docker.Client interface { ListByService(ctx, service string) ([]Container, error) }`.
   - `docker.New(host string) (Client, error)` (empty host = SDK default / `DOCKER_HOST`).
@@ -794,7 +794,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-const ServiceLabel = "deploybot.service"
+const ServiceLabel = "nori.service"
 
 type Container struct {
 	ID     string
@@ -1042,7 +1042,7 @@ package web
 import (
 	"testing"
 
-	"deploybot/internal/docker"
+	"nori/internal/docker"
 )
 
 func TestRepoOf(t *testing.T) {
@@ -1113,7 +1113,7 @@ package web
 import (
 	"strings"
 
-	"deploybot/internal/docker"
+	"nori/internal/docker"
 )
 
 type ServiceView struct {
@@ -1284,8 +1284,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/store"
+	"nori/internal/docker"
+	"nori/internal/store"
 )
 
 type LatestDigestFunc func(ctx context.Context, image string) (string, error)
@@ -1370,8 +1370,8 @@ import (
 	"strings"
 	"testing"
 
-	"deploybot/internal/docker"
-	"deploybot/internal/store"
+	"nori/internal/docker"
+	"nori/internal/store"
 )
 
 func TestDashboard_RendersServiceWithUpdate(t *testing.T) {
@@ -1429,13 +1429,13 @@ git commit --no-gpg-sign -m "feat: read-only dashboard with htmx auto-refresh"
 ### Task 9: Wire `main`, demo seed, end-to-end smoke test
 
 **Files:**
-- Modify: `cmd/deploybot/main.go` (replace Task 1's placeholder body)
-- Create: `cmd/deploybot/seed.go`
+- Modify: `cmd/nori/main.go` (replace Task 1's placeholder body)
+- Create: `cmd/nori/seed.go`
 
 **Interfaces:**
 - Consumes: `config.Load`, `store.Open`, `docker.New`, `registry.LatestDigest`, `web.NewServer`.
 
-- [ ] **Step 1: Replace `cmd/deploybot/main.go`**
+- [ ] **Step 1: Replace `cmd/nori/main.go`**
 
 ```go
 package main
@@ -1446,11 +1446,11 @@ import (
 	"net/http"
 	"os"
 
-	"deploybot/internal/config"
-	"deploybot/internal/docker"
-	"deploybot/internal/registry"
-	"deploybot/internal/store"
-	"deploybot/internal/web"
+	"nori/internal/config"
+	"nori/internal/docker"
+	"nori/internal/registry"
+	"nori/internal/store"
+	"nori/internal/web"
 )
 
 func main() {
@@ -1488,7 +1488,7 @@ func main() {
 }
 ```
 
-- [ ] **Step 2: Create `cmd/deploybot/seed.go`**
+- [ ] **Step 2: Create `cmd/nori/seed.go`**
 
 ```go
 package main
@@ -1496,7 +1496,7 @@ package main
 import (
 	"context"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 func seedDemo(ctx context.Context, st *store.Store) error {
@@ -1511,16 +1511,16 @@ func seedDemo(ctx context.Context, st *store.Store) error {
 - [ ] **Step 3: Build**
 
 Run: `make build`
-Expected: `bin/deploybot` produced.
+Expected: `bin/nori` produced.
 
 - [ ] **Step 4: Manual smoke test**
 
 ```bash
-export DEPLOYBOT_KEY=$(head -c 32 /dev/urandom | base64)
-export DEPLOYBOT_DB=/tmp/deploybot-smoke.db
-rm -f "$DEPLOYBOT_DB"
-./bin/deploybot seed-demo
-./bin/deploybot &
+export NORI_KEY=$(head -c 32 /dev/urandom | base64)
+export NORI_DB=/tmp/nori-smoke.db
+rm -f "$NORI_DB"
+./bin/nori seed-demo
+./bin/nori &
 sleep 1
 curl -s localhost:8080/ | grep -q demo && echo "SMOKE OK" || echo "SMOKE FAIL"
 curl -s localhost:8080/partials/services | grep -q "hx-trigger" && echo "PARTIAL OK"
@@ -1531,7 +1531,7 @@ Expected: `SMOKE OK` and `PARTIAL OK`. (The `demo` row shows `none`/`stopped` si
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/deploybot/
+git add cmd/nori/
 git commit --no-gpg-sign -m "feat: wire main with demo seed"
 ```
 
@@ -1550,4 +1550,4 @@ git commit --no-gpg-sign -m "feat: wire main with demo seed"
 
 - **M2 — Service management + manual control:** service create/edit forms (env + script editors writing through Tasks 3–4 repos), `executor` package (env assembly with injected `$SERVICE`, run bash via a `CommandRunner` interface, stream to `deployment.log`, per-service lock + failure cooldown), `docker` gains `Logs`/`Start`/`Stop`, deploy/start/stop handlers, SSE log view, deployment history.
 - **M3 — Automation:** `poller` (cached latest digest feeding the dashboard + immediate auto-deploy), `scheduler` (`robfig/cron`).
-- **M4 — Auth + packaging:** login/session/CSRF middleware, Dockerfile for the bot, README (two-declaration contract, `deploybot.service` label requirement, CI image-stamping recommendation, Cloudflare Access).
+- **M4 — Auth + packaging:** login/session/CSRF middleware, Dockerfile for the bot, README (two-declaration contract, `nori.service` label requirement, CI image-stamping recommendation, Cloudflare Access).

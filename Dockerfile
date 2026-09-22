@@ -6,15 +6,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN go run github.com/a-h/templ/cmd/templ@$(go list -m -f '{{.Version}}' github.com/a-h/templ) generate
-RUN CGO_ENABLED=0 go build -o /deploybot ./cmd/deploybot
+RUN CGO_ENABLED=0 go build -o /nori ./cmd/nori
 
 # Runtime stage
 FROM alpine:3.21
 RUN apk add --no-cache bash ca-certificates docker-cli tmux
-COPY --from=build /deploybot /usr/local/bin/deploybot
+COPY --from=build /nori /usr/local/bin/nori
 EXPOSE 8080
 VOLUME ["/data", "/config"]
-ENV DEPLOYBOT_DB=/data/deploybot.db
-ENV DEPLOYBOT_TERMINAL_DIR=/data
 WORKDIR /data
-ENTRYPOINT ["deploybot"]
+ENTRYPOINT ["nori"]

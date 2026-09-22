@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/store"
 )
 
 func TestOAuthFlowAndAttacks(t *testing.T) {
@@ -89,7 +89,7 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	cookies := lw.Result().Cookies()
 	csrf := ""
 	for _, c := range cookies {
-		if c.Name == "deploybot_csrf" {
+		if c.Name == "nori_csrf" {
 			csrf = c.Value
 		}
 	}

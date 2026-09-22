@@ -48,7 +48,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					} else {
 						<input id="name" name="name" value={ form.Name } required placeholder="analytics-api" pattern="[A-Za-z0-9][A-Za-z0-9._-]*"/>
 					}
-					<span class="field-help">Used for the <code>deploybot.service</code> container label.</span>
+					<span class="field-help">Used for the <code>nori.service</code> container label.</span>
 				</div>
 				<div class="field">
 					<label for="watched-image">Watched image</label>
@@ -92,7 +92,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
             if isEdit {
                 @configHistory(form.Name, "script", "deploy_script", form.IsSelf)
             }
-			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Injected: $SERVICE $IMAGE $TARGET_IMAGE $TARGET_DIGEST $ENV_FILE (+ your .env vars)&#10;# $ENV_FILE is this service's .env, ready for docker run --env-file.&#10;&#10;docker pull $TARGET_IMAGE&#10;docker rm -f $SERVICE 2&gt;/dev/null || true&#10;docker run -d --name $SERVICE --label deploybot.service=$SERVICE --env-file $ENV_FILE $TARGET_IMAGE" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
+			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Injected: $SERVICE $IMAGE $TARGET_IMAGE $TARGET_DIGEST $ENV_FILE (+ your .env vars)&#10;# $ENV_FILE is this service's .env, ready for docker run --env-file.&#10;&#10;docker pull $TARGET_IMAGE&#10;docker rm -f $SERVICE 2&gt;/dev/null || true&#10;docker run -d --name $SERVICE --label nori.service=$SERVICE --env-file $ENV_FILE $TARGET_IMAGE" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
 			<div class="editor-footer">
 				<span>Bash · syntax checked before save and deploy</span>
 				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>

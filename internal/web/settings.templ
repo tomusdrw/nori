@@ -1,6 +1,6 @@
 package web
 
-import "deploybot/internal/store"
+import "nori/internal/store"
 
 templ SettingsPage(botName string, notifyMode string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig) {
 	@Layout("Settings", csrf, settingsContent(botName, notifyMode, csrf, errMsg, saved, mcpConfig))
@@ -40,7 +40,7 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 				<div class="field">
 					<label for="bot-name">Bot name</label>
 					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Nori" autofocus/>
-					<span class="field-help">Up to 64 characters. Does not change the internal <code>deploybot</code> service name.</span>
+					<span class="field-help">Up to 64 characters. Does not change the internal <code>nori</code> service name.</span>
 				</div>
 			</div>
 		</section>
@@ -48,7 +48,7 @@ templ settingsContent(botName string, notifyMode string, csrf string, errMsg str
 			<div class="panel-heading">
 				<div>
 					<h2>Notifications</h2>
-					<p>When to send an SMS when a deploy fails. Requires Twilio to be configured via <code>DEPLOYBOT_TWILIO_*</code> env vars.</p>
+					<p>When to send an SMS when a deploy fails. Requires Twilio to be configured via <code>NORI_TWILIO_*</code> env vars.</p>
 				</div>
 				<span class="step-number">02</span>
 			</div>

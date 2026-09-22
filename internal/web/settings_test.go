@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/notify"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/notify"
+	"nori/internal/poller"
+	"nori/internal/store"
 )
 
 func TestSettings_CustomBotNameInTitleAndBrand(t *testing.T) {

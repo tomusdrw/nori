@@ -3,18 +3,18 @@ package web
 import (
 	"context"
 	"database/sql"
-	"deploybot/internal/launcher"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"nori/internal/launcher"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 func TestConfigHistoryAndCopyToNewService(t *testing.T) {
@@ -131,7 +131,7 @@ func TestSelfHistoryFailureRestoresEnvironmentAndPolicy(t *testing.T) {
 func TestSelfHistoryUsesPersistedLauncherContent(t *testing.T) {
 	st, self, srv, cookies, _ := newSelfServiceServer(t)
 	configDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(configDir, launcher.EnvFilename), []byte("DEPLOYBOT_KEY=protected-secret\nA=old\nZ=old\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, launcher.EnvFilename), []byte("NORI_KEY=protected-secret\nA=old\nZ=old\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	srv.selfEnvironment = &launcher.Launcher{ConfigDir: configDir}

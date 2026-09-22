@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"deploybot/internal/envfile"
-	"deploybot/internal/notify"
-	"deploybot/internal/store"
+	"nori/internal/envcompat"
+	"nori/internal/envfile"
+	"nori/internal/notify"
+	"nori/internal/store"
 )
 
 type LatestDigestFunc func(ctx context.Context, image string) (string, error)
@@ -223,8 +224,8 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 		fmt.Sprintf("TARGET_IMAGE=%s", pinnedImage(svc.WatchedImage, digest)),
 	}
 	if svc.IsSelf {
-		for _, key := range []string{"DEPLOYBOT_CONFIG_VOLUME", "DEPLOYBOT_SELF_IMAGE"} {
-			value := os.Getenv(key)
+		for _, key := range []string{"NORI_CONFIG_VOLUME", "NORI_SELF_IMAGE"} {
+			value := envcompat.Get(key)
 			if value == "" {
 				return nil, "", fmt.Errorf("self-update requires %s", key)
 			}
@@ -245,7 +246,7 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 // docker --env-file format. It always creates a file, even when there are no
 // vars, so $ENV_FILE is a usable path on every deploy.
 func writeEnvFile(vars []string) (string, error) {
-	f, err := os.CreateTemp("", "deploybot-env-*.env")
+	f, err := os.CreateTemp("", "nori-env-*.env")
 	if err != nil {
 		return "", err
 	}

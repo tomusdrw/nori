@@ -53,12 +53,12 @@ For a local binary, set the application secrets yourself:
 
 ```bash
 # Generate secrets
-export DEPLOYBOT_KEY=$(head -c 32 /dev/urandom | base64)
-export DEPLOYBOT_SESSION_KEY=$(head -c 32 /dev/urandom | base64)
-export DEPLOYBOT_ADMIN_HASH=$(go run ./cmd/deploybot hash-password 'your-password')
+export NORI_KEY=$(head -c 32 /dev/urandom | base64)
+export NORI_SESSION_KEY=$(head -c 32 /dev/urandom | base64)
+export NORI_ADMIN_HASH=$(go run ./cmd/nori hash-password 'your-password')
 
 make build
-./bin/deploybot
+./bin/nori
 ```
 
 Open http://localhost:8080 and log in with your password.
@@ -66,49 +66,49 @@ Open http://localhost:8080 and log in with your password.
 ## Docker (recommended)
 
 The published image talks to the **host Docker daemon** via a mounted socket. This is
-intentional — deploybot orchestrates containers on the host by running your bash scripts
-(which call `docker`). The socket mount makes deploybot root-equivalent on that host, so
+intentional — Nori orchestrates containers on the host by running your bash scripts
+(which call `docker`). The socket mount makes Nori root-equivalent on that host, so
 keep auth enabled and put Cloudflare Access (or similar) in front.
 
 ### Choose an application image
 
 ```bash
-export DEPLOYBOT_IMAGE=registry.example.com/your-org/deploybot:latest
-docker pull "$DEPLOYBOT_IMAGE"
+export NORI_IMAGE=registry.example.com/your-org/nori:latest
+docker pull "$NORI_IMAGE"
 ```
 
 ### docker compose
 
 ```bash
 docker compose run --rm -it launcher up \
-  --image "$DEPLOYBOT_IMAGE" \
-  --port "${DEPLOYBOT_PORT:-8080}:8080"
+  --image "$NORI_IMAGE" \
+  --port "${NORI_PORT:-8080}:8080"
 ```
 
 The first run asks for an admin password, generates the encryption and session
-keys, writes them to the `deploybot-config` volume, and creates the long-running
-`deploybot` container. Later `up` invocations read that saved configuration and
+keys, writes them to the `nori-config` volume, and creates the long-running
+`nori` container. Later `up` invocations read that saved configuration and
 recreate the container without prompting or changing any secrets.
 
 For a scripted first boot, generate the admin password hash without a local Go
 install and pass it to `up`:
 
 ```bash
-export DEPLOYBOT_ADMIN_HASH=$(docker run --rm "$DEPLOYBOT_IMAGE" \
+export NORI_ADMIN_HASH=$(docker run --rm "$NORI_IMAGE" \
   hash-password 'your-password')
 docker compose run --rm launcher up \
-  --image "$DEPLOYBOT_IMAGE" \
-  --port "${DEPLOYBOT_PORT:-8080}:8080" \
-  --admin-password-hash "$DEPLOYBOT_ADMIN_HASH"
+  --image "$NORI_IMAGE" \
+  --port "${NORI_PORT:-8080}:8080" \
+  --admin-password-hash "$NORI_ADMIN_HASH"
 ```
 
 ### docker run
 
 ```bash
-export IMAGE=registry.example.com/your-org/deploybot:latest
+export IMAGE=registry.example.com/your-org/nori:latest
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v deploybot-config:/config \
+  -v nori-config:/config \
   "$IMAGE" \
   up --image "$IMAGE"
 ```
@@ -117,21 +117,21 @@ Use `--data-volume`, `--config-volume`, `--container-name`, repeat `--port`,
 `--no-port`, `--network`, or repeat `--env`/`--volume` at first boot to change
 the defaults. The port, network, volume, and environment options can also
 intentionally update an existing launch configuration. The launcher stores a
-human-editable `run.json` and `deploybot.env` on the config volume;
-`deploybot.env` contains plaintext secrets, so it has the same sensitive trust
+human-editable `run.json` and `nori.env` on the config volume;
+`nori.env` contains plaintext secrets, so it has the same sensitive trust
 boundary as `docker.sock`.
 
 ### Private-image authentication
 
 Watching a **private** package needs registry credentials. Both the in-process
-digest poll and your deploy script's `docker pull` run *inside* the deploybot
+digest poll and your deploy script's `docker pull` run *inside* the Nori
 container, which does not see the host user's `docker login`. Give the container
 access to those credentials by mounting your Docker config with `--volume`:
 
 ```bash
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v deploybot-config:/config \
+  -v nori-config:/config \
   "$IMAGE" up \
   --image "$IMAGE" \
   --volume "$HOME/.docker/config.json:/root/.docker/config.json:ro"
@@ -158,16 +158,16 @@ port mapping and persist the proxy variables with the launcher:
 ```bash
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v deploybot-config:/config \
+  -v nori-config:/config \
   "$IMAGE" up \
   --image "$IMAGE" \
   --no-port \
-  --env VIRTUAL_HOST=deploybot.example.com \
+  --env VIRTUAL_HOST=nori.example.com \
   --env VIRTUAL_PORT=8080 \
-  --env LETSENCRYPT_HOST=deploybot.example.com
+  --env LETSENCRYPT_HOST=nori.example.com
 ```
 
-Add `--network your-proxy-network` when the proxy requires deploybot to join a
+Add `--network your-proxy-network` when the proxy requires Nori to join a
 specific Docker network. The `--env`, `--port`/`--no-port`, `--network`, and
 `--volume` options also update an existing launcher configuration without
 regenerating its secrets, so the same command repairs a first boot that failed
@@ -180,13 +180,29 @@ the mounted socket.
 
 ### Existing installations
 
+The Nori rename changes the default binary, container, volume, database,
+launcher-env filename, and service label. To reuse volumes created with the old
+defaults, select them explicitly before running the new Compose configuration:
+
+```bash
+export NORI_CONFIG_VOLUME=deploybot-config
+export NORI_DATA_VOLUME=deploybot-data
+docker compose run --rm -it launcher up --image "$NORI_IMAGE"
+```
+
+The launcher migrates `deploybot.env` to `nori.env` and updates its own persisted
+service label automatically. Values inside that file may continue using
+`DEPLOYBOT_*` names during the compatibility period; each used fallback logs a
+deprecation warning. Update stored service deployment scripts from
+`deploybot.service` to `nori.service` and redeploy those services so Nori can
+discover their containers.
+
 An existing container started directly with `docker run` has no launcher config
 volume and therefore cannot safely self-update yet. Re-bootstrap through `up`
-once, passing the old `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
-`DEPLOYBOT_ADMIN_HASH` as `--key`, `--session-key`, and
-`--admin-password-hash` on that first run if you need to keep the existing
-encrypted service environment values. The migration is deliberate; the launcher
-never guesses a container's run configuration.
+once, passing its existing encryption key, session key, and admin hash as
+`--key`, `--session-key`, and `--admin-password-hash`. This preserves encrypted
+service environment values; the launcher never guesses a container's run
+configuration.
 
 ## Browser terminal
 
@@ -197,7 +213,7 @@ same shell. Type `exit` when you intentionally want to end the session. Restarti
 replacing the container ends the shell process, while files written under `/data` remain
 on the persistent volume.
 
-The shell starts in `DEPLOYBOT_TERMINAL_DIR` (`.` by default and `/data` in the supplied
+The shell starts in `NORI_TERMINAL_DIR` (`.` by default and `/data` in the supplied
 Docker image). Reverse proxies must support WebSocket upgrades for `/terminal/ws`.
 
 The terminal is protected by the same admin session as the rest of the app and rejects
@@ -230,7 +246,7 @@ Each service requires two declarations in your deploy script:
 
 1. **Watched image** — configured in the UI (e.g. `registry.example.com/you/app:latest`). This image's
    digest drives "update available" and auto-deploy.
-2. **Container label** — add `--label deploybot.service=$SERVICE` to every `docker run`.
+2. **Container label** — add `--label nori.service=$SERVICE` to every `docker run`.
 
 The app injects these variables into your script's environment on every deploy:
 
@@ -246,7 +262,7 @@ Every variable from the service's `.env` document is also exported directly into
 script's shell. `$ENV_FILE` is written `0600`, holds only the service env (not the
 variables above), and is removed once the deploy finishes — so pass it to the container
 with `--env-file` rather than forwarding each value with `-e` by hand. Because the docker
-CLI reads `--env-file` locally, this works whether deploybot runs as a container or a
+CLI reads `--env-file` locally, this works whether Nori runs as a container or a
 local binary; it does **not** write a file inside the deployed container.
 
 Example deploy script snippet:
@@ -256,7 +272,7 @@ docker pull "$TARGET_IMAGE"
 # ... backup steps ...
 docker rm -f "$SERVICE" 2>/dev/null || true
 docker run -d --name "$SERVICE" \
-  --label deploybot.service="$SERVICE" \
+  --label nori.service="$SERVICE" \
   --env-file "$ENV_FILE" \
   "$TARGET_IMAGE"
 ```
@@ -304,7 +320,7 @@ providers use bounded timeouts.
 
 Nori sends an SMS to a preconfigured number when a deploy script exits non-zero.
 A built-in monitor checks every managed service's containers (the same
-`deploybot.service` label used by the dashboard) every `DEPLOYBOT_MONITOR_INTERVAL`
+`nori.service` label used by the dashboard) every `NORI_MONITOR_INTERVAL`
 (default 60s). A service counts as down when no container for the service is
 running and healthy (a container whose Docker HEALTHCHECK reports `unhealthy`
 counts as down even while running) for two consecutive checks — so a single
@@ -331,10 +347,10 @@ Configure all four env vars; leaving any blank disables SMS entirely, and a
 partial set is rejected at startup:
 
 ```
-DEPLOYBOT_TWILIO_ACCOUNT_SID=AC...
-DEPLOYBOT_TWILIO_AUTH_TOKEN=...
-DEPLOYBOT_TWILIO_FROM=+15551234567
-DEPLOYBOT_TWILIO_TO=+15559876543
+NORI_TWILIO_ACCOUNT_SID=AC...
+NORI_TWILIO_AUTH_TOKEN=...
+NORI_TWILIO_FROM=+15551234567
+NORI_TWILIO_TO=+15559876543
 ```
 
 The per-service failure cooldown already prevents SMS spam during repeated
@@ -347,8 +363,8 @@ successful deployments that would be too chatty as SMS. Create a bot with
 [@BotFather](https://t.me/BotFather) to get a bot token, then set:
 
 ```
-DEPLOYBOT_TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-DEPLOYBOT_TELEGRAM_CHAT_ID=-1001234567890
+NORI_TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+NORI_TELEGRAM_CHAT_ID=-1001234567890
 ```
 
 The chat ID identifies the conversation that receives the messages. To find it,
@@ -497,38 +513,43 @@ For implementation boundaries, regression tests and proposed follow-ups, see
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DEPLOYBOT_KEY` | yes | Base64-encoded 32-byte AES key for encrypting secret env vars |
-| `DEPLOYBOT_SESSION_KEY` | yes | Base64-encoded 32+ byte key for signing session cookies |
-| `DEPLOYBOT_ADMIN_HASH` | yes | Bcrypt hash of admin password (`deploybot hash-password`) |
-| `DEPLOYBOT_DB` | no | SQLite path (default: `deploybot.db`) |
-| `DEPLOYBOT_LISTEN` | no | Listen address (default: `:8080`) |
-| `DEPLOYBOT_DOCKER_HOST` | no | Docker host override |
-| `DEPLOYBOT_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
-| `DEPLOYBOT_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
-| `DEPLOYBOT_MONITOR_INTERVAL` | no | Container health check interval (default: `60s`) |
-| `DEPLOYBOT_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `DEPLOYBOT_TWILIO_*` to enable SMS notifications. |
-| `DEPLOYBOT_TWILIO_AUTH_TOKEN` | no | Twilio auth token. |
-| `DEPLOYBOT_TWILIO_FROM` | no | Sender number (Twilio-owned, E.164, e.g. `+15551234567`). |
-| `DEPLOYBOT_TWILIO_TO` | no | Recipient number (E.164). Partial config is an error. |
-| `DEPLOYBOT_TELEGRAM_BOT_TOKEN` | no | Bot API token from [@BotFather](https://t.me/BotFather). Set both `DEPLOYBOT_TELEGRAM_*` to enable Telegram notifications. |
-| `DEPLOYBOT_TELEGRAM_CHAT_ID` | no | Target chat, group, or channel ID. Partial config is an error. |
+| `NORI_KEY` | yes | Base64-encoded 32-byte AES key for encrypting secret env vars |
+| `NORI_SESSION_KEY` | yes | Base64-encoded 32+ byte key for signing session cookies |
+| `NORI_ADMIN_HASH` | yes | Bcrypt hash of admin password (`nori hash-password`) |
+| `NORI_DB` | no | SQLite path (default: `nori.db`) |
+| `NORI_LISTEN` | no | Listen address (default: `:8080`) |
+| `NORI_DOCKER_HOST` | no | Docker host override |
+| `NORI_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |
+| `NORI_POLL_INTERVAL` | no | Registry poll interval (default: `60s`) |
+| `NORI_MONITOR_INTERVAL` | no | Container health check interval (default: `60s`) |
+| `NORI_TWILIO_ACCOUNT_SID` | no | Twilio Account SID. Set all four `NORI_TWILIO_*` to enable SMS notifications. |
+| `NORI_TWILIO_AUTH_TOKEN` | no | Twilio auth token. |
+| `NORI_TWILIO_FROM` | no | Sender number (Twilio-owned, E.164, e.g. `+15551234567`). |
+| `NORI_TWILIO_TO` | no | Recipient number (E.164). Partial config is an error. |
+| `NORI_TELEGRAM_BOT_TOKEN` | no | Bot API token from [@BotFather](https://t.me/BotFather). Set both `NORI_TELEGRAM_*` to enable Telegram notifications. |
+| `NORI_TELEGRAM_CHAT_ID` | no | Target chat, group, or channel ID. Partial config is an error. |
 
-When started by the launcher, `DEPLOYBOT_KEY`, `DEPLOYBOT_SESSION_KEY`, and
-`DEPLOYBOT_ADMIN_HASH` are generated once and read from `/config/deploybot.env`.
-The launcher also sets `DEPLOYBOT_CONFIG_VOLUME`, `DEPLOYBOT_SELF_CONTAINER`,
-and `DEPLOYBOT_SELF_IMAGE`; do not set only some of these manually.
+The former `DEPLOYBOT_*` names remain supported as one-to-one fallbacks for
+backward compatibility (`DEPLOYBOT_KEY` maps to `NORI_KEY`, and so on). Nori logs
+a deprecation warning whenever it uses a legacy value. If both forms are set,
+the `NORI_*` value takes precedence and no legacy warning is emitted.
+
+When started by the launcher, `NORI_KEY`, `NORI_SESSION_KEY`, and
+`NORI_ADMIN_HASH` are generated once and read from `/config/nori.env`.
+The launcher also sets `NORI_CONFIG_VOLUME`, `NORI_SELF_CONTAINER`,
+and `NORI_SELF_IMAGE`; do not set only some of these manually.
 
 ## Self-updates
 
-Launcher-managed installations automatically add a protected **deploybot**
+Launcher-managed installations automatically add a protected **nori**
 service to the dashboard. Its policy defaults to manual, so a newly published
 image appears as an update that you deploy while watching. The normal deploy
 history is used: after the handoff starts, the row remains `running` until the
 new instance starts and verifies its own digest.
 
 The service's **Configure** page also exposes the editable portion of
-`/config/deploybot.env`. Launcher-managed values — `DEPLOYBOT_KEY`,
-`DEPLOYBOT_SESSION_KEY`, `DEPLOYBOT_ADMIN_HASH`, and the self-identity variables
+`/config/nori.env`. Launcher-managed values — `NORI_KEY`,
+`NORI_SESSION_KEY`, `NORI_ADMIN_HASH`, and the self-identity variables
 — are hidden, rejected if submitted, and preserved when the editable values are
 saved. Other launcher environment values can be added, changed, or removed
 using Docker env-file syntax. Save the configuration and then use
@@ -536,47 +557,47 @@ using Docker env-file syntax. Save the configuration and then use
 with the new environment.
 
 Deploying this service deliberately interrupts the browser connection, including
-any browser terminal session. Wait for deploybot to return at the same address,
+any browser terminal session. Wait for Nori to return at the same address,
 then refresh its deployment history; that is when the handoff is resolved to
 `success` or `failed`.
 
 ### Launcher configuration
 
-The `deploybot-config` volume is the source of truth for a launcher-managed
+The `nori-config` volume is the source of truth for a launcher-managed
 installation:
 
 | File | Purpose | Editing guidance |
 |---|---|---|
-| `/config/run.json` | Image, container name, ports, volumes, labels, restart policy, and current/previous digests | Edit only to intentionally change the launcher-owned container configuration; then run `deploybot up` from a detached launcher to apply it. |
-| `/config/deploybot.env` | Application configuration and generated secrets | Treat as a secret. Do not regenerate `DEPLOYBOT_KEY` after the first start, or encrypted service environments become unreadable. |
+| `/config/run.json` | Image, container name, ports, volumes, labels, restart policy, and current/previous digests | Edit only to intentionally change the launcher-owned container configuration; then run `nori up` from a detached launcher to apply it. |
+| `/config/nori.env` | Application configuration and generated secrets | Treat as a secret. Do not regenerate `NORI_KEY` after the first start, or encrypted service environments become unreadable. |
 
 Do not replace the managed self-service script or its launcher identity
-variables. The launcher must remain outside deploybot's container so it can
+variables. The launcher must remain outside Nori's container so it can
 survive the container swap.
 
 There is intentionally no health check or automatic rollback. If a self-update
-leaves deploybot unavailable, run a detached launcher manually with the saved
+leaves Nori unavailable, run a detached launcher manually with the saved
 config volume, for example:
 
 ```bash
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v deploybot-config:/config \
-  "$DEPLOYBOT_IMAGE" rollback
+  -v nori-config:/config \
+  "$NORI_IMAGE" rollback
 ```
 
 ## Maintainer notes
 
-Start with the [approved self-update design](docs/superpowers/specs/2026-07-15-deploybot-self-update-design.md)
+Start with the [approved self-update design](docs/superpowers/specs/2026-07-15-nori-self-update-design.md)
 before changing this feature. The implementation is intentionally split as follows:
 
 - `internal/launcher`: persistent config, first boot, Docker CLI swap, and rollback.
 - `internal/store`: the managed `is_self` service and startup reconciliation.
 - `internal/executor`: handoff-only success for the self-service; it must leave the deployment `running`.
-- `cmd/deploybot/self.go`: startup seeding and the final digest comparison.
+- `cmd/nori/self.go`: startup seeding and the final digest comparison.
 
 The non-negotiable invariants are that the launcher config remains canonical,
-`DEPLOYBOT_KEY` is never regenerated after bootstrap, and only the replacement
+`NORI_KEY` is never regenerated after bootstrap, and only the replacement
 instance may resolve a successful self-deployment. Keep tests around these
 boundaries when extending the feature.
 
@@ -603,12 +624,12 @@ Or set the OCI label `org.opencontainers.image.version`.
 ## Commands
 
 ```bash
-deploybot                    # start server
-deploybot hash-password PWD  # generate bcrypt hash for DEPLOYBOT_ADMIN_HASH
-deploybot seed-demo          # insert a demo service row
-deploybot up --image IMAGE   # bootstrap/recreate from launcher config
-deploybot update --target-digest sha256:...  # swap to an image digest
-deploybot rollback            # swap to the previous recorded digest
+nori                    # start server
+nori hash-password PWD  # generate bcrypt hash for NORI_ADMIN_HASH
+nori seed-demo          # insert a demo service row
+nori up --image IMAGE   # bootstrap/recreate from launcher config
+nori update --target-digest sha256:...  # swap to an image digest
+nori rollback            # swap to the previous recorded digest
 ```
 
 The browser editor and terminal bundles are committed, so building the Go binary does

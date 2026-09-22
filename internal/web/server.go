@@ -19,16 +19,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/envfile"
-	"deploybot/internal/executor"
-	"deploybot/internal/launcher"
-	"deploybot/internal/mcpauth"
-	"deploybot/internal/notify"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
-	terminalsession "deploybot/internal/terminal"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/envfile"
+	"nori/internal/executor"
+	"nori/internal/launcher"
+	"nori/internal/mcpauth"
+	"nori/internal/notify"
+	"nori/internal/poller"
+	"nori/internal/store"
+	terminalsession "nori/internal/terminal"
 )
 
 type selfEnvironmentStore interface {
@@ -48,7 +48,7 @@ type Server struct {
 }
 
 func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, terminals ...terminalsession.Attacher) *Server {
-	term := terminalsession.Attacher(terminalsession.New("deploybot", "."))
+	term := terminalsession.Attacher(terminalsession.New("nori", "."))
 	if len(terminals) > 0 && terminals[0] != nil {
 		term = terminals[0]
 	}

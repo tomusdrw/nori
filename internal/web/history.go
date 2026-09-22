@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"deploybot/internal/store"
 	"github.com/go-chi/chi/v5"
+	"nori/internal/store"
 )
 
 func validHistoryKind(kind string) bool { return kind == "script" || kind == "env" }

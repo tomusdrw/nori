@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"deploybot/internal/envfile"
+	"nori/internal/envfile"
 )
 
 var ErrServiceConflict = errors.New("service configuration changed; read it again and retry")

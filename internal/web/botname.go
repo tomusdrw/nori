@@ -3,7 +3,7 @@ package web
 import (
 	"context"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 type botNameCtxKey struct{}

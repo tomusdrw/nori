@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/poller"
+	"nori/internal/store"
 )
 
 func mcpSettingsServer(t *testing.T) (*Server, *store.Store) {

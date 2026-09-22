@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"deploybot/internal/auth"
-	"deploybot/internal/docker"
-	"deploybot/internal/executor"
-	"deploybot/internal/poller"
-	"deploybot/internal/store"
+	"nori/internal/auth"
+	"nori/internal/docker"
+	"nori/internal/executor"
+	"nori/internal/poller"
+	"nori/internal/store"
 )
 
 func TestHealthz_Unauthenticated(t *testing.T) {

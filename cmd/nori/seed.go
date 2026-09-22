@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"deploybot/internal/store"
+	"nori/internal/store"
 )
 
 func seedDemo(ctx context.Context, st *store.Store) error {

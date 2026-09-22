@@ -8,8 +8,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"deploybot/internal/executor"
-	"deploybot/internal/store"
+	"nori/internal/executor"
+	"nori/internal/store"
 )
 
 type Scheduler struct {
