@@ -81,12 +81,15 @@ func TestSettings_NotificationMatrixDefaultsToAllEvents(t *testing.T) {
 	// A fresh install routes every event to every configured channel,
 	// matching the historical default behavior.
 	for _, ch := range []string{"twilio", "telegram"} {
-		for _, kind := range []string{"down", "recovered", "success"} {
+		for _, kind := range []string{"deploy_failed", "down", "recovered", "success"} {
 			want := fmt.Sprintf(`name="notify_%s_%s" value="1" checked`, ch, kind)
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected %s/%s checked by default; snippet:\n%s", ch, kind, substring(body, "notify_"+ch+"_"+kind))
 			}
 		}
+	}
+	if !strings.Contains(body, "Service down or unhealthy") {
+		t.Fatal("notification matrix must expose monitored outages")
 	}
 }
 
@@ -131,18 +134,24 @@ func TestSettings_MatrixReflectsStoredRouting(t *testing.T) {
 	cookies := loginCookies(t, srv)
 
 	if err := st.SetSetting(context.Background(), store.SettingNotifyRouting,
-		`{"twilio":{"down":true,"recovered":false,"success":false},"telegram":{"down":false,"recovered":false,"success":true}}`); err != nil {
+		`{"twilio":{"deploy_failed":false,"down":true,"recovered":false,"success":false},"telegram":{"deploy_failed":true,"down":false,"recovered":false,"success":true}}`); err != nil {
 		t.Fatal(err)
 	}
 	body := getAuthed(t, srv, cookies, "/settings")
 	if !strings.Contains(body, `name="notify_twilio_down" value="1" checked`) {
 		t.Fatal("expected twilio/down checked")
 	}
+	if strings.Contains(body, `name="notify_twilio_deploy_failed" value="1" checked`) {
+		t.Fatal("expected twilio/deploy_failed unchecked independently of down")
+	}
 	if strings.Contains(body, `name="notify_twilio_recovered" value="1" checked`) {
 		t.Fatal("expected twilio/recovered unchecked")
 	}
 	if strings.Contains(body, `name="notify_telegram_down" value="1" checked`) {
 		t.Fatal("expected telegram/down unchecked")
+	}
+	if !strings.Contains(body, `name="notify_telegram_deploy_failed" value="1" checked`) {
+		t.Fatal("expected telegram/deploy_failed checked independently of down")
 	}
 	if !strings.Contains(body, `name="notify_telegram_success" value="1" checked`) {
 		t.Fatal("expected telegram/success checked")
@@ -196,12 +205,13 @@ func TestSettings_PostPersistsRoutingAndClearsLegacyMode(t *testing.T) {
 
 	csrf := csrfFromBody(getAuthed(t, srv, cookies, "/settings"))
 	form := url.Values{
-		"csrf_token":                {csrf},
-		"bot_name":                  {"Nori"},
-		"notify_twilio_down":        {"1"},
-		"notify_twilio_recovered":   {"1"},
-		"notify_telegram_recovered": {"1"},
-		"notify_telegram_success":   {"1"},
+		"csrf_token":                    {csrf},
+		"bot_name":                      {"Nori"},
+		"notify_twilio_down":            {"1"},
+		"notify_twilio_recovered":       {"1"},
+		"notify_telegram_deploy_failed": {"1"},
+		"notify_telegram_recovered":     {"1"},
+		"notify_telegram_success":       {"1"},
 	}
 	postAuthed(t, srv, cookies, "/settings", form.Encode())
 
@@ -219,8 +229,14 @@ func TestSettings_PostPersistsRoutingAndClearsLegacyMode(t *testing.T) {
 	if routing.Allowed("twilio", "success") {
 		t.Errorf("twilio success was unchecked: %v", raw)
 	}
+	if routing.Allowed("twilio", "deploy_failed") {
+		t.Errorf("twilio deploy_failed was unchecked: %v", raw)
+	}
 	if routing.Allowed("telegram", "down") {
 		t.Errorf("telegram down was unchecked: %v", raw)
+	}
+	if !routing.Allowed("telegram", "deploy_failed") {
+		t.Errorf("telegram deploy_failed must be on: %v", raw)
 	}
 	if !routing.Allowed("telegram", "recovered") || !routing.Allowed("telegram", "success") {
 		t.Errorf("telegram recovered/success must be on: %v", raw)
@@ -233,6 +249,9 @@ func TestSettings_PostPersistsRoutingAndClearsLegacyMode(t *testing.T) {
 	body := getAuthed(t, srv, cookies, "/settings")
 	if !strings.Contains(body, `name="notify_twilio_down" value="1" checked`) {
 		t.Fatal("expected twilio/down checked after save")
+	}
+	if strings.Contains(body, `name="notify_twilio_deploy_failed" value="1" checked`) {
+		t.Fatal("expected twilio/deploy_failed unchecked after save")
 	}
 	if strings.Contains(body, `name="notify_twilio_success" value="1" checked`) {
 		t.Fatal("expected twilio/success unchecked after save")
