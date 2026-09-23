@@ -228,6 +228,117 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	}
 }
 
+// A short dotenv value occurring inside a container ID must not destroy the
+// identifiers clients need to request logs, and get_container_logs must accept
+// an exact container name resolved against the service's own containers.
+func TestMCPContainerLogsIdentification(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "mcp-ident.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	app := &store.Service{Name: "abc-app", WatchedImage: "nginx", Policy: store.PolicyManual}
+	if err := st.CreateService(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvFile(ctx, app.ID, "TOKEN=abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateService(ctx, &store.Service{Name: "other", WatchedImage: "nginx", Policy: store.PolicyManual}); err != nil {
+		t.Fatal(err)
+	}
+	dk := &docker.Fake{
+		Containers: map[string][]docker.Container{
+			"abc-app": {
+				{ID: "abc123fullid", Name: "abc-web", Image: "registry.example/abc-image:1", State: "running"},
+				{ID: "worker456id", Name: "plain-worker", State: "running"},
+			},
+			"other": {{ID: "zzz999zzz", Name: "other-web", State: "running"}},
+		},
+		LogData: map[string]string{
+			"abc123fullid": "hello abc world",
+			"worker456id":  "worker log",
+			"zzz999zzz":    "other log",
+		},
+	}
+	s := &Server{store: st, docker: dk}
+	handler := s.newMCPHandler()
+	var scopes atomic.Value
+	scopes.Store("nori:read")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r.WithContext(mcpauth.WithIdentity(r.Context(), mcpauth.Identity{ClientID: "test", Scope: scopes.Load().(string)})))
+	}))
+	defer srv.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: srv.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(name string, args map[string]any) (*mcp.CallToolResult, bool) {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res, res.IsError
+	}
+
+	res, isErr := call("get_service", map[string]any{"service_id": app.ID})
+	if isErr {
+		t.Fatalf("get_service: %+v", res)
+	}
+	containers := res.StructuredContent.(map[string]any)["containers"].([]any)
+	first := containers[0].(map[string]any)
+	if first["ID"] != "abc123fullid" || first["Name"] != "abc-web" {
+		t.Fatalf("container identifiers redacted: %+v", first)
+	}
+	// The exemption covers only container ID/Name/Digest: other container
+	// fields and the service itself stay redacted.
+	if first["Image"] != "registry.example/[REDACTED]-image:1" {
+		t.Fatalf("container image not redacted: %+v", first)
+	}
+	service := res.StructuredContent.(map[string]any)["service"].(map[string]any)
+	if service["Name"] != "[REDACTED]-app" {
+		t.Fatalf("service name not redacted: %+v", service)
+	}
+
+	res, isErr = call("get_container_logs", map[string]any{"service_id": app.ID, "container_name": "plain-worker"})
+	if isErr {
+		t.Fatalf("logs by container name: %+v", res)
+	}
+	if logs := res.StructuredContent.(map[string]any)["logs"]; logs != "worker log" {
+		t.Fatalf("wrong container logs: %q", logs)
+	}
+	res, isErr = call("get_container_logs", map[string]any{"service_id": app.ID, "container_name": "abc-web"})
+	if isErr {
+		t.Fatalf("logs by redacted-value name: %+v", res)
+	}
+	logs := res.StructuredContent.(map[string]any)["logs"].(string)
+	if strings.Contains(logs, "abc") || !strings.Contains(logs, "[REDACTED]") || !strings.Contains(logs, "hello") {
+		t.Fatalf("logs by name exposed env value: %q", logs)
+	}
+
+	if _, isErr := call("get_container_logs", map[string]any{"service_id": app.ID, "container_name": "other-web", "container_id": "abc123fullid"}); !isErr {
+		t.Fatal("foreign container name accepted")
+	}
+	if _, isErr := call("get_container_logs", map[string]any{"service_id": app.ID, "container_name": "no-such"}); !isErr {
+		t.Fatal("unknown container name accepted")
+	}
+	if _, isErr := call("get_container_logs", map[string]any{"service_id": app.ID}); !isErr {
+		t.Fatal("missing container identifier accepted")
+	}
+	res, isErr = call("get_container_logs", map[string]any{"service_id": app.ID, "container_id": "abc123fullid"})
+	if isErr {
+		t.Fatalf("logs by container id: %+v", res)
+	}
+	logs = res.StructuredContent.(map[string]any)["logs"].(string)
+	if strings.Contains(logs, "abc") || !strings.Contains(logs, "[REDACTED]") {
+		t.Fatalf("logs by id exposed env value: %q", logs)
+	}
+}
+
 func TestValidateMCPService(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

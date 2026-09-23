@@ -54,9 +54,10 @@ type mcpDeployment struct {
 	IncludeLogs  bool  `json:"include_logs,omitempty" jsonschema:"Include logs with known dotenv values redacted"`
 }
 type mcpLogs struct {
-	ServiceID   int64  `json:"service_id"`
-	ContainerID string `json:"container_id" jsonschema:"Container belonging to this service"`
-	Tail        int    `json:"tail,omitempty" jsonschema:"Lines, defaults to 100, maximum 1000"`
+	ServiceID     int64  `json:"service_id"`
+	ContainerID   string `json:"container_id,omitempty" jsonschema:"Container ID belonging to this service, as returned by get_service"`
+	ContainerName string `json:"container_name,omitempty" jsonschema:"Exact container name belonging to this service; takes precedence over container_id"`
+	Tail          int    `json:"tail,omitempty" jsonschema:"Lines, defaults to 100, maximum 1000"`
 }
 type mcpSecret struct {
 	ServiceID int64  `json:"service_id"`
@@ -126,7 +127,7 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 func (s *Server) newMCPHandler() http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, nil)
 	addNoriTool(s, server, "list_services", "List service configurations without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
-	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are excluded.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
+	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -254,7 +255,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return map[string]any{"deployment": d, "logs_truncated": truncated}, nil
 	})
-	addNoriTool(s, server, "get_container_logs", "Read bounded container logs with known dotenv values redacted. Maximum 1000 lines and 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpLogs) (any, error) {
+	addNoriTool(s, server, "get_container_logs", "Read bounded container logs with known dotenv values redacted. Identify the container with container_name or container_id. Maximum 1000 lines and 256 KiB.", mcpauth.ScopeRead, func(ctx context.Context, in mcpLogs) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -271,16 +272,29 @@ func (s *Server) newMCPHandler() http.Handler {
 		if err != nil {
 			return nil, errors.New("could not list containers")
 		}
-		found := false
-		for _, c := range cs {
-			if c.ID == in.ContainerID {
-				found = true
+		var id string
+		switch {
+		case in.ContainerName != "":
+			for _, c := range cs {
+				if c.Name == in.ContainerName {
+					id = c.ID
+					break
+				}
 			}
+		case in.ContainerID != "":
+			for _, c := range cs {
+				if c.ID == in.ContainerID {
+					id = c.ID
+					break
+				}
+			}
+		default:
+			return nil, errors.New("container_id or container_name is required")
 		}
-		if !found {
+		if id == "" {
 			return nil, errors.New("container does not belong to this service")
 		}
-		rc, err := s.docker.Logs(ctx, in.ContainerID, in.Tail)
+		rc, err := s.docker.Logs(ctx, id, in.Tail)
 		if err != nil {
 			return nil, errors.New("could not read container logs")
 		}
@@ -395,12 +409,16 @@ func (s *Server) mcpRedactor(ctx context.Context) (*envfile.Redactor, error) {
 }
 
 func redactMCPResult(value any, r *envfile.Redactor, logsRedacted bool) any {
+	return redactMCPValue(value, r, logsRedacted, false)
+}
+
+func redactMCPValue(value any, r *envfile.Redactor, logsRedacted, containers bool) any {
 	switch v := value.(type) {
 	case string:
 		return r.Redact(v)
 	case []any:
 		for i := range v {
-			v[i] = redactMCPResult(v[i], r, logsRedacted)
+			v[i] = redactMCPValue(v[i], r, logsRedacted, containers)
 		}
 	case map[string]any:
 		for key := range v {
@@ -408,7 +426,15 @@ func redactMCPResult(value any, r *envfile.Redactor, logsRedacted bool) any {
 			if logsRedacted && (key == "Log" || key == "logs") {
 				continue
 			}
-			v[key] = redactMCPResult(v[key], r, logsRedacted)
+			// Container IDs, names and digests are structural, not secret:
+			// redacting them leaves clients unable to address the container in
+			// get_container_logs, so they pass through verbatim. Accepted
+			// trade-off: an env value that is a substring of an identifier
+			// becomes visible inside get_service output.
+			if containers && (key == "ID" || key == "Name" || key == "Digest") {
+				continue
+			}
+			v[key] = redactMCPValue(v[key], r, logsRedacted, key == "containers")
 		}
 	}
 	return value
