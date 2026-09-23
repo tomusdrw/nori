@@ -100,8 +100,9 @@ func TestEditorValidationEndpointReturnsBashDiagnostic(t *testing.T) {
 
 func TestParseRoutingFormReadsConfiguredChannels(t *testing.T) {
 	form := url.Values{
-		"notify_twilio_down":      {"1"},
-		"notify_telegram_success": {"1"},
+		"notify_twilio_down":            {"1"},
+		"notify_telegram_deploy_failed": {"1"},
+		"notify_telegram_success":       {"1"},
 	}
 	routing := parseRoutingForm(Channels{Twilio: true, Telegram: true}, form)
 	if !routing.Allowed(notify.ChannelTwilio, notify.KindDown) {
@@ -112,6 +113,9 @@ func TestParseRoutingFormReadsConfiguredChannels(t *testing.T) {
 	}
 	if routing.Allowed(notify.ChannelTelegram, notify.KindDown) {
 		t.Error("absent telegram/down checkbox means off")
+	}
+	if !routing.Allowed(notify.ChannelTelegram, notify.KindDeployFailed) {
+		t.Error("telegram/deploy_failed must be on independently of down")
 	}
 	if !routing.Allowed(notify.ChannelTelegram, notify.KindSuccess) {
 		t.Error("telegram/success must be on")

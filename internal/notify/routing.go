@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+
+	"nori/internal/store"
 )
 
-// EventKind identifies which Notifier method an event arrived through.
+// EventKind identifies the operational event a notification reports.
 type EventKind string
 
 const (
-	// KindDown covers deploy failures and monitor-detected outages; both
-	// arrive via NotifyServiceDown.
+	// KindDeployFailed covers failed manual, automatic, and scheduled
+	// deployments.
+	KindDeployFailed EventKind = "deploy_failed"
+	// KindDown covers outages and unhealthy services detected by the monitor.
 	KindDown EventKind = "down"
 	// KindRecovered is NotifyServiceRecovered.
 	KindRecovered EventKind = "recovered"
@@ -30,7 +34,7 @@ const (
 var Channels = []string{ChannelTwilio, ChannelTelegram}
 
 // Kinds lists the canonical event kinds in settings-UI order.
-var Kinds = []EventKind{KindDown, KindRecovered, KindSuccess}
+var Kinds = []EventKind{KindDeployFailed, KindDown, KindRecovered, KindSuccess}
 
 // Route wraps one channel's notifier and consults Approve before every send,
 // so per-channel event routing is enforced as close to the wire as possible.
@@ -42,7 +46,11 @@ type Route struct {
 }
 
 func (r *Route) NotifyServiceDown(ctx context.Context, evt Event) error {
-	return r.send(ctx, KindDown, evt, r.Inner.NotifyServiceDown)
+	kind := KindDeployFailed
+	if evt.Trigger == store.TriggerMonitor {
+		kind = KindDown
+	}
+	return r.send(ctx, kind, evt, r.Inner.NotifyServiceDown)
 }
 
 func (r *Route) NotifyServiceRecovered(ctx context.Context, evt Event) error {
@@ -110,6 +118,14 @@ func ParseRouting(raw string) (Routing, error) {
 		for kind, on := range kinds {
 			if isKind(kind) {
 				entry[kind] = on
+			}
+		}
+		// Tables saved before deploy failures and monitored outages became
+		// separately configurable used "down" for both. Preserve that choice
+		// until the administrator saves the expanded matrix.
+		if _, ok := entry[KindDeployFailed]; !ok {
+			if down, ok := entry[KindDown]; ok {
+				entry[KindDeployFailed] = down
 			}
 		}
 		clean[ch] = entry

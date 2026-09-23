@@ -380,7 +380,8 @@ errors are logged without their secret material.
 The **Settings** page shows whether each channel is configured (channels are
 wired through environment variables at startup, so this is read-only status)
 and a checkbox matrix that routes each event kind — deploy failed, service
-recovered, deploy succeeded — to each channel independently. For example,
+down or unhealthy, service recovered, deploy succeeded — to each channel
+independently. For example,
 keep the chatty deploy-success messages on Telegram only, while failures and
 recoveries also go out as SMS. Changes take effect on the next event; no
 restart needed. Clearing every checkbox for a channel silences it completely.

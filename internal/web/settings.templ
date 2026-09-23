@@ -69,13 +69,14 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 						</tr>
 					</thead>
 					<tbody>
-						@notifyMatrixRow("Deploy failed", notify.KindDown, routing, channels)
+						@notifyMatrixRow("Deploy failed", notify.KindDeployFailed, routing, channels)
+						@notifyMatrixRow("Service down or unhealthy", notify.KindDown, routing, channels)
 						@notifyMatrixRow("Service recovered", notify.KindRecovered, routing, channels)
 						@notifyMatrixRow("Deploy succeeded", notify.KindSuccess, routing, channels)
 					</tbody>
 				</table>
 			</div>
-			<div class="form-notes">
+			<div class="form-notes notify-notes">
 				<p class="field-help">Channels are configured through environment variables at startup and cannot be changed here. A channel that is configured later starts with all events enabled.</p>
 			</div>
 		</section>

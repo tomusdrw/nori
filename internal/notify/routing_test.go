@@ -39,12 +39,15 @@ func TestRouting_Allowed(t *testing.T) {
 }
 
 func TestParseRouting_DecodesStoredJSON(t *testing.T) {
-	r, err := ParseRouting(`{"twilio":{"down":true,"recovered":false,"success":false},"telegram":{"down":false,"recovered":true,"success":true}}`)
+	r, err := ParseRouting(`{"twilio":{"deploy_failed":false,"down":true,"recovered":false,"success":false},"telegram":{"deploy_failed":true,"down":false,"recovered":true,"success":true}}`)
 	if err != nil {
 		t.Fatalf("ParseRouting: %v", err)
 	}
 	if !r.Allowed(ChannelTwilio, KindDown) {
 		t.Error("twilio/down must be enabled")
+	}
+	if r.Allowed(ChannelTwilio, KindDeployFailed) {
+		t.Error("twilio/deploy_failed must be disabled independently of down")
 	}
 	if r.Allowed(ChannelTwilio, KindRecovered) || r.Allowed(ChannelTwilio, KindSuccess) {
 		t.Error("twilio/recovered and twilio/success must be disabled")
@@ -52,8 +55,24 @@ func TestParseRouting_DecodesStoredJSON(t *testing.T) {
 	if r.Allowed(ChannelTelegram, KindDown) {
 		t.Error("telegram/down must be disabled")
 	}
+	if !r.Allowed(ChannelTelegram, KindDeployFailed) {
+		t.Error("telegram/deploy_failed must be enabled independently of down")
+	}
 	if !r.Allowed(ChannelTelegram, KindRecovered) || !r.Allowed(ChannelTelegram, KindSuccess) {
 		t.Error("telegram/recovered and telegram/success must be enabled")
+	}
+}
+
+func TestParseRouting_OldDownChoiceAlsoControlsDeployFailures(t *testing.T) {
+	r, err := ParseRouting(`{"twilio":{"down":false,"recovered":true,"success":true},"telegram":{"down":true,"recovered":false,"success":false}}`)
+	if err != nil {
+		t.Fatalf("ParseRouting: %v", err)
+	}
+	if r.Allowed(ChannelTwilio, KindDeployFailed) {
+		t.Error("old down=false choice must keep deploy failures disabled")
+	}
+	if !r.Allowed(ChannelTelegram, KindDeployFailed) {
+		t.Error("old down=true choice must keep deploy failures enabled")
 	}
 }
 
@@ -137,7 +156,7 @@ func TestEffectiveRouting_CorruptTableFallsBackToDefaults(t *testing.T) {
 
 func TestMarshalRoutingRoundTrip(t *testing.T) {
 	r := DefaultRouting()
-	r[ChannelTwilio] = map[EventKind]bool{KindDown: true, KindRecovered: false, KindSuccess: false}
+	r[ChannelTwilio] = map[EventKind]bool{KindDeployFailed: false, KindDown: true, KindRecovered: false, KindSuccess: false}
 	b, err := MarshalRouting(r)
 	if err != nil {
 		t.Fatalf("marshalRouting: %v", err)
@@ -145,11 +164,14 @@ func TestMarshalRoutingRoundTrip(t *testing.T) {
 	if !strings.Contains(b, `"down":true`) {
 		t.Errorf("expected down:true in JSON, got %s", b)
 	}
+	if !strings.Contains(b, `"deploy_failed":false`) {
+		t.Errorf("expected deploy_failed:false in JSON, got %s", b)
+	}
 	parsed, err := ParseRouting(b)
 	if err != nil {
 		t.Fatalf("ParseRouting: %v", err)
 	}
-	if !parsed.Allowed(ChannelTwilio, KindDown) || parsed.Allowed(ChannelTwilio, KindRecovered) {
+	if !parsed.Allowed(ChannelTwilio, KindDown) || parsed.Allowed(ChannelTwilio, KindDeployFailed) || parsed.Allowed(ChannelTwilio, KindRecovered) {
 		t.Errorf("round-trip changed the table: %+v", parsed)
 	}
 }

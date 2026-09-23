@@ -65,6 +65,9 @@ func TestBuildNotifier_WiresStoreBackedRouting(t *testing.T) {
 	if !routes[notify.ChannelTwilio].Approve(notify.KindDown) {
 		t.Error("unset settings must allow events")
 	}
+	if !routes[notify.ChannelTwilio].Approve(notify.KindDeployFailed) {
+		t.Error("unset settings must allow deploy failures")
+	}
 
 	// A stored routing table gates the matching channel at send time.
 	if err := st.SetSetting(ctx, store.SettingNotifyRouting,
@@ -73,6 +76,9 @@ func TestBuildNotifier_WiresStoreBackedRouting(t *testing.T) {
 	}
 	if routes[notify.ChannelTwilio].Approve(notify.KindDown) {
 		t.Error("stored twilio/down=false must block down events")
+	}
+	if routes[notify.ChannelTwilio].Approve(notify.KindDeployFailed) {
+		t.Error("an old twilio/down=false choice must also block deploy failures")
 	}
 	if !routes[notify.ChannelTwilio].Approve(notify.KindRecovered) {
 		t.Error("stored twilio/recovered=true must allow recovery events")

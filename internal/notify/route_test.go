@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"nori/internal/store"
 )
 
 func TestRoute_ForwardsApprovedKinds(t *testing.T) {
@@ -14,7 +16,7 @@ func TestRoute_ForwardsApprovedKinds(t *testing.T) {
 		Inner:   inner,
 	}
 	ctx := context.Background()
-	evt := Event{ServiceName: "app"}
+	evt := Event{ServiceName: "app", Trigger: store.TriggerManual}
 	if err := r.NotifyServiceDown(ctx, evt); err != nil {
 		t.Fatalf("NotifyServiceDown: %v", err)
 	}
@@ -37,11 +39,34 @@ func TestRoute_BlocksUnapprovedKinds(t *testing.T) {
 		Inner:   inner,
 	}
 	ctx := context.Background()
-	_ = r.NotifyServiceDown(ctx, Event{})
+	_ = r.NotifyServiceDown(ctx, Event{Trigger: store.TriggerMonitor})
 	_ = r.NotifyServiceRecovered(ctx, Event{})
 	_ = r.NotifyDeploySuccess(ctx, Event{})
 	if want := "down"; strings.Join(inner.calls, ",") != want {
 		t.Errorf("inner calls = %v, want only %v", inner.calls, want)
+	}
+}
+
+func TestRoute_RoutesDeployFailuresSeparatelyFromMonitoredOutages(t *testing.T) {
+	inner := &recordingNotifier{name: "inner"}
+	var seen []EventKind
+	r := &Route{
+		Channel: ChannelTwilio,
+		Approve: func(kind EventKind) bool {
+			seen = append(seen, kind)
+			return kind == KindDeployFailed
+		},
+		Inner: inner,
+	}
+
+	_ = r.NotifyServiceDown(context.Background(), Event{Trigger: store.TriggerManual})
+	_ = r.NotifyServiceDown(context.Background(), Event{Trigger: store.TriggerMonitor})
+
+	if got, want := strings.Join(inner.calls, ","), "down"; got != want {
+		t.Fatalf("inner calls = %q, want %q", got, want)
+	}
+	if len(seen) != 2 || seen[0] != KindDeployFailed || seen[1] != KindDown {
+		t.Fatalf("approved kinds = %v, want [%s %s]", seen, KindDeployFailed, KindDown)
 	}
 }
 
