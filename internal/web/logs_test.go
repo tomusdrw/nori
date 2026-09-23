@@ -138,6 +138,10 @@ func TestServiceDetailLogsPanel(t *testing.T) {
 		`hx-get="/services/app/logs/stream"`,
 		`hx-swap="outerHTML"`,
 		"The latest 100 lines from the selected container.",
+		`class="log-copy button button-ghost button-small"`,
+		`onclick="copyContainerLogs(this)"`,
+		"navigator.clipboard",
+		"execCommand('copy')",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail page missing %q: %s", want, body)

@@ -290,6 +290,7 @@ code { color: #c9c2ff; font-size: 0.88em; }
 .panel-heading h2 { margin: 0 0 3px; font-size: 1rem; letter-spacing: -0.01em; }
 .panel-heading p { margin: 0; color: var(--text-muted); font-size: 0.83rem; }
 .compact-heading { align-items: center; padding: 18px 20px; }
+.heading-side { display: flex; align-items: center; gap: 10px; }
 .count-pill { min-width: 27px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: 0.7rem; text-align: center; }
 
 .table-wrap { overflow-x: auto; }

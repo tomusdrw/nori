@@ -72,7 +72,10 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 	<section id="logs" class="panel detail-panel log-panel full-width-log-panel">
 			<div class="panel-heading compact-heading">
 				<div><h2>Container logs</h2><p>The latest 100 lines from the selected container.</p></div>
-				<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+				<div class="heading-side">
+					<button class="log-copy button button-ghost button-small" type="button" onclick="copyContainerLogs(this)">Copy</button>
+					<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+				</div>
 			</div>
 			<div id="container-logs" hx-get={ logsStreamURL(data.Service.Name, "") } hx-trigger="load" hx-swap="outerHTML">Loading logs…</div>
 	</section>
@@ -122,6 +125,37 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			</table>
 		</div>
 	</section>
+
+	<script>
+		function copyContainerLogs(btn) {
+			var box = document.querySelector('#container-logs .log-box');
+			var text = box ? box.textContent : '';
+			var done = function(ok) {
+				btn.textContent = ok ? 'Copied' : 'Failed';
+				setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+			};
+			// The dashboard is often served over plain HTTP (e.g. a tailnet
+			// IP), where navigator.clipboard is unavailable and the
+			// deprecated execCommand path is the only way to copy.
+			var fallback = function() {
+				var ta = document.createElement('textarea');
+				ta.value = text;
+				ta.style.position = 'fixed';
+				ta.style.opacity = '0';
+				document.body.appendChild(ta);
+				ta.select();
+				var ok = false;
+				try { ok = document.execCommand('copy'); } catch (e) {}
+				ta.remove();
+				done(ok);
+			};
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(text).then(function() { done(true); }, fallback);
+			} else {
+				fallback();
+			}
+		}
+	</script>
 }
 
 func strconvItoa64(i int64) string {
