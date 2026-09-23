@@ -1,5 +1,7 @@
 package web
 
+import "strconv"
+
 templ ServiceDetailPage(data ServiceDetailData, csrf string) {
 	@Layout(data.Service.Name, csrf, serviceDetailContent(data, csrf))
 }
@@ -69,10 +71,13 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 
 	<section id="logs" class="panel detail-panel log-panel full-width-log-panel">
 			<div class="panel-heading compact-heading">
-				<div><h2>Container logs</h2><p>The latest 100 lines from each container.</p></div>
-				<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+				<div><h2>Container logs</h2><p>The latest 100 lines from the selected container.</p></div>
+				<div class="heading-side">
+					<button class="log-copy button button-ghost button-small" type="button" onclick="copyContainerLogs(this)">Copy</button>
+					<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
+				</div>
 			</div>
-			<pre class="log-box" hx-get={ templ.SafeURL("/services/" + data.Service.Name + "/logs/stream") } hx-trigger="load" hx-swap="innerHTML">Loading logs…</pre>
+			<div id="container-logs" hx-get={ logsStreamURL(data.Service.Name, "") } hx-trigger="load" hx-swap="outerHTML">Loading logs…</div>
 	</section>
 
 	<section class="panel detail-panel history-panel">
@@ -120,10 +125,62 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			</table>
 		</div>
 	</section>
+
+	<script>
+		function copyContainerLogs(btn) {
+			var box = document.querySelector('#container-logs .log-box');
+			var text = box ? box.textContent : '';
+			var done = function(ok) {
+				btn.textContent = ok ? 'Copied' : 'Failed';
+				setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+			};
+			// The dashboard is often served over plain HTTP (e.g. a tailnet
+			// IP), where navigator.clipboard is unavailable and the
+			// deprecated execCommand path is the only way to copy.
+			var fallback = function() {
+				var ta = document.createElement('textarea');
+				ta.value = text;
+				ta.style.position = 'fixed';
+				ta.style.opacity = '0';
+				document.body.appendChild(ta);
+				ta.select();
+				var ok = false;
+				try { ok = document.execCommand('copy'); } catch (e) {}
+				ta.remove();
+				done(ok);
+			};
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(text).then(function() { done(true); }, fallback);
+			} else {
+				fallback();
+			}
+		}
+	</script>
 }
 
 func strconvItoa64(i int64) string {
 	return strconvItoa(int(i))
+}
+
+// containerLogsFragment is the service detail page's log panel body: a tab per
+// container when there are several, above the selected container's log tail.
+// Tab clicks re-request this fragment, so the active highlight is rendered
+// server-side and the wrapper id stays stable across swaps.
+templ containerLogsFragment(service string, names []string, selected string, logs string) {
+	<div id="container-logs">
+		if len(names) > 1 {
+			<div class="log-tabs" role="tablist">
+				for _, name := range names {
+					<button class={ "log-tab", templ.KV("active", name == selected) } aria-selected={ strconv.FormatBool(name == selected) } hx-get={ logsStreamURL(service, name) } hx-target="#container-logs" hx-swap="outerHTML">{ name }</button>
+				}
+			</div>
+		}
+		if logs == "" {
+			<pre class="log-box">No container logs yet.</pre>
+		} else {
+			<pre class="log-box">{ logs }</pre>
+		}
+	</div>
 }
 
 templ DeploymentPage(id int64, status string, log string, csrf string) {

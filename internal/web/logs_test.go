@@ -32,7 +32,7 @@ func TestReadLogLinesFormatsJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := readLogLines(strings.NewReader(tc.input + "\n"))
 			if len(got) != 1 || got[0] != tc.want {
-				t.Fatalf("readLogLines = %q, want [%q]", got, tc.want)
+				t.Fatalf("readLogLines = %q, want [%q]", got, []string{tc.want})
 			}
 		})
 	}
@@ -61,8 +61,90 @@ func TestJSONLogsInDashboardAndStream(t *testing.T) {
 	router.Get("/services/{name}/logs/stream", srv.handleLogsStream)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, httptest.NewRequest("GET", "/services/app/logs/stream", nil))
-	want := html.EscapeString("=== app-web ===\nolder line\n" + formatted)
-	if rr.Code != 200 || rr.Body.String() != want {
-		t.Fatalf("stream: status %d, body %q, want %q", rr.Code, rr.Body.String(), want)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), html.EscapeString(formatted)) {
+		t.Fatalf("stream: status %d, body %q, want it to contain %q", rr.Code, rr.Body.String(), html.EscapeString(formatted))
+	}
+	if strings.Contains(rr.Body.String(), "===") {
+		t.Fatalf("single-container stream should not label containers: %s", rr.Body.String())
+	}
+}
+
+func TestLogsStreamContainerTabs(t *testing.T) {
+	srv := &Server{docker: &docker.Fake{
+		Containers: map[string][]docker.Container{"app": {
+			{ID: "web", Name: "app-web"},
+			{ID: "worker", Name: "app-worker"},
+		}},
+		LogData: map[string]string{
+			"web":    "web line\n",
+			"worker": "worker line\n",
+		},
+	}}
+	router := chi.NewRouter()
+	router.Get("/services/{name}/logs/stream", srv.handleLogsStream)
+
+	for _, tc := range []struct {
+		name               string
+		query              string
+		wantLog, wantTab   string
+		otherLog, otherTab string
+	}{
+		{"defaults to first container", "", "web line", "app-web", "worker line", "app-worker"},
+		{"selects requested container", "?container=app-worker", "worker line", "app-worker", "web line", "app-web"},
+		{"falls back on unknown container", "?container=nope", "web line", "app-web", "worker line", "app-worker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, httptest.NewRequest("GET", "/services/app/logs/stream"+tc.query, nil))
+			body := rr.Body.String()
+			if rr.Code != 200 || !strings.Contains(body, html.EscapeString(tc.wantLog)) || strings.Contains(body, tc.otherLog) {
+				t.Fatalf("stream: status %d, body %q", rr.Code, body)
+			}
+			if !strings.Contains(body, `id="container-logs"`) {
+				t.Fatalf("stream missing fragment wrapper: %s", body)
+			}
+			active := `<button class="log-tab active" aria-selected="true" hx-get="/services/app/logs/stream?container=` + tc.wantTab + `"`
+			if !strings.Contains(body, active) {
+				t.Fatalf("stream missing active tab for %s: %s", tc.wantTab, body)
+			}
+			inactive := `<button class="log-tab" aria-selected="false" hx-get="/services/app/logs/stream?container=` + tc.otherTab + `"`
+			if !strings.Contains(body, inactive) {
+				t.Fatalf("stream missing tab for %s: %s", tc.otherTab, body)
+			}
+		})
+	}
+
+	t.Run("no containers shows placeholder without tabs", func(t *testing.T) {
+		empty := &Server{docker: &docker.Fake{Containers: map[string][]docker.Container{"app": nil}}}
+		r := chi.NewRouter()
+		r.Get("/services/{name}/logs/stream", empty.handleLogsStream)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest("GET", "/services/app/logs/stream", nil))
+		if rr.Code != 200 || !strings.Contains(rr.Body.String(), "No container logs yet.") || strings.Contains(rr.Body.String(), "log-tab") {
+			t.Fatalf("empty stream: status %d, body %q", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestServiceDetailLogsPanel(t *testing.T) {
+	data := ServiceDetailData{Service: ServiceFormData{Name: "app", WatchedImage: "ghcr.io/app:1"}}
+	page := httptest.NewRecorder()
+	if err := ServiceDetailPage(data, "").Render(context.Background(), page); err != nil {
+		t.Fatal(err)
+	}
+	body := page.Body.String()
+	for _, want := range []string{
+		`id="container-logs"`,
+		`hx-get="/services/app/logs/stream"`,
+		`hx-swap="outerHTML"`,
+		"The latest 100 lines from the selected container.",
+		`class="log-copy button button-ghost button-small"`,
+		`onclick="copyContainerLogs(this)"`,
+		"navigator.clipboard",
+		"execCommand('copy')",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("detail page missing %q: %s", want, body)
+		}
 	}
 }
