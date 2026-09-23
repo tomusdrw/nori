@@ -4,11 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/a-h/templ"
 )
+
+// logsStreamURL builds the log panel's htmx endpoint for a service. An empty
+// container selects the server-side default (the first container).
+func logsStreamURL(service, container string) templ.SafeURL {
+	u := "/services/" + url.PathEscape(service) + "/logs/stream"
+	if container != "" {
+		u += "?container=" + url.QueryEscape(container)
+	}
+	return templ.SafeURL(u)
+}
 
 // formatLogLine turns a JSON object into a compact log entry. Non-object JSON
 // and ordinary text pass through unchanged. Formatting stays on one line so

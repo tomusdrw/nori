@@ -320,6 +320,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .full-width-log-panel, .history-panel { margin-bottom: 18px; }
 .full-width-log-panel .log-box { height: min(58vh, 560px); min-height: 360px; }
 
+.log-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 20px 0; border-bottom: 1px solid var(--border); }
+.log-tab { padding: 5px 14px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-muted); font-family: inherit; font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease; }
+.log-tab:hover { color: var(--text); }
+.log-tab.active { border-color: #b8aeff; background: rgba(184, 174, 255, 0.08); color: var(--text); }
+
 .log-box-large { min-height: 520px; }
 .deployment-log-panel { max-width: 1000px; }
 

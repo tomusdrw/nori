@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -611,6 +612,11 @@ func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleLogsStream serves the service detail page's log panel as a fragment:
+// a tab row when the service has several containers plus the selected
+// container's tail. The container query parameter picks the tab; missing or
+// unknown names fall back to the first container so stale tabs from an
+// earlier page load still resolve after a redeploy.
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	cs, err := s.docker.ListByService(r.Context(), name)
@@ -618,14 +624,30 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	names := make([]string, len(cs))
+	for i, c := range cs {
+		names[i] = c.Name
+	}
+	selected := r.URL.Query().Get("container")
+	if slices.Index(names, selected) < 0 {
+		selected = ""
+	}
+	if selected == "" && len(names) > 0 {
+		selected = names[0]
+	}
+	var logs string
+	if selected != "" {
+		idx := slices.Index(names, selected)
+		logs = s.containerLogs(r.Context(), cs[idx:idx+1], 100)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, html.EscapeString(s.containerLogs(r.Context(), cs, 100, true)))
+	_ = containerLogsFragment(name, names, selected, logs).Render(r.Context(), w)
 }
 
 // recentLogs returns a compact, readable tail for dashboard cards. The full
 // per-container log output remains available from the service detail page.
 func (s *Server) recentLogs(ctx context.Context, cs []docker.Container, lineLimit int) string {
-	logs := s.containerLogs(ctx, cs, lineLimit, false)
+	logs := s.containerLogs(ctx, cs, lineLimit)
 	if logs == "" {
 		return "No container logs yet."
 	}
@@ -636,7 +658,10 @@ func (s *Server) recentLogs(ctx context.Context, cs []docker.Container, lineLimi
 	return logs
 }
 
-func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail int, includeContainerNames bool) string {
+// containerLogs concatenates the given containers' tails. Callers pass a
+// single container for the per-container log panel; recentLogs passes a
+// service's containers for the mixed dashboard preview.
+func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail int) string {
 	var b strings.Builder
 	for _, c := range cs {
 		rc, err := s.docker.Logs(ctx, c.ID, tail)
@@ -645,12 +670,6 @@ func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail 
 		}
 		lines := readLogLines(rc)
 		rc.Close()
-		if len(lines) == 0 {
-			continue
-		}
-		if includeContainerNames {
-			fmt.Fprintf(&b, "=== %s ===\n", c.Name)
-		}
 		for _, line := range lines {
 			b.WriteString(line)
 			b.WriteByte('\n')
