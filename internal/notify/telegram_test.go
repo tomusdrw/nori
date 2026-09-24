@@ -89,7 +89,7 @@ func TestTelegram_PostsExpectedRequest(t *testing.T) {
 	if payload.ChatID != "-1001234567890" {
 		t.Errorf("chat_id = %q", payload.ChatID)
 	}
-	for _, want := range []string{"prod-nori", "billing", "<b>Trigger:</b> Automatic", "sha256:deadbeef", "container exited"} {
+	for _, want := range []string{"prod-nori", "billing", "❌ <b>billing deploy failed</b> @ prod-nori", "Automatic · <code>sha256:deadbeef</code> — container exited"} {
 		if !strings.Contains(payload.Text, want) {
 			t.Errorf("text missing %q: %q", want, payload.Text)
 		}
@@ -169,7 +169,7 @@ func TestTelegram_BoundedTimeout(t *testing.T) {
 	}
 }
 
-func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
+func TestTelegram_AllEventsLeadWithServiceName(t *testing.T) {
 	type sentMessage struct {
 		Text      string `json:"text"`
 		ParseMode string `json:"parse_mode"`
@@ -193,14 +193,15 @@ func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
 
 	evt := Event{BotName: "Production", ServiceName: "billing", Trigger: "manual", Digest: "sha256:x", Reason: "boom"}
 	calls := []struct {
-		name string
-		send func() error
-		want []string
+		name    string
+		send    func() error
+		want    []string
+		mustNot []string
 	}{
 		{
 			name: "failed deployment",
 			send: func() error { return tg.NotifyServiceDown(context.Background(), evt) },
-			want: []string{"❌ <b>Deployment failed</b>", "<b>Service:</b> billing", "<b>Instance:</b> Production", "<b>Trigger:</b> Manual", "<b>Image:</b> <code>sha256:x</code>", "<b>Reason:</b> boom"},
+			want: []string{"❌ <b>billing deploy failed</b> @ Production", "Manual · <code>sha256:x</code> — boom"},
 		},
 		{
 			name: "monitored outage",
@@ -210,7 +211,7 @@ func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
 				outage.Reason = "no containers"
 				return tg.NotifyServiceDown(context.Background(), outage)
 			},
-			want: []string{"🚨 <b>Service is down</b>", "<b>Trigger:</b> Health monitor", "<b>Reason:</b> no containers"},
+			want: []string{"🚨 <b>billing is down</b> @ Production", "<code>sha256:x</code> — no containers"},
 		},
 		{
 			name: "recovery",
@@ -219,12 +220,14 @@ func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
 				recovered.Trigger = "monitor"
 				return tg.NotifyServiceRecovered(context.Background(), recovered)
 			},
-			want: []string{"✅ <b>Service recovered</b>", "<b>Service:</b> billing", "<b>Trigger:</b> Health monitor"},
+			want:    []string{"✅ <b>billing recovered</b> @ Production", "<code>sha256:x</code>"},
+			mustNot: []string{"boom"},
 		},
 		{
-			name: "successful deployment",
-			send: func() error { return tg.NotifyDeploySuccess(context.Background(), evt) },
-			want: []string{"🚀 <b>Deployment succeeded</b>", "<b>Service:</b> billing", "<b>Trigger:</b> Manual"},
+			name:    "successful deployment",
+			send:    func() error { return tg.NotifyDeploySuccess(context.Background(), evt) },
+			want:    []string{"🚀 <b>billing deployed</b> @ Production", "Manual · <code>sha256:x</code>"},
+			mustNot: []string{"boom"},
 		},
 	}
 	for _, tc := range calls {
@@ -242,6 +245,11 @@ func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
 			for _, want := range tc.want {
 				if !strings.Contains(messages[0].Text, want) {
 					t.Errorf("text missing %q: %q", want, messages[0].Text)
+				}
+			}
+			for _, banned := range tc.mustNot {
+				if strings.Contains(messages[0].Text, banned) {
+					t.Errorf("text must not contain %q: %q", banned, messages[0].Text)
 				}
 			}
 		})

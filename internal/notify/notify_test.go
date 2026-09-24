@@ -28,24 +28,20 @@ func TestSuccessMessageBody_HasNoReason(t *testing.T) {
 		Digest:      "sha256:abc12345",
 		Reason:      "must be ignored",
 	})
-	for _, want := range []string{"🚀 [prod] Deployed: billing", "scheduled · sha256:abc12345"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("body missing %q: %q", want, got)
-		}
-	}
-	if strings.Contains(got, "must be ignored") {
-		t.Errorf("success body must not include a reason: %q", got)
+	want := "🚀 billing deployed @ prod\nScheduled · sha256:abc12345"
+	if got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }
 
 func TestSuccessMessageBody_DefaultsBotName(t *testing.T) {
 	got := SuccessMessageBody(Event{ServiceName: "x"})
-	if !strings.HasPrefix(got, "🚀 [Nori]") {
-		t.Errorf("body should default to Nori: %q", got)
+	if want := "🚀 x deployed @ Nori"; got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }
 
-func TestSMSMessageBodies_VisuallyDistinguishEvents(t *testing.T) {
+func TestSMSMessageBodies_LeadWithServiceName(t *testing.T) {
 	evt := Event{
 		BotName:     "Production",
 		ServiceName: "billing",
@@ -54,16 +50,14 @@ func TestSMSMessageBodies_VisuallyDistinguishEvents(t *testing.T) {
 		Reason:      "exit status 1",
 	}
 	cases := []struct {
-		name       string
-		body       string
-		wantHeader string
-		wantDetail string
+		name string
+		body string
+		want string
 	}{
 		{
-			name:       "failed deployment",
-			body:       MessageBody(evt),
-			wantHeader: "❌ [Production] Deploy failed: billing",
-			wantDetail: "auto · sha256:abc12345 — exit status 1",
+			name: "failed deployment",
+			body: MessageBody(evt),
+			want: "❌ billing deploy failed @ Production\nAutomatic · sha256:abc12345 — exit status 1",
 		},
 		{
 			name: "monitored outage",
@@ -74,29 +68,23 @@ func TestSMSMessageBodies_VisuallyDistinguishEvents(t *testing.T) {
 				Digest:      evt.Digest,
 				Reason:      "no containers",
 			}),
-			wantHeader: "🚨 [Production] Service down: billing",
-			wantDetail: "sha256:abc12345 — no containers",
+			want: "🚨 billing is down @ Production\nsha256:abc12345 — no containers",
 		},
 		{
-			name:       "recovery",
-			body:       RecoveredMessageBody(evt),
-			wantHeader: "✅ [Production] Service recovered: billing",
-			wantDetail: "sha256:abc12345",
+			name: "recovery",
+			body: RecoveredMessageBody(evt),
+			want: "✅ billing recovered @ Production\nsha256:abc12345",
 		},
 		{
-			name:       "successful deployment",
-			body:       SuccessMessageBody(evt),
-			wantHeader: "🚀 [Production] Deployed: billing",
-			wantDetail: "auto · sha256:abc12345",
+			name: "successful deployment",
+			body: SuccessMessageBody(evt),
+			want: "🚀 billing deployed @ Production\nAutomatic · sha256:abc12345",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !strings.HasPrefix(tc.body, tc.wantHeader+"\n") {
-				t.Errorf("body header = %q, want %q", tc.body, tc.wantHeader)
-			}
-			if !strings.Contains(tc.body, tc.wantDetail) {
-				t.Errorf("body details missing %q: %q", tc.wantDetail, tc.body)
+			if tc.body != tc.want {
+				t.Errorf("body = %q, want %q", tc.body, tc.want)
 			}
 		})
 	}
@@ -176,10 +164,10 @@ func TestMessageBody_IncludesFieldsAndDefaultBot(t *testing.T) {
 		Digest:      "sha256:abc12345",
 		Reason:      "exit status 1",
 	})
-	if !strings.Contains(got, "[Nori]") {
-		t.Errorf("body missing default bot name: %q", got)
+	if !strings.Contains(got, "@ Nori") {
+		t.Errorf("body should default to Nori: %q", got)
 	}
-	for _, want := range []string{"billing-api", "auto", "sha256:abc12345", "exit status 1"} {
+	for _, want := range []string{"billing-api", "Automatic", "sha256:abc12345", "exit status 1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("body missing %q: %q", want, got)
 		}
@@ -188,8 +176,8 @@ func TestMessageBody_IncludesFieldsAndDefaultBot(t *testing.T) {
 
 func TestMessageBody_UsesCustomBotName(t *testing.T) {
 	got := MessageBody(Event{BotName: "prod", ServiceName: "x"})
-	if !strings.HasPrefix(got, "❌ [prod]") {
-		t.Errorf("body should use custom bot name: %q", got)
+	if !strings.HasPrefix(got, "❌ x deploy failed @ prod") {
+		t.Errorf("body should lead with the service and instance: %q", got)
 	}
 }
 
@@ -441,7 +429,7 @@ func TestTwilio_NotifyServiceRecovered_PostsExpectedRequest(t *testing.T) {
 	if vals.Get("To") != "+15559876543" {
 		t.Errorf("To = %q", vals.Get("To"))
 	}
-	if !strings.Contains(vals.Get("Body"), "billing") || !strings.Contains(vals.Get("Body"), "prod-nori") || !strings.Contains(vals.Get("Body"), "Service recovered") {
+	if !strings.Contains(vals.Get("Body"), "billing") || !strings.Contains(vals.Get("Body"), "prod-nori") || !strings.Contains(vals.Get("Body"), "billing recovered") {
 		t.Errorf("Body = %q", vals.Get("Body"))
 	}
 }

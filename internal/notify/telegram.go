@@ -48,52 +48,43 @@ func NewTelegram(botToken, chatID string) *Telegram {
 }
 
 func (t *Telegram) NotifyServiceDown(ctx context.Context, evt Event) error {
-	icon, title := "❌", "Deployment failed"
-	linkLabel := "View deployment"
 	publicURL := t.publicURL(ctx)
 	link := deploymentLink(publicURL, evt.DeploymentID)
 	if evt.Trigger == store.TriggerMonitor {
-		icon, title = "🚨", "Service is down"
-		linkLabel = "View service"
 		link = serviceLink(publicURL, evt.ServiceName)
 	}
-	return t.send(ctx, telegramMessage(icon, title, evt, true, linkLabel, link))
+	return t.send(ctx, telegramMessage(downCopy(evt), link))
 }
 
 func (t *Telegram) NotifyServiceRecovered(ctx context.Context, evt Event) error {
 	link := serviceLink(t.publicURL(ctx), evt.ServiceName)
-	return t.send(ctx, telegramMessage("✅", "Service recovered", evt, false, "View service", link))
+	return t.send(ctx, telegramMessage(recoveredCopy(evt), link))
 }
 
 func (t *Telegram) NotifyDeploySuccess(ctx context.Context, evt Event) error {
 	link := deploymentLink(t.publicURL(ctx), evt.DeploymentID)
-	return t.send(ctx, telegramMessage("🚀", "Deployment succeeded", evt, false, "View deployment", link))
+	return t.send(ctx, telegramMessage(successCopy(evt), link))
 }
 
-func telegramMessage(icon, title string, evt Event, includeReason bool, linkLabel, link string) string {
-	bot := strings.TrimSpace(evt.BotName)
-	if bot == "" {
-		bot = "Nori"
+// telegramMessage renders the shared copy as HTML for the Bot API: a bold
+// headline followed by the plain "@ Instance" tag, a compact metadata line
+// with the digest in a code fragment, and the dashboard link when one is
+// available.
+func telegramMessage(c messageCopy, link string) string {
+	lines := []string{c.icon + " <b>" + html.EscapeString(c.headline) + "</b> @ " + html.EscapeString(c.instance)}
+	if detail := c.detail(html.EscapeString, codeFragment); detail != "" {
+		lines = append(lines, detail)
 	}
-	lines := []string{
-		icon + " <b>" + title + "</b>",
-		"",
-		"<b>Service:</b> " + html.EscapeString(evt.ServiceName),
-		"<b>Instance:</b> " + html.EscapeString(bot),
-	}
-	if evt.Trigger != "" {
-		lines = append(lines, "<b>Trigger:</b> "+html.EscapeString(friendlyTrigger(evt.Trigger)))
-	}
-	if evt.Digest != "" {
-		lines = append(lines, "<b>Image:</b> <code>"+html.EscapeString(evt.Digest)+"</code>")
-	}
-	if includeReason && evt.Reason != "" {
-		lines = append(lines, "<b>Reason:</b> "+html.EscapeString(evt.Reason))
-	}
-	if link != "" {
-		lines = append(lines, "", "🔗 <a href=\""+html.EscapeString(link)+"\">"+linkLabel+"</a>")
+	if link != "" && c.linkLabel != "" {
+		lines = append(lines, "🔗 <a href=\""+html.EscapeString(link)+"\">"+html.EscapeString(c.linkLabel)+"</a>")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// codeFragment wraps a fragment in an HTML code tag so digests render in a
+// monospace font.
+func codeFragment(s string) string {
+	return "<code>" + html.EscapeString(s) + "</code>"
 }
 
 func (t *Telegram) publicURL(ctx context.Context) string {
@@ -115,21 +106,6 @@ func serviceLink(publicURL, serviceName string) string {
 		return ""
 	}
 	return publicURL + "/services/" + url.PathEscape(serviceName)
-}
-
-func friendlyTrigger(trigger string) string {
-	switch trigger {
-	case store.TriggerManual:
-		return "Manual"
-	case store.TriggerAuto:
-		return "Automatic"
-	case store.TriggerScheduled:
-		return "Scheduled"
-	case store.TriggerMonitor:
-		return "Health monitor"
-	default:
-		return trigger
-	}
 }
 
 // send POSTs a preformatted message body to the Bot API. Errors never
