@@ -146,13 +146,21 @@ func buildNotifier(cfg config.Config, st *store.Store) notify.Notifier {
 		})
 	}
 	if cfg.Telegram.Enabled() {
+		telegram := notify.NewTelegram(
+			cfg.Telegram.BotToken,
+			cfg.Telegram.ChatID,
+		)
+		telegram.PublicURL = func(ctx context.Context) string {
+			mcp, err := st.GetMCPConfig(ctx)
+			if err != nil {
+				return ""
+			}
+			return mcp.PublicURL
+		}
 		notifiers = append(notifiers, &notify.Route{
 			Channel: notify.ChannelTelegram,
 			Approve: approve(notify.ChannelTelegram),
-			Inner: notify.NewTelegram(
-				cfg.Telegram.BotToken,
-				cfg.Telegram.ChatID,
-			),
+			Inner:   telegram,
 		})
 	}
 	if len(notifiers) == 0 {

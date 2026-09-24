@@ -89,7 +89,7 @@ func TestTelegram_PostsExpectedRequest(t *testing.T) {
 	if payload.ChatID != "-1001234567890" {
 		t.Errorf("chat_id = %q", payload.ChatID)
 	}
-	for _, want := range []string{"prod-nori", "billing", "trigger=auto", "sha256:deadbeef", "container exited"} {
+	for _, want := range []string{"prod-nori", "billing", "<b>Trigger:</b> Automatic", "sha256:deadbeef", "container exited"} {
 		if !strings.Contains(payload.Text, want) {
 			t.Errorf("text missing %q: %q", want, payload.Text)
 		}
@@ -169,15 +169,17 @@ func TestTelegram_BoundedTimeout(t *testing.T) {
 	}
 }
 
-func TestTelegram_AllEventsUseFormatting(t *testing.T) {
-	var bodies []string
+func TestTelegram_AllEventsUseDetailedFormatting(t *testing.T) {
+	type sentMessage struct {
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode"`
+	}
+	var messages []sentMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		var payload struct {
-			Text string `json:"text"`
-		}
+		var payload sentMessage
 		_ = json.Unmarshal(raw, &payload)
-		bodies = append(bodies, payload.Text)
+		messages = append(messages, payload)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
@@ -188,26 +190,160 @@ func TestTelegram_AllEventsUseFormatting(t *testing.T) {
 		ChatID:   "1",
 		Client:   srv.Client(),
 	}
-	evt := Event{BotName: "n", ServiceName: "app", Trigger: "manual", Digest: "sha256:x", Reason: "boom"}
-	bodies = nil
+
+	evt := Event{BotName: "Production", ServiceName: "billing", Trigger: "manual", Digest: "sha256:x", Reason: "boom"}
+	calls := []struct {
+		name string
+		send func() error
+		want []string
+	}{
+		{
+			name: "failed deployment",
+			send: func() error { return tg.NotifyServiceDown(context.Background(), evt) },
+			want: []string{"❌ <b>Deployment failed</b>", "<b>Service:</b> billing", "<b>Instance:</b> Production", "<b>Trigger:</b> Manual", "<b>Image:</b> <code>sha256:x</code>", "<b>Reason:</b> boom"},
+		},
+		{
+			name: "monitored outage",
+			send: func() error {
+				outage := evt
+				outage.Trigger = "monitor"
+				outage.Reason = "no containers"
+				return tg.NotifyServiceDown(context.Background(), outage)
+			},
+			want: []string{"🚨 <b>Service is down</b>", "<b>Trigger:</b> Health monitor", "<b>Reason:</b> no containers"},
+		},
+		{
+			name: "recovery",
+			send: func() error {
+				recovered := evt
+				recovered.Trigger = "monitor"
+				return tg.NotifyServiceRecovered(context.Background(), recovered)
+			},
+			want: []string{"✅ <b>Service recovered</b>", "<b>Service:</b> billing", "<b>Trigger:</b> Health monitor"},
+		},
+		{
+			name: "successful deployment",
+			send: func() error { return tg.NotifyDeploySuccess(context.Background(), evt) },
+			want: []string{"🚀 <b>Deployment succeeded</b>", "<b>Service:</b> billing", "<b>Trigger:</b> Manual"},
+		},
+	}
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			messages = nil
+			if err := tc.send(); err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 {
+				t.Fatalf("sent %d messages, want 1", len(messages))
+			}
+			if messages[0].ParseMode != "HTML" {
+				t.Errorf("parse_mode = %q, want HTML", messages[0].ParseMode)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(messages[0].Text, want) {
+					t.Errorf("text missing %q: %q", want, messages[0].Text)
+				}
+			}
+		})
+	}
+}
+
+func TestTelegram_AddsContextualDashboardLinks(t *testing.T) {
+	var messages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		messages = append(messages, payload.Text)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{
+		BaseURL:  srv.URL,
+		BotToken: "tok",
+		ChatID:   "1",
+		Client:   srv.Client(),
+		PublicURL: func(context.Context) string {
+			return "https://nori.example"
+		},
+	}
+	deployment := Event{ServiceName: "billing", Trigger: "manual", DeploymentID: 42}
+	outage := Event{ServiceName: "billing", Trigger: "monitor"}
+	cases := []struct {
+		name string
+		send func() error
+		want string
+	}{
+		{"failed deployment", func() error { return tg.NotifyServiceDown(context.Background(), deployment) }, `🔗 <a href="https://nori.example/deployments/42">View deployment</a>`},
+		{"successful deployment", func() error { return tg.NotifyDeploySuccess(context.Background(), deployment) }, `🔗 <a href="https://nori.example/deployments/42">View deployment</a>`},
+		{"monitored outage", func() error { return tg.NotifyServiceDown(context.Background(), outage) }, `🔗 <a href="https://nori.example/services/billing">View service</a>`},
+		{"recovery", func() error { return tg.NotifyServiceRecovered(context.Background(), outage) }, `🔗 <a href="https://nori.example/services/billing">View service</a>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			messages = nil
+			if err := tc.send(); err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 || !strings.Contains(messages[0], tc.want) {
+				t.Errorf("message missing link %q: %q", tc.want, messages)
+			}
+		})
+	}
+}
+
+func TestTelegram_OmitsDashboardLinkWhenUnavailable(t *testing.T) {
+	var message string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		message = payload.Text
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{BaseURL: srv.URL, BotToken: "tok", ChatID: "1", Client: srv.Client()}
+	if err := tg.NotifyDeploySuccess(context.Background(), Event{ServiceName: "billing", DeploymentID: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(message, "<a href=") || strings.Contains(message, "View deployment") {
+		t.Errorf("message must omit an unavailable link: %q", message)
+	}
+}
+
+func TestTelegram_EscapesDynamicHTML(t *testing.T) {
+	var message string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		message = payload.Text
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{BaseURL: srv.URL, BotToken: "tok", ChatID: "1", Client: srv.Client()}
+	evt := Event{
+		BotName:     "Prod <west>",
+		ServiceName: "billing & jobs",
+		Trigger:     "manual",
+		Digest:      "sha256:<bad>",
+		Reason:      "<script> & failed",
+	}
 	if err := tg.NotifyServiceDown(context.Background(), evt); err != nil {
-		t.Fatalf("NotifyServiceDown: %v", err)
+		t.Fatal(err)
 	}
-	if bodies[0] != MessageBody(evt) {
-		t.Errorf("down body = %q, want %q", bodies[0], MessageBody(evt))
-	}
-	bodies = nil
-	if err := tg.NotifyServiceRecovered(context.Background(), evt); err != nil {
-		t.Fatalf("NotifyServiceRecovered: %v", err)
-	}
-	if bodies[0] != RecoveredMessageBody(evt) {
-		t.Errorf("recovered body = %q, want %q", bodies[0], RecoveredMessageBody(evt))
-	}
-	bodies = nil
-	if err := tg.NotifyDeploySuccess(context.Background(), evt); err != nil {
-		t.Fatalf("NotifyDeploySuccess: %v", err)
-	}
-	if bodies[0] != SuccessMessageBody(evt) {
-		t.Errorf("success body = %q, want %q", bodies[0], SuccessMessageBody(evt))
+	for _, want := range []string{"Prod &lt;west&gt;", "billing &amp; jobs", "sha256:&lt;bad&gt;", "&lt;script&gt; &amp; failed"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("escaped message missing %q: %q", want, message)
+		}
 	}
 }

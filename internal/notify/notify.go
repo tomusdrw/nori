@@ -16,21 +16,27 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"nori/internal/store"
 )
 
-// Event describes a service-down occurrence. The fields are intentionally
-// minimal so the SMS body stays short and readable on a phone.
+// Event describes a deployment or service-health notification. The fields are
+// intentionally minimal so the SMS body stays short and readable on a phone.
 type Event struct {
 	// BotName is the instance display name, used to identify which Nori
 	// instance sent the alert when an operator runs several.
 	BotName string
-	// ServiceName is the configured name of the service that failed.
+	// ServiceName is the configured name of the affected service.
 	ServiceName string
-	// Trigger is the deploy trigger ("manual", "auto", "scheduled").
+	// DeploymentID identifies the deployment detail page for deploy events.
+	// It is zero for monitor-only service health events.
+	DeploymentID int64
+	// Trigger is the deploy trigger ("manual", "auto", "scheduled") or
+	// "monitor" for service health events.
 	Trigger string
 	// Digest is the short image digest that was attempted (sha256:… truncated).
 	Digest string
-	// Reason is a one-line summary of why the deploy failed.
+	// Reason is a one-line summary of why the deploy or health check failed.
 	Reason string
 }
 
@@ -57,35 +63,55 @@ func (Noop) NotifyDeploySuccess(context.Context, Event) error    { return nil }
 // MessageBody formats a short, SMS-friendly body for a service-down event.
 // Newlines are kept so most SMS clients render a compact multi-line preview.
 func MessageBody(evt Event) string {
-	bot := strings.TrimSpace(evt.BotName)
-	if bot == "" {
-		bot = "Nori"
+	icon, title := "❌", "Deploy failed"
+	metadata := make([]string, 0, 2)
+	if evt.Trigger == store.TriggerMonitor {
+		icon, title = "🚨", "Service down"
+	} else if evt.Trigger != "" {
+		metadata = append(metadata, evt.Trigger)
 	}
-	return fmt.Sprintf("[%s] %q deploy FAILED (trigger=%s, digest=%s): %s",
-		bot, evt.ServiceName, evt.Trigger, evt.Digest, evt.Reason)
+	if evt.Digest != "" {
+		metadata = append(metadata, evt.Digest)
+	}
+	detail := strings.Join(metadata, " · ")
+	if evt.Reason != "" {
+		if detail != "" {
+			detail += " — "
+		}
+		detail += evt.Reason
+	}
+	return smsMessage(icon, title, evt, detail)
 }
 
 // RecoveredMessageBody formats a short, SMS-friendly body for a
-// service-recovered event. It mirrors MessageBody but indicates recovery
-// instead of failure.
+// service-recovered event.
 func RecoveredMessageBody(evt Event) string {
-	bot := strings.TrimSpace(evt.BotName)
-	if bot == "" {
-		bot = "Nori"
-	}
-	return fmt.Sprintf("[%s] %q service RECOVERED (trigger=%s, digest=%s): %s",
-		bot, evt.ServiceName, evt.Trigger, evt.Digest, evt.Reason)
+	return smsMessage("✅", "Service recovered", evt, evt.Digest)
 }
 
 // SuccessMessageBody formats a short body for a successful deployment.
 // No reason is included; a successful deploy has nothing to explain.
 func SuccessMessageBody(evt Event) string {
+	metadata := make([]string, 0, 2)
+	if evt.Trigger != "" {
+		metadata = append(metadata, evt.Trigger)
+	}
+	if evt.Digest != "" {
+		metadata = append(metadata, evt.Digest)
+	}
+	return smsMessage("🚀", "Deployed", evt, strings.Join(metadata, " · "))
+}
+
+func smsMessage(icon, title string, evt Event, detail string) string {
 	bot := strings.TrimSpace(evt.BotName)
 	if bot == "" {
 		bot = "Nori"
 	}
-	return fmt.Sprintf("[%s] %q deploy OK (trigger=%s, digest=%s)",
-		bot, evt.ServiceName, evt.Trigger, evt.Digest)
+	body := fmt.Sprintf("%s [%s] %s: %s", icon, bot, title, evt.ServiceName)
+	if detail != "" {
+		body += "\n" + detail
+	}
+	return body
 }
 
 // Twilio sends SMS via the Twilio Messages REST API. Construct one with

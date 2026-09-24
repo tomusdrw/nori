@@ -310,11 +310,12 @@ func (e *Executor) alertFailure(svc *store.Service, deploy *store.Deployment, ca
 	defer cancel()
 
 	evt := notify.Event{
-		BotName:     e.botName,
-		ServiceName: svc.Name,
-		Trigger:     deploy.Trigger,
-		Digest:      shortDigest(deploy.TargetDigest),
-		Reason:      truncateReason(cause.Error()),
+		BotName:      e.botName,
+		ServiceName:  svc.Name,
+		DeploymentID: deploy.ID,
+		Trigger:      deploy.Trigger,
+		Digest:       shortDigest(deploy.TargetDigest),
+		Reason:       truncateReason(cause.Error()),
 	}
 	_ = e.notify.NotifyServiceDown(ctx, evt)
 }
@@ -329,10 +330,11 @@ func (e *Executor) alertSuccess(svc *store.Service, deploy *store.Deployment) {
 	defer cancel()
 
 	evt := notify.Event{
-		BotName:     e.botName,
-		ServiceName: svc.Name,
-		Trigger:     deploy.Trigger,
-		Digest:      shortDigest(deploy.TargetDigest),
+		BotName:      e.botName,
+		ServiceName:  svc.Name,
+		DeploymentID: deploy.ID,
+		Trigger:      deploy.Trigger,
+		Digest:       shortDigest(deploy.TargetDigest),
 	}
 	_ = e.notify.NotifyDeploySuccess(ctx, evt)
 }
