@@ -303,10 +303,12 @@ Nori can notify external channels about four kinds of events:
 - services detected as down or unhealthy by the monitor;
 - service recovery after a down alert.
 
-A message contains only concise operational information: the Nori instance
-name, the service name, the event type, the deployment trigger, a shortened
-image digest, and a failure or recovery reason when applicable. Deployment
-logs and environment values are never included.
+Messages use a distinct event marker so their status is recognizable at a
+glance: ❌ for a failed deployment, 🚨 for a service outage, ✅ for a recovery,
+and 🚀 for a successful deployment. SMS messages keep the operational details
+compact, while Telegram messages use labeled fields for the Nori instance,
+service, trigger, shortened image digest, and failure reason when applicable.
+Deployment logs and environment values are never included.
 
 Twilio SMS and Telegram are independent channels; either or both can be
 enabled at the same time. The **Settings** page shows whether each channel is
@@ -374,6 +376,13 @@ partial configuration is rejected at startup, mirroring Twilio.
 Messages are delivered through Telegram's `sendMessage` Bot API with a bounded
 HTTP timeout. The bot token and chat ID are never written to logs, and API
 errors are logged without their secret material.
+
+When **Settings → Public instance URL** is configured, Telegram deployment
+messages include a link to the deployment details and health messages link to
+the affected service. The destination still requires normal Nori login. Links
+are omitted cleanly when the public URL is empty; changing it takes effect on
+the next notification without restarting Nori. MCP access does not need to be
+enabled for notification links.
 
 ### Event routing
 

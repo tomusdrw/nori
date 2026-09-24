@@ -500,6 +500,9 @@ func TestExecutor_FailureFiresNotifierOnce(t *testing.T) {
 	if evt.BotName != "staging" {
 		t.Errorf("BotName = %q, want staging", evt.BotName)
 	}
+	if evt.DeploymentID != id {
+		t.Errorf("DeploymentID = %d, want %d", evt.DeploymentID, id)
+	}
 	if events[0].kind != "down" {
 		t.Errorf("kind = %q, want down", events[0].kind)
 	}
@@ -536,6 +539,9 @@ func TestExecutor_SuccessFiresSuccessNotifier(t *testing.T) {
 	}
 	if evt.Digest == "" || evt.Reason != "" {
 		t.Errorf("success event must carry a digest and no reason: %+v", evt)
+	}
+	if evt.DeploymentID != id {
+		t.Errorf("DeploymentID = %d, want %d", evt.DeploymentID, id)
 	}
 }
 

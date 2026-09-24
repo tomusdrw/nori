@@ -6,10 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"nori/internal/store"
 )
 
 // ErrMissingTelegramConfig is returned when the notifier was constructed
@@ -25,6 +30,9 @@ type Telegram struct {
 	BotToken string
 	ChatID   string
 	Client   *http.Client
+	// PublicURL resolves the current externally reachable Nori origin. When it
+	// is nil or returns empty, messages omit dashboard links.
+	PublicURL func(context.Context) string
 }
 
 // NewTelegram returns a Telegram notifier. Callers should pass a populated
@@ -40,15 +48,88 @@ func NewTelegram(botToken, chatID string) *Telegram {
 }
 
 func (t *Telegram) NotifyServiceDown(ctx context.Context, evt Event) error {
-	return t.send(ctx, MessageBody(evt))
+	icon, title := "❌", "Deployment failed"
+	linkLabel := "View deployment"
+	publicURL := t.publicURL(ctx)
+	link := deploymentLink(publicURL, evt.DeploymentID)
+	if evt.Trigger == store.TriggerMonitor {
+		icon, title = "🚨", "Service is down"
+		linkLabel = "View service"
+		link = serviceLink(publicURL, evt.ServiceName)
+	}
+	return t.send(ctx, telegramMessage(icon, title, evt, true, linkLabel, link))
 }
 
 func (t *Telegram) NotifyServiceRecovered(ctx context.Context, evt Event) error {
-	return t.send(ctx, RecoveredMessageBody(evt))
+	link := serviceLink(t.publicURL(ctx), evt.ServiceName)
+	return t.send(ctx, telegramMessage("✅", "Service recovered", evt, false, "View service", link))
 }
 
 func (t *Telegram) NotifyDeploySuccess(ctx context.Context, evt Event) error {
-	return t.send(ctx, SuccessMessageBody(evt))
+	link := deploymentLink(t.publicURL(ctx), evt.DeploymentID)
+	return t.send(ctx, telegramMessage("🚀", "Deployment succeeded", evt, false, "View deployment", link))
+}
+
+func telegramMessage(icon, title string, evt Event, includeReason bool, linkLabel, link string) string {
+	bot := strings.TrimSpace(evt.BotName)
+	if bot == "" {
+		bot = "Nori"
+	}
+	lines := []string{
+		icon + " <b>" + title + "</b>",
+		"",
+		"<b>Service:</b> " + html.EscapeString(evt.ServiceName),
+		"<b>Instance:</b> " + html.EscapeString(bot),
+	}
+	if evt.Trigger != "" {
+		lines = append(lines, "<b>Trigger:</b> "+html.EscapeString(friendlyTrigger(evt.Trigger)))
+	}
+	if evt.Digest != "" {
+		lines = append(lines, "<b>Image:</b> <code>"+html.EscapeString(evt.Digest)+"</code>")
+	}
+	if includeReason && evt.Reason != "" {
+		lines = append(lines, "<b>Reason:</b> "+html.EscapeString(evt.Reason))
+	}
+	if link != "" {
+		lines = append(lines, "", "🔗 <a href=\""+html.EscapeString(link)+"\">"+linkLabel+"</a>")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (t *Telegram) publicURL(ctx context.Context) string {
+	if t == nil || t.PublicURL == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(t.PublicURL(ctx)), "/")
+}
+
+func deploymentLink(publicURL string, deploymentID int64) string {
+	if publicURL == "" || deploymentID <= 0 {
+		return ""
+	}
+	return publicURL + "/deployments/" + strconv.FormatInt(deploymentID, 10)
+}
+
+func serviceLink(publicURL, serviceName string) string {
+	if publicURL == "" || serviceName == "" {
+		return ""
+	}
+	return publicURL + "/services/" + url.PathEscape(serviceName)
+}
+
+func friendlyTrigger(trigger string) string {
+	switch trigger {
+	case store.TriggerManual:
+		return "Manual"
+	case store.TriggerAuto:
+		return "Automatic"
+	case store.TriggerScheduled:
+		return "Scheduled"
+	case store.TriggerMonitor:
+		return "Health monitor"
+	default:
+		return trigger
+	}
 }
 
 // send POSTs a preformatted message body to the Bot API. Errors never
@@ -65,9 +146,10 @@ func (t *Telegram) send(ctx context.Context, body string) error {
 	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", strings.TrimRight(base, "/"), t.BotToken)
 
 	payload, err := json.Marshal(struct {
-		ChatID string `json:"chat_id"`
-		Text   string `json:"text"`
-	}{ChatID: t.ChatID, Text: body})
+		ChatID    string `json:"chat_id"`
+		Text      string `json:"text"`
+		ParseMode string `json:"parse_mode"`
+	}{ChatID: t.ChatID, Text: body, ParseMode: "HTML"})
 	if err != nil {
 		return fmt.Errorf("telegram: encode payload: %w", err)
 	}

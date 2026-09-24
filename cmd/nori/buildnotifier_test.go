@@ -2,7 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nori/internal/config"
@@ -109,5 +114,49 @@ func TestBuildNotifier_LegacyModeGatesUntilRoutingSaved(t *testing.T) {
 	}
 	if !route.Approve(notify.KindDown) {
 		t.Error("saved routing table must take precedence over the legacy mode")
+	}
+}
+
+func TestBuildNotifier_TelegramUsesCurrentPublicURL(t *testing.T) {
+	var message string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(raw, &payload)
+		message = payload.Text
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	st := testStore(t)
+	ctx := context.Background()
+	nf := buildNotifier(config.Config{
+		Telegram: config.TelegramConfig{BotToken: "token", ChatID: "chat"},
+	}, st)
+	multi := nf.(*notify.LogFailures).Inner.(*notify.Multi)
+	tg := multi.Notifiers[0].(*notify.Route).Inner.(*notify.Telegram)
+	tg.BaseURL = api.URL
+	tg.Client = api.Client()
+
+	if err := st.SetMCPConfig(ctx, false, "https://nori.example", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := nf.NotifyDeploySuccess(ctx, notify.Event{ServiceName: "billing", DeploymentID: 17}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `href="https://nori.example/deployments/17"`; !strings.Contains(message, want) {
+		t.Fatalf("message missing current public URL %q: %q", want, message)
+	}
+
+	if err := st.SetMCPConfig(ctx, false, "https://new-nori.example", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := nf.NotifyDeploySuccess(ctx, notify.Event{ServiceName: "billing", DeploymentID: 18}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `href="https://new-nori.example/deployments/18"`; !strings.Contains(message, want) {
+		t.Fatalf("message missing updated public URL %q: %q", want, message)
 	}
 }
