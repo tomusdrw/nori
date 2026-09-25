@@ -60,59 +60,140 @@ func (Noop) NotifyServiceDown(context.Context, Event) error      { return nil }
 func (Noop) NotifyServiceRecovered(context.Context, Event) error { return nil }
 func (Noop) NotifyDeploySuccess(context.Context, Event) error    { return nil }
 
+// messageCopy holds the channel-agnostic content of a notification. The
+// plain renderer formats it for SMS and the Telegram renderer adds HTML
+// styling and a dashboard link. Every message leads with the service name so
+// truncated previews still say which service the event is about.
+type messageCopy struct {
+	icon      string // event marker, e.g. "✅"
+	headline  string // "<service> <verb>", e.g. "billing recovered"
+	trigger   string // friendly trigger name, omitted when empty
+	digest    string // short image digest
+	reason    string // failure reason, empty for recoveries and successes
+	linkLabel string // dashboard link text; only Telegram renders links
+	instance  string // instance display name, appended to the headline as "@ Instance"
+}
+
 // MessageBody formats a short, SMS-friendly body for a service-down event.
 // Newlines are kept so most SMS clients render a compact multi-line preview.
 func MessageBody(evt Event) string {
-	icon, title := "❌", "Deploy failed"
-	metadata := make([]string, 0, 2)
-	if evt.Trigger == store.TriggerMonitor {
-		icon, title = "🚨", "Service down"
-	} else if evt.Trigger != "" {
-		metadata = append(metadata, evt.Trigger)
-	}
-	if evt.Digest != "" {
-		metadata = append(metadata, evt.Digest)
-	}
-	detail := strings.Join(metadata, " · ")
-	if evt.Reason != "" {
-		if detail != "" {
-			detail += " — "
-		}
-		detail += evt.Reason
-	}
-	return smsMessage(icon, title, evt, detail)
+	return downCopy(evt).plain()
 }
 
 // RecoveredMessageBody formats a short, SMS-friendly body for a
 // service-recovered event.
 func RecoveredMessageBody(evt Event) string {
-	return smsMessage("✅", "Service recovered", evt, evt.Digest)
+	return recoveredCopy(evt).plain()
 }
 
 // SuccessMessageBody formats a short body for a successful deployment.
 // No reason is included; a successful deploy has nothing to explain.
 func SuccessMessageBody(evt Event) string {
-	metadata := make([]string, 0, 2)
-	if evt.Trigger != "" {
-		metadata = append(metadata, evt.Trigger)
-	}
-	if evt.Digest != "" {
-		metadata = append(metadata, evt.Digest)
-	}
-	return smsMessage("🚀", "Deployed", evt, strings.Join(metadata, " · "))
+	return successCopy(evt).plain()
 }
 
-func smsMessage(icon, title string, evt Event, detail string) string {
-	bot := strings.TrimSpace(evt.BotName)
-	if bot == "" {
-		bot = "Nori"
+// downCopy assembles the copy for a failed deployment or a monitored outage.
+func downCopy(evt Event) messageCopy {
+	c := messageCopy{
+		icon:      "❌",
+		headline:  evt.ServiceName + " deploy failed",
+		digest:    evt.Digest,
+		reason:    evt.Reason,
+		linkLabel: "View deployment",
+		instance:  instanceName(evt),
 	}
-	body := fmt.Sprintf("%s [%s] %s: %s", icon, bot, title, evt.ServiceName)
-	if detail != "" {
-		body += "\n" + detail
+	if evt.Trigger == store.TriggerMonitor {
+		c.icon, c.headline, c.linkLabel = "🚨", evt.ServiceName+" is down", "View service"
+	} else if evt.Trigger != "" {
+		c.trigger = friendlyTrigger(evt.Trigger)
 	}
-	return body
+	return c
 }
+
+// recoveredCopy assembles the copy for a service-recovered event. The digest
+// is the only detail; a recovery has nothing to explain either.
+func recoveredCopy(evt Event) messageCopy {
+	return messageCopy{
+		icon:      "✅",
+		headline:  evt.ServiceName + " recovered",
+		digest:    evt.Digest,
+		linkLabel: "View service",
+		instance:  instanceName(evt),
+	}
+}
+
+// successCopy assembles the copy for a successful deployment.
+func successCopy(evt Event) messageCopy {
+	c := messageCopy{
+		icon:      "🚀",
+		headline:  evt.ServiceName + " deployed",
+		digest:    evt.Digest,
+		linkLabel: "View deployment",
+		instance:  instanceName(evt),
+	}
+	if evt.Trigger != "" {
+		c.trigger = friendlyTrigger(evt.Trigger)
+	}
+	return c
+}
+
+// instanceName returns the instance display name for the footer, defaulting
+// to "Nori" for unconfigured instances.
+func instanceName(evt Event) string {
+	if bot := strings.TrimSpace(evt.BotName); bot != "" {
+		return bot
+	}
+	return "Nori"
+}
+
+// friendlyTrigger maps stored trigger values to readable names.
+func friendlyTrigger(trigger string) string {
+	switch trigger {
+	case store.TriggerManual:
+		return "Manual"
+	case store.TriggerAuto:
+		return "Automatic"
+	case store.TriggerScheduled:
+		return "Scheduled"
+	case store.TriggerMonitor:
+		return "Health monitor"
+	default:
+		return trigger
+	}
+}
+
+// detail joins the trigger, digest, and reason into one compact metadata
+// line, e.g. "Manual · sha256:abc12345 — exit status 1". The text and code
+// functions style individual fragments; plain rendering passes them through.
+func (c messageCopy) detail(text, code func(string) string) string {
+	parts := make([]string, 0, 2)
+	if c.trigger != "" {
+		parts = append(parts, text(c.trigger))
+	}
+	if c.digest != "" {
+		parts = append(parts, code(c.digest))
+	}
+	line := strings.Join(parts, " · ")
+	if c.reason != "" {
+		if line != "" {
+			line += " — "
+		}
+		line += text(c.reason)
+	}
+	return line
+}
+
+// plain renders the copy as plain text for SMS. Links are omitted: Twilio
+// has no dashboard URL to point at.
+func (c messageCopy) plain() string {
+	lines := []string{c.icon + " " + c.headline + " @ " + c.instance}
+	if detail := c.detail(plainText, plainText); detail != "" {
+		lines = append(lines, detail)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func plainText(s string) string { return s }
 
 // Twilio sends SMS via the Twilio Messages REST API. Construct one with
 // NewTwilio; a nil client uses http.DefaultClient.
