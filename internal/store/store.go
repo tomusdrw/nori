@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS service (
 	deploy_script TEXT NOT NULL DEFAULT '',
 	health_url TEXT NOT NULL DEFAULT '',
 	is_self INTEGER NOT NULL DEFAULT 0,
+	deployment_mode TEXT NOT NULL DEFAULT 'custom',
+	template_config TEXT NOT NULL DEFAULT '{}',
 	config_version INTEGER NOT NULL DEFAULT 1,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
@@ -55,6 +57,11 @@ CREATE TABLE IF NOT EXISTS env_var (
 CREATE TABLE IF NOT EXISTS service_env (
 	service_id INTEGER PRIMARY KEY REFERENCES service(id) ON DELETE CASCADE,
 	content BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS template_state (
+	service_id INTEGER PRIMARY KEY REFERENCES service(id) ON DELETE CASCADE,
+	database_identity_fingerprint TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS deployment (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,6 +114,8 @@ func migrate(db *sql.DB) error {
 	defer rows.Close()
 	hasSelf := false
 	hasHealth := false
+	hasDeploymentMode := false
+	hasTemplateConfig := false
 	hasConfigVersion := false
 	for rows.Next() {
 		var cid int
@@ -122,6 +131,12 @@ func migrate(db *sql.DB) error {
 		if name == "health_url" {
 			hasHealth = true
 		}
+		if name == "deployment_mode" {
+			hasDeploymentMode = true
+		}
+		if name == "template_config" {
+			hasTemplateConfig = true
+		}
 		if name == "config_version" {
 			hasConfigVersion = true
 		}
@@ -136,6 +151,16 @@ func migrate(db *sql.DB) error {
 	}
 	if !hasHealth {
 		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN health_url TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !hasDeploymentMode {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN deployment_mode TEXT NOT NULL DEFAULT 'custom'`); err != nil {
+			return err
+		}
+	}
+	if !hasTemplateConfig {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN template_config TEXT NOT NULL DEFAULT '{}'`); err != nil {
 			return err
 		}
 	}

@@ -130,18 +130,34 @@ fields, encrypted environment contents, and revision history as one commit. A
 stale generation returns a fixed reload-and-retry result without a partial save;
 clients must read the service again rather than retrying the old command.
 
-MCP template saves resolve placeholders against the current encrypted values in
-that transaction. Omitted environment fields are preserved; omitted keys in an
-explicit template are removed. Templates normalize dotenv syntax and omit
+The environment tools use transactional `SetEnvTemplate` / `SetEnvSecret`
+operations so they cannot restore an earlier service configuration or silently
+restore a stale secret value. Concurrent SQLite write conflicts fail without
+partial writes; clients can retry. Templates normalize dotenv syntax and omit
 comments; values are always quoted to retain leading zeros and literal dollars.
-Literal secrets remain write-only. Names and managed status are immutable
-through MCP, and the launcher-managed Nori service remains unavailable to MCP
-mutation.
+Names and managed status are immutable through MCP.
 
-The dashboard sends its hidden configuration generation with each ordinary edit
-and renders a non-secret reload action on conflict. The scheduler observes only
-committed store state, so failed and conflicted writes do not reset or trigger
-scheduled jobs.
+## Deployment templates
+
+MCP `create_service` and `update_service` accept `deployment_mode` (`custom`,
+`single_container`, or `postgres`) plus a typed, non-secret `template_config`.
+The exact same parser and validator serve the Dashboard and MCP. Template
+services do not accept a generated Bash script as their durable configuration;
+Custom services retain the established script contract when mode/configuration
+are omitted.
+
+`preview_service_template` returns the planned actions and managed resources
+without dotenv values. `convert_service_to_custom` is explicit and one-way: it
+writes the inspectable rendered Bash script, switches the service to `custom`,
+and clears its template configuration. It does not reveal or interpolate
+environment values. MCP exposes no raw Docker command or socket operation.
+
+Template deployments require the standard `nori.service` label plus Nori's
+template/service-ID/role labels, use digest-pinned application images, and fail
+before touching the serving application when ownership or database readiness is
+wrong. PostgreSQL templates retain their owned data volume across application
+redeploys; database identity and major-version changes require an explicit
+operator migration outside ordinary service mutation.
 
 The scheduler reads only scheduled IDs, names and cron expressions once per
 second. It preserves unchanged entries, removes stale entries and rechecks a

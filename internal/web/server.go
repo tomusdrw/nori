@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"nori/internal/auth"
+	"nori/internal/deploytemplate"
 	"nori/internal/docker"
 	"nori/internal/envfile"
 	"nori/internal/executor"
@@ -93,6 +94,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		r.Get("/services/{name}/history/{kind}", s.handleConfigHistory)
 		r.Get("/services/{name}/history/{kind}/{version}", s.handleConfigHistory)
 		r.Post("/services/{name}", s.handleServiceUpdate)
+		r.Post("/services/{name}/convert-to-custom", s.handleConvertToCustom)
 		r.Post("/services/{name}/delete", s.handleServiceDelete)
 		r.Post("/services/{name}/deploy", s.handleDeploy)
 		r.Post("/services/{name}/start", s.handleStart)
@@ -613,6 +615,12 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 		DeployScript: form.DeployScript,
 		HealthURL:    form.HealthURL,
 	}
+	mode, config, err := normalizedTemplateConfig(form.DeploymentMode, form.TemplateConfig)
+	if err != nil {
+		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
+		return
+	}
+	svc.DeploymentMode, svc.TemplateConfig = mode, config
 	if _, err := s.saveOrdinaryService(r.Context(), ordinaryWrite{Service: svc, Environment: &form.EnvFile, EnvironmentMode: dashboardEnvironment}); err != nil {
 		var validationErr *ordinaryValidationError
 		if errors.As(err, &validationErr) {
@@ -664,6 +672,8 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		form.WatchedImage = svc.WatchedImage
 		form.DeployScript = store.SelfDeployScript
 		form.IsSelf = true
+		form.DeploymentMode = string(store.DeploymentModeCustom)
+		form.TemplateConfig = "{}"
 	}
 	previous := *svc
 	svc.WatchedImage = form.WatchedImage
@@ -671,6 +681,12 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript
 	svc.HealthURL = form.HealthURL
+	mode, config, err := normalizedTemplateConfig(form.DeploymentMode, form.TemplateConfig)
+	if err != nil {
+		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+		return
+	}
+	svc.DeploymentMode, svc.TemplateConfig = mode, config
 	if svc.IsSelf {
 		if err := validateServiceForm(r.Context(), form); err != nil {
 			_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
@@ -737,6 +753,32 @@ func (s *Server) handleServiceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("service: deleted %q", svc.Name)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleConvertToCustom(w http.ResponseWriter, r *http.Request) {
+	svc, err := s.getServiceByName(w, r)
+	if err != nil {
+		return
+	}
+	if svc.IsSelf {
+		http.Error(w, "the launcher-managed self-service cannot be converted", http.StatusForbidden)
+		return
+	}
+	script, err := renderTemplateAsCustomScript(svc)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	previous := *svc
+	svc.DeployScript = script
+	svc.DeploymentMode = store.DeploymentModeCustom
+	svc.TemplateConfig = "{}"
+	if err := s.store.SaveServiceConfig(r.Context(), svc, nil, &previous); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	log.Printf("service: converted %q from managed template to Custom script", svc.Name)
+	http.Redirect(w, r, "/services/"+svc.Name+"/edit", http.StatusSeeOther)
 }
 
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -969,13 +1011,21 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 	}
 	form := serviceForm(svc)
 	form.EnvFile = content
+	if form.DeploymentMode != string(store.DeploymentModeCustom) {
+		form.TemplatePreview, err = templatePreview(svc)
+		if err != nil {
+			return ServiceFormData{}, err
+		}
+	}
 	return form, nil
 }
 
 func serviceForm(svc *store.Service) ServiceFormData {
 	return ServiceFormData{
 		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
-		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, ConfigVersion: svc.ConfigVersion, IsSelf: svc.IsSelf,
+		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
+		ConfigVersion:  svc.ConfigVersion,
+		DeploymentMode: string(svc.DeploymentMode), TemplateConfig: svc.TemplateConfig,
 	}
 }
 
@@ -983,13 +1033,29 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	// Browsers submit <textarea> content with CRLF newlines; normalize to
 	// LF so the stored script/env matches what was validated and what Bash
 	// can parse.
+	mode := r.FormValue("deployment_mode")
+	if mode == "" {
+		mode = string(store.DeploymentModeCustom)
+	}
+	templateConfig := r.FormValue("template_config")
+	switch mode {
+	case string(store.DeploymentModeSingleContainer):
+		if value := r.FormValue("template_config_single"); value != "" {
+			templateConfig = value
+		}
+	case string(store.DeploymentModePostgres):
+		if value := r.FormValue("template_config_postgres"); value != "" {
+			templateConfig = value
+		}
+	}
 	configVersion, _ := strconv.ParseInt(r.FormValue("expected_config_version"), 10, 64)
 	return ServiceFormData{
 		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
 		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"), HealthURL: r.FormValue("health_url"),
-		DeployScript:  executor.NormalizeNewlines(r.FormValue("deploy_script")),
-		EnvFile:       executor.NormalizeNewlines(r.FormValue("env_file")),
-		ConfigVersion: configVersion,
+		DeployScript:   executor.NormalizeNewlines(r.FormValue("deploy_script")),
+		EnvFile:        executor.NormalizeNewlines(r.FormValue("env_file")),
+		ConfigVersion:  configVersion,
+		DeploymentMode: mode, TemplateConfig: executor.NormalizeNewlines(templateConfig),
 	}
 }
 
@@ -1010,8 +1076,17 @@ func validateServiceForm(ctx context.Context, form ServiceFormData) error {
 			return fmt.Errorf("environment file: %w", err)
 		}
 	}
-	if err := executor.ValidateScript(ctx, form.DeployScript); err != nil {
-		return fmt.Errorf("deploy script: %w", err)
+	mode, _, err := normalizedTemplateConfig(form.DeploymentMode, form.TemplateConfig)
+	if err != nil {
+		return fmt.Errorf("template configuration: %w", err)
+	}
+	if mode != store.DeploymentModeCustom && !deploytemplate.ValidServiceName(form.Name) {
+		return errors.New("template service name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,62}")
+	}
+	if mode == store.DeploymentModeCustom {
+		if err := executor.ValidateScript(ctx, form.DeployScript); err != nil {
+			return fmt.Errorf("deploy script: %w", err)
+		}
 	}
 	return nil
 }

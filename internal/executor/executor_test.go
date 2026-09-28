@@ -6,11 +6,14 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"nori/internal/deploytemplate"
+	"nori/internal/docker"
 	"nori/internal/notify"
 	"nori/internal/store"
 )
@@ -64,6 +67,41 @@ func (f *fakeRunner) Run(ctx context.Context, script string, env []string, stdou
 		io.WriteString(stdout, f.log)
 	}
 	return f.err
+}
+
+type blockingProbeClient struct {
+	*docker.Fake
+	probeStarted chan struct{}
+	release      chan struct{}
+	startOnce    sync.Once
+}
+
+type retryProbeClient struct {
+	*docker.Fake
+	mu       sync.Mutex
+	failures int
+	calls    int
+}
+
+func (c *retryProbeClient) RunProbe(context.Context, docker.ManagedProbe) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.failures > 0 {
+		c.failures--
+		return errors.New("probe not ready")
+	}
+	return nil
+}
+
+func (c *blockingProbeClient) RunProbe(ctx context.Context, _ docker.ManagedProbe) error {
+	c.startOnce.Do(func() { close(c.probeStarted) })
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func TestPinnedImage(t *testing.T) {
@@ -403,6 +441,453 @@ func TestDeploy_SelfHandoffFailureIsFinalized(t *testing.T) {
 	if d.Status != store.DeployFailed || d.FinishedAt == nil {
 		t.Fatalf("failed self handoff was not finalized: %+v", d)
 	}
+}
+
+func TestDeploy_TemplatePromotesHealthyCandidateWithoutRunningCustomScript(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","serving_network":"proxy","health":{"command":"true","timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+
+	dk := &docker.Fake{Networks: map[string]docker.ManagedResource{"proxy": {Name: "proxy"}}}
+	runner := &fakeRunner{}
+	ex := New(st, runner, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deployment := waitForDeployment(t, st, id)
+	if deployment.Status != store.DeploySuccess {
+		t.Fatalf("template deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	if runner.called {
+		t.Fatal("template deployment must not execute the custom Bash runner")
+	}
+	if _, ok := dk.ManagedContainers["nori-"+strconv.FormatInt(svc.ID, 10)+"-app"]; !ok {
+		t.Fatalf("promoted application container missing: %+v", dk.ManagedContainers)
+	}
+	if _, ok := dk.ManagedContainers["nori-"+strconv.FormatInt(svc.ID, 10)+"-app-candidate"]; ok {
+		t.Fatalf("candidate must be renamed after health succeeds: %+v", dk.ManagedContainers)
+	}
+	if len(dk.Operations) == 0 || dk.Operations[0] != "pull ghcr.io/acme/api@sha256:new" {
+		t.Fatalf("image must be pulled before resource changes, operations = %v", dk.Operations)
+	}
+}
+
+func TestDeploy_TemplateRedeployPublishesPortAfterStoppingCurrent(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	current := "nori-" + strconv.FormatInt(svc.ID, 10) + "-app"
+	labels := map[string]string{
+		"nori.service": "api", "nori.template": "1",
+		"nori.service-id": strconv.FormatInt(svc.ID, 10), "nori.role": "app",
+	}
+	dk := &docker.Fake{ManagedContainers: map[string]docker.ManagedContainer{
+		current: {ManagedContainerSpec: docker.ManagedContainerSpec{Name: current, Labels: labels}, State: "running"},
+	}}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if deployment := waitForDeployment(t, st, id); deployment.Status != store.DeploySuccess {
+		t.Fatalf("template redeploy status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	app := dk.ManagedContainers[current]
+	if app.PublishedPort != 8080 {
+		t.Fatalf("redeployed app published port = %d, want 8080", app.PublishedPort)
+	}
+	stopIndex, createIndex := -1, -1
+	for index, operation := range dk.Operations {
+		if operation == "stop container "+current {
+			stopIndex = index
+		}
+		if operation == "create container "+current+"-candidate" {
+			createIndex = index
+		}
+	}
+	if stopIndex < 0 || createIndex < 0 || stopIndex > createIndex {
+		t.Fatalf("current app must stop before candidate creation, operations = %v", dk.Operations)
+	}
+}
+
+func TestDeploy_TemplateRedeployWithServingNetworkKeepsCurrentPort(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","serving_network":"proxy","health":{"command":"true","timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	current := "nori-" + strconv.FormatInt(svc.ID, 10) + "-app"
+	labels := map[string]string{
+		"nori.service": "api", "nori.template": "1",
+		"nori.service-id": strconv.FormatInt(svc.ID, 10), "nori.role": "app",
+	}
+	dk := &docker.Fake{
+		Networks: map[string]docker.ManagedResource{"proxy": {Name: "proxy"}},
+		ManagedContainers: map[string]docker.ManagedContainer{
+			current: {ManagedContainerSpec: docker.ManagedContainerSpec{Name: current, Labels: labels}, State: "running"},
+		},
+	}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if deployment := waitForDeployment(t, st, id); deployment.Status != store.DeploySuccess {
+		t.Fatalf("template redeploy status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	app := dk.ManagedContainers[current]
+	if app.PublishedPort != 0 {
+		t.Fatalf("redeployed app published port = %d, want 0 while current app serves", app.PublishedPort)
+	}
+	if containsOperation(dk.Operations, "stop container "+current) {
+		t.Fatalf("current app must remain serving during candidate creation, operations = %v", dk.Operations)
+	}
+}
+
+func TestDeploy_TemplateRejectsConcurrentDeployment(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	dk := &blockingProbeClient{
+		Fake:         &docker.Fake{},
+		probeStarted: make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+	firstID, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("first Deploy: %v", err)
+	}
+	select {
+	case <-dk.probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first deployment did not reach its health probe")
+	}
+	if _, err := ex.Deploy(ctx, svc.ID, store.TriggerManual); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("concurrent deployment error = %v", err)
+	}
+	close(dk.release)
+	if deployment := waitForDeployment(t, st, firstID); deployment.Status != store.DeploySuccess {
+		t.Fatalf("first deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+}
+
+func TestWaitForApplicationHealthRetriesCommandUntilSuccess(t *testing.T) {
+	dk := &retryProbeClient{Fake: &docker.Fake{}, failures: 2}
+	ex := &Executor{managed: dk}
+	plan := deploytemplate.Plan{
+		AppCandidate: deploytemplate.Resource{Name: "nori-app-candidate"},
+		Health:       deploytemplate.HealthCheck{Command: "true", TimeoutSeconds: 5},
+	}
+	if err := ex.waitForApplicationHealth(context.Background(), plan); err != nil {
+		t.Fatalf("waitForApplicationHealth: %v", err)
+	}
+	dk.mu.Lock()
+	calls := dk.calls
+	dk.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("probe calls = %d, want 3", calls)
+	}
+}
+
+func TestDeploy_TemplateHealthFailureRemovesCandidateAndKeepsCurrentApp(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"false","timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{
+		"nori.service": "api", "nori.template": "1", "nori.service-id": strconv.FormatInt(svc.ID, 10), "nori.role": "app",
+	}
+	current := "nori-" + strconv.FormatInt(svc.ID, 10) + "-app"
+	dk := &docker.Fake{
+		ManagedContainers: map[string]docker.ManagedContainer{current: {ManagedContainerSpec: docker.ManagedContainerSpec{Name: current, Labels: labels}, State: "running"}},
+		HealthErr:         errors.New("application health check failed"),
+	}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deployment := waitForDeployment(t, st, id)
+	if deployment.Status != store.DeployFailed {
+		t.Fatalf("template deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	if got := dk.ManagedContainers[current].State; got != "running" {
+		t.Fatalf("current application state = %q, want running", got)
+	}
+	if _, ok := dk.ManagedContainers["nori-"+strconv.FormatInt(svc.ID, 10)+"-app-candidate"]; ok {
+		t.Fatalf("failed candidate must be removed: %+v", dk.ManagedContainers)
+	}
+}
+
+func TestDeploy_PostgresTemplateReusesOwnedDatabaseAndRecordsIdentity(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModePostgres,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5},"postgres":{"image":"postgres:16.4","database":"api","user":"api","password_env":"POSTGRES_PASSWORD","connection_url_env":"DATABASE_URL","ready_timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEnvFile(ctx, svc.ID, "POSTGRES_DB=api\nPOSTGRES_USER=api\nPOSTGRES_PASSWORD=s3cret\nDATABASE_URL=postgres://api:s3cret@nori-1-postgres/api?sslmode=disable\n"); err != nil {
+		t.Fatal(err)
+	}
+	dk := &docker.Fake{}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	firstID, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("first Deploy: %v", err)
+	}
+	if deployment := waitForDeployment(t, st, firstID); deployment.Status != store.DeploySuccess {
+		t.Fatalf("first deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	state, err := st.GetTemplateState(ctx, svc.ID)
+	if err != nil || state.DatabaseIdentityFingerprint == "" {
+		t.Fatalf("managed database identity = %+v, %v", state, err)
+	}
+	databaseName := "nori-" + strconv.FormatInt(svc.ID, 10) + "-postgres"
+	if got := dk.ManagedContainers[databaseName].State; got != "running" {
+		t.Fatalf("database state = %q, want running", got)
+	}
+	if got := dk.ManagedContainers[databaseName].RestartPolicy; got != string(deploytemplate.RestartUnlessStopped) {
+		t.Fatalf("database restart policy = %q, want %q", got, deploytemplate.RestartUnlessStopped)
+	}
+	if !containsOperation(dk.Operations, "probe network nori-"+strconv.FormatInt(svc.ID, 10)+"-db-internal") {
+		t.Fatalf("database readiness must run across the private network, operations = %v", dk.Operations)
+	}
+
+	secondID, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("second Deploy: %v", err)
+	}
+	if deployment := waitForDeployment(t, st, secondID); deployment.Status != store.DeploySuccess {
+		t.Fatalf("second deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	if got := dk.ManagedContainers[databaseName].State; got != "running" {
+		t.Fatalf("database must remain running across application redeploy, got %q", got)
+	}
+}
+
+func TestEnsurePostgresRetriesReadinessProbe(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModePostgres,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5},"postgres":{"image":"postgres:16.4","database":"api","user":"api","password_env":"POSTGRES_PASSWORD","connection_url_env":"DATABASE_URL","ready_timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := deploytemplate.BuildPlan(deploytemplate.Input{
+		ServiceID: svc.ID, ServiceName: svc.Name, TargetImage: "ghcr.io/acme/api@sha256:new",
+		Config: deploytemplate.Config{
+			Mode: deploytemplate.ModePostgres, Version: 1, InternalPort: 8080,
+			RestartPolicy: deploytemplate.RestartAlways,
+			Health:        deploytemplate.HealthCheck{Command: "true", TimeoutSeconds: 5},
+			Postgres: &deploytemplate.PostgresConfig{
+				Image: "postgres:16.4", Database: "api", User: "api",
+				PasswordEnv: "POSTGRES_PASSWORD", ConnectionURLEnv: "DATABASE_URL", ReadyTimeoutSeconds: 5,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dk := &retryProbeClient{Fake: &docker.Fake{}, failures: 2}
+	ex := &Executor{store: st, managed: dk}
+	runtime := postgresRuntime{password: "secret", databaseURL: "postgres://api:secret@nori-postgres/api?sslmode=disable", fingerprint: "fingerprint"}
+	values := map[string]string{"POSTGRES_DB": "api", "POSTGRES_USER": "api", "POSTGRES_PASSWORD": "secret", "DATABASE_URL": runtime.databaseURL}
+	if err := ex.ensurePostgres(ctx, svc, plan, runtime, false, values, io.Discard); err != nil {
+		t.Fatalf("ensurePostgres: %v", err)
+	}
+	dk.mu.Lock()
+	calls := dk.calls
+	dk.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("readiness probe calls = %d, want 3", calls)
+	}
+}
+
+func TestDeploy_PostgresReadinessFailureKeepsCurrentAppAndRedactsSecrets(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{
+		Name:           "api",
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModePostgres,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5},"postgres":{"image":"postgres:16.4","database":"api","user":"api","password_env":"POSTGRES_PASSWORD","connection_url_env":"DATABASE_URL","ready_timeout_seconds":5}}`,
+	}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	secret := "s3cret"
+	if err := st.SetEnvFile(ctx, svc.ID, "POSTGRES_DB=api\nPOSTGRES_USER=api\nPOSTGRES_PASSWORD="+secret+"\nDATABASE_URL=postgres://api:"+secret+"@nori-1-postgres/api?sslmode=disable\n"); err != nil {
+		t.Fatal(err)
+	}
+	current := "nori-" + strconv.FormatInt(svc.ID, 10) + "-app"
+	dk := &docker.Fake{
+		ManagedContainers: map[string]docker.ManagedContainer{current: {ManagedContainerSpec: docker.ManagedContainerSpec{
+			Name: current, Labels: map[string]string{"nori.service": "api", "nori.template": "1", "nori.service-id": strconv.FormatInt(svc.ID, 10), "nori.role": "app"},
+		}, State: "running"}},
+		HealthErr: errors.New("authentication failed for password " + secret),
+	}
+	ex := New(st, &fakeRunner{}, func(context.Context, string) (string, error) { return "sha256:new", nil }, 0)
+	ex.SetDocker(dk)
+
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	deployment := waitForDeployment(t, st, id)
+	if deployment.Status != store.DeployFailed {
+		t.Fatalf("deployment status = %s, log = %q", deployment.Status, deployment.Log)
+	}
+	if got := dk.ManagedContainers[current].State; got != "running" {
+		t.Fatalf("database readiness failure changed current application state to %q", got)
+	}
+	if strings.Contains(deployment.Log, secret) {
+		t.Fatalf("deployment log leaked database secret: %q", deployment.Log)
+	}
+}
+
+func TestApplicationSpecAddsProxyConfigurationWithoutMutatingServiceEnvironment(t *testing.T) {
+	plan, err := deploytemplate.BuildPlan(deploytemplate.Input{
+		ServiceID: 1, ServiceName: "api", TargetImage: "ghcr.io/acme/api@sha256:new",
+		Config: deploytemplate.Config{
+			Mode: deploytemplate.ModeSingleContainer, Version: 1, InternalPort: 8080,
+			RestartPolicy: deploytemplate.RestartAlways, ServingNetwork: "proxy",
+			Proxy:  &deploytemplate.ProxyConfig{Network: "proxy", Domain: "api.example.test", Port: 8080},
+			Health: deploytemplate.HealthCheck{Command: "true", TimeoutSeconds: 5},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceEnv := map[string]string{"SECRET": "s3cret"}
+	spec := applicationSpec(plan, serviceEnv, true)
+	if !containsEnv(spec.Env, "VIRTUAL_HOST=api.example.test") || !containsEnv(spec.Env, "VIRTUAL_PORT=8080") {
+		t.Fatalf("proxy settings missing from container environment: %v", spec.Env)
+	}
+	if spec.PublishedPort != 8080 {
+		t.Fatalf("published port = %d, want 8080", spec.PublishedPort)
+	}
+	if _, ok := serviceEnv["VIRTUAL_HOST"]; ok {
+		t.Fatalf("template-only proxy settings mutated the service environment: %+v", serviceEnv)
+	}
+}
+
+func TestApplicationSpecOmitsPublishedPortWhileCurrentAppServes(t *testing.T) {
+	plan, err := deploytemplate.BuildPlan(deploytemplate.Input{
+		ServiceID: 1, ServiceName: "api", TargetImage: "ghcr.io/acme/api@sha256:new",
+		Config: deploytemplate.Config{
+			Mode: deploytemplate.ModeSingleContainer, Version: 1, InternalPort: 8080,
+			RestartPolicy: deploytemplate.RestartAlways,
+			Health:        deploytemplate.HealthCheck{Command: "true", TimeoutSeconds: 5},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec := applicationSpec(plan, map[string]string{}, false); spec.PublishedPort != 0 {
+		t.Fatalf("published port = %d, want 0 when the current app is serving", spec.PublishedPort)
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, item := range env {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsOperation(operations []string, want string) bool {
+	for _, operation := range operations {
+		if operation == want {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForDeployment(t *testing.T, st *store.Store, id int64) *store.Deployment {
+	t.Helper()
+	deadline := time.Now().Add(7 * time.Second)
+	for time.Now().Before(deadline) {
+		deployment, err := st.GetDeployment(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if deployment.Status != store.DeployRunning {
+			return deployment
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("deployment did not finish")
+	return nil
 }
 
 // capturingNotifier records every notification event it receives.

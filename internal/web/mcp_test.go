@@ -18,6 +18,20 @@ import (
 	"nori/internal/store"
 )
 
+func TestValidateMCPServiceRejectsInvalidTemplateServiceName(t *testing.T) {
+	svc := &store.Service{
+		Name:           strings.Repeat("a", 64),
+		WatchedImage:   "ghcr.io/acme/api:latest",
+		Policy:         store.PolicyManual,
+		DeploymentMode: store.DeploymentModeSingleContainer,
+		TemplateConfig: `{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5}}`,
+	}
+	env := ""
+	if err := validateMCPService(context.Background(), svc, &env); err == nil || !strings.Contains(err.Error(), "template service name") {
+		t.Fatalf("expected template service name validation error, got %v", err)
+	}
+}
+
 func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "mcp.db"), make([]byte, 32))
@@ -44,7 +58,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 14 {
+	if len(listed.Tools) != 16 {
 		t.Fatalf("tools=%d", len(listed.Tools))
 	}
 	call := func(name string, args map[string]any, wantError bool) *mcp.CallToolResult {
@@ -75,6 +89,14 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		return res
 	}
 	call("create_service", map[string]any{"name": "app", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
+	call("create_service", map[string]any{
+		"name": "strict-template", "watched_image": "nginx:latest", "deployment_mode": "single_container",
+		"template_config": map[string]any{
+			"version": 1, "internal_port": 8080, "restart_policy": "always",
+			"health": map[string]any{"command": "true", "timeout_seconds": 5}, "volums": []any{},
+		},
+		"env_file": "PORT='[REDACTED]'",
+	}, true)
 	svc, err := st.GetServiceByName(ctx, "app")
 	if err != nil {
 		t.Fatal(err)
@@ -252,6 +274,31 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	call("delete_service", args, false)
 	if _, err := st.GetService(ctx, svc.ID); err != store.ErrNotFound {
 		t.Fatalf("not deleted: %v", err)
+	}
+}
+
+func TestMCPTemplateConfigurationUsesSharedValidation(t *testing.T) {
+	svc := &store.Service{Name: "api", WatchedImage: "ghcr.io/acme/api:latest", Policy: store.PolicyManual}
+	config := json.RawMessage(`{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5}}`)
+	if err := setMCPDeploymentTemplate(svc, string(store.DeploymentModeSingleContainer), config); err != nil {
+		t.Fatal(err)
+	}
+	env := "PORT='[REDACTED]'\n"
+	if err := validateMCPService(context.Background(), svc, &env); err != nil {
+		t.Fatalf("valid template MCP input rejected: %v", err)
+	}
+	if svc.DeploymentMode != store.DeploymentModeSingleContainer || !strings.Contains(svc.TemplateConfig, `"internal_port":8080`) {
+		t.Fatalf("template configuration was not normalized: %+v", svc)
+	}
+	if svc.DeployScript != "" {
+		t.Fatalf("template service should not require a Custom script, got %q", svc.DeployScript)
+	}
+	if err := setMCPDeploymentTemplate(svc, string(store.DeploymentModeCustom), config); err == nil {
+		t.Fatal("template configuration must not be accepted for Custom deployment mode")
+	}
+
+	if err := setMCPDeploymentTemplate(svc, string(store.DeploymentModePostgres), json.RawMessage(`{"version":1,"internal_port":8080,"restart_policy":"always","health":{"command":"true","timeout_seconds":5},"postgres":{"image":"postgres:latest"}}`)); err == nil {
+		t.Fatal("mutable PostgreSQL image must be rejected through MCP too")
 	}
 }
 

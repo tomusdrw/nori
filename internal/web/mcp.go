@@ -15,6 +15,7 @@ import (
 	"github.com/distribution/reference"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/robfig/cron/v3"
+	"nori/internal/deploytemplate"
 	"nori/internal/docker"
 	"nori/internal/envfile"
 	"nori/internal/executor"
@@ -28,23 +29,27 @@ type mcpID struct {
 	ServiceID int64 `json:"service_id" jsonschema:"Service ID"`
 }
 type mcpCreate struct {
-	Name         string  `json:"name"`
-	WatchedImage string  `json:"watched_image"`
-	DeployScript string  `json:"deploy_script"`
-	Policy       string  `json:"policy,omitempty"`
-	CronExpr     string  `json:"cron_expr,omitempty"`
-	HealthURL    string  `json:"health_url,omitempty"`
-	EnvFile      *string `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
+	Name           string          `json:"name"`
+	WatchedImage   string          `json:"watched_image"`
+	DeployScript   string          `json:"deploy_script,omitempty"`
+	DeploymentMode string          `json:"deployment_mode,omitempty" jsonschema:"custom, single_container, or postgres; defaults to custom"`
+	TemplateConfig json.RawMessage `json:"template_config,omitempty" jsonschema:"Required for template modes; structured non-secret deployment configuration"`
+	Policy         string          `json:"policy,omitempty"`
+	CronExpr       string          `json:"cron_expr,omitempty"`
+	HealthURL      string          `json:"health_url,omitempty"`
+	EnvFile        *string         `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
 }
 type mcpUpdate struct {
-	ServiceID             int64   `json:"service_id"`
-	ExpectedConfigVersion int64   `json:"expected_config_version" jsonschema:"Configuration generation returned by get_service; required for updates"`
-	WatchedImage          *string `json:"watched_image,omitempty"`
-	DeployScript          *string `json:"deploy_script,omitempty"`
-	Policy                *string `json:"policy,omitempty"`
-	CronExpr              *string `json:"cron_expr,omitempty"`
-	HealthURL             *string `json:"health_url,omitempty"`
-	EnvFile               *string `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; omitted keys are removed; insert values with set_service_secret"`
+	ServiceID             int64            `json:"service_id"`
+	ExpectedConfigVersion int64            `json:"expected_config_version" jsonschema:"Configuration generation returned by get_service; required for updates"`
+	WatchedImage          *string          `json:"watched_image,omitempty"`
+	DeployScript          *string          `json:"deploy_script,omitempty"`
+	DeploymentMode        *string          `json:"deployment_mode,omitempty"`
+	TemplateConfig        *json.RawMessage `json:"template_config,omitempty"`
+	Policy                *string          `json:"policy,omitempty"`
+	CronExpr              *string          `json:"cron_expr,omitempty"`
+	HealthURL             *string          `json:"health_url,omitempty"`
+	EnvFile               *string          `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; omitted keys are removed; insert values with set_service_secret"`
 }
 type mcpHistory struct {
 	ServiceID int64 `json:"service_id"`
@@ -141,21 +146,23 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return map[string]any{"service": svc, "containers": containers}, nil
 	})
-	addNoriTool(s, server, "create_service", "Create a service with a Bash deployment script. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
+	addNoriTool(s, server, "create_service", "Create a Custom-script or structured template service. Template configuration never includes environment values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
 		svc := &store.Service{Name: in.Name, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
-		if _, err := s.saveOrdinaryService(ctx, ordinaryWrite{Service: svc, Environment: in.EnvFile, EnvironmentMode: templateEnvironment}); err != nil {
-			var validationErr *ordinaryValidationError
-			if errors.As(err, &validationErr) {
-				return nil, errors.New("invalid service configuration; check the name, image, policy, schedule, script, health URL, and environment format")
-			}
+		if err := setMCPDeploymentTemplate(svc, in.DeploymentMode, in.TemplateConfig); err != nil {
+			return nil, err
+		}
+		if err := validateMCPService(ctx, svc, in.EnvFile); err != nil {
+			return nil, err
+		}
+		if err := s.store.SaveServiceConfigTemplate(ctx, svc, in.EnvFile, nil); err != nil {
 			return nil, errors.New("could not create service; check that its name is unique")
 		}
 		return svc, nil
 	})
-	addNoriTool(s, server, "update_service", "Update supplied configuration fields; omitted fields are preserved and names are immutable. Scripts execute on the server with Docker access.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
+	addNoriTool(s, server, "update_service", "Update supplied configuration fields; omitted fields are preserved and names are immutable. Templates use the same typed validation as the dashboard.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
 		if in.ExpectedConfigVersion <= 0 {
 			return nil, errors.New("expected_config_version is required")
 		}
@@ -169,6 +176,17 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		if in.DeployScript != nil {
 			svc.DeployScript = *in.DeployScript
+		}
+		mode := ""
+		if in.DeploymentMode != nil {
+			mode = *in.DeploymentMode
+		}
+		var rawConfig json.RawMessage
+		if in.TemplateConfig != nil {
+			rawConfig = *in.TemplateConfig
+		}
+		if err := setMCPDeploymentTemplate(svc, mode, rawConfig); err != nil {
+			return nil, err
 		}
 		if in.Policy != nil {
 			svc.Policy = store.Policy(*in.Policy)
@@ -188,6 +206,38 @@ func (s *Server) newMCPHandler() http.Handler {
 				return nil, errors.New("invalid service configuration; check the image, policy, schedule, script, health URL, and environment format")
 			}
 			return nil, errors.New("could not update service")
+		}
+		return svc, nil
+	})
+	addNoriTool(s, server, "preview_service_template", "Preview the secret-free Docker actions and managed resources for a template service.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
+		svc, err := s.mcpService(ctx, in.ServiceID, false)
+		if err != nil {
+			return nil, err
+		}
+		plan, err := templatePlan(svc)
+		if err != nil {
+			return nil, err
+		}
+		if plan == nil {
+			return nil, errors.New("Custom services do not have a managed template preview")
+		}
+		return plan, nil
+	})
+	addNoriTool(s, server, "convert_service_to_custom", "Explicitly materialize a template as an inspectable Custom Bash script. This leaves structured template management.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpID) (any, error) {
+		svc, err := s.mcpService(ctx, in.ServiceID, true)
+		if err != nil {
+			return nil, err
+		}
+		script, err := renderTemplateAsCustomScript(svc)
+		if err != nil {
+			return nil, err
+		}
+		previous := *svc
+		svc.DeployScript = script
+		svc.DeploymentMode = store.DeploymentModeCustom
+		svc.TemplateConfig = "{}"
+		if err := s.store.SaveServiceConfigTemplate(ctx, svc, nil, &previous); err != nil {
+			return nil, err
 		}
 		return svc, nil
 	})
@@ -479,6 +529,14 @@ func (s *Server) mcpService(ctx context.Context, id int64, mutation bool) (*stor
 var mcpServiceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 func validateMCPService(ctx context.Context, svc *store.Service, env *string) error {
+	mode, config, err := normalizedTemplateConfig(string(svc.DeploymentMode), svc.TemplateConfig)
+	if err != nil {
+		return fmt.Errorf("invalid template configuration: %w", err)
+	}
+	svc.DeploymentMode, svc.TemplateConfig = mode, config
+	if mode != store.DeploymentModeCustom && !deploytemplate.ValidServiceName(svc.Name) {
+		return errors.New("template service name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,62}")
+	}
 	return validateOrdinaryService(ctx, svc, env, true, true)
 }
 
@@ -501,10 +559,12 @@ func validateOrdinaryService(ctx context.Context, svc *store.Service, env *strin
 	default:
 		return errors.New("policy must be manual, immediate or scheduled")
 	}
-	if strings.TrimSpace(svc.DeployScript) == "" || len(svc.DeployScript) > 128*1024 {
-		return errors.New("deploy_script is required and must be at most 128 KiB")
+	if svc.DeploymentMode == store.DeploymentModeCustom {
+		if strings.TrimSpace(svc.DeployScript) == "" || len(svc.DeployScript) > 128*1024 {
+			return errors.New("deploy_script is required and must be at most 128 KiB")
+		}
+		svc.DeployScript = executor.NormalizeNewlines(svc.DeployScript)
 	}
-	svc.DeployScript = executor.NormalizeNewlines(svc.DeployScript)
 	form := serviceForm(svc)
 	if env != nil {
 		if len(*env) > 128*1024 {
@@ -521,5 +581,28 @@ func validateOrdinaryService(ctx context.Context, svc *store.Service, env *strin
 	if err := validateServiceForm(ctx, form); err != nil {
 		return err
 	}
+	return nil
+}
+
+func setMCPDeploymentTemplate(svc *store.Service, rawMode string, rawConfig json.RawMessage) error {
+	mode := rawMode
+	if mode == "" {
+		mode = string(svc.DeploymentMode)
+	}
+	if mode == "" {
+		mode = string(store.DeploymentModeCustom)
+	}
+	if rawConfig != nil && store.DeploymentMode(mode) == store.DeploymentModeCustom {
+		return errors.New("template_config requires deployment_mode single_container or postgres")
+	}
+	persistedConfig := svc.TemplateConfig
+	if rawConfig != nil {
+		persistedConfig = string(rawConfig)
+	}
+	normalizedMode, normalizedConfig, err := normalizedTemplateConfig(mode, persistedConfig)
+	if err != nil {
+		return fmt.Errorf("invalid template configuration: %w", err)
+	}
+	svc.DeploymentMode, svc.TemplateConfig = normalizedMode, normalizedConfig
 	return nil
 }
