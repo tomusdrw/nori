@@ -519,8 +519,11 @@ that is sooner. Refresh tokens rotate on every use,
 expire with their grant after 30 days, and reuse revokes the entire token family.
 Credentials are stored as hashes. OAuth grants survive normal restarts.
 The **Connected OAuth clients** section in Settings lists approved connections
-by client name, scopes, approval and expiry times, and status; it never displays
-credentials, client secrets, codes, or redirect URLs. To disconnect one
+by client name, scopes, approval, last-use and expiry times, and status; it never
+displays credentials, client secrets, codes, or redirect URLs. Last use advances
+only after a bearer token successfully authenticates an MCP request; issuing or
+refreshing tokens does not count. If Nori cannot persist that activity, it
+rejects the MCP request instead of showing stale usage. To disconnect one
 connection, select **Revoke**, review the confirmation page, and confirm. That
 revokes only the selected grant's credential family: other client connections
 remain usable, the registered client remains available, and a disconnected

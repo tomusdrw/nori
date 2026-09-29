@@ -91,6 +91,10 @@ func TestMCPGrantManagementSettingsConfirmationAndIsolation(t *testing.T) {
 	}
 	first := seedManagedGrant(t, st, "client-one", `Calendar <script>alert("x")</script>`, "family-one")
 	second := seedManagedGrant(t, st, "client-two", "Deploy agent", "family-two")
+	lastUsed := time.Date(2026, time.September, 20, 11, 30, 0, 0, time.Local)
+	if err := st.RecordOAuthGrantUse(ctx, "family-one", lastUsed); err != nil {
+		t.Fatal(err)
+	}
 	cookies := loginCookies(t, srv)
 
 	unauthenticated := httptest.NewRecorder()
@@ -126,6 +130,9 @@ func TestMCPGrantManagementSettingsConfirmationAndIsolation(t *testing.T) {
 	}
 	if !strings.Contains(body, `oauth-grant-inventory`) || !strings.Contains(body, `aria-label="Revoke Calendar`) {
 		t.Fatalf("inventory lacks accessible responsive markup: %s", body)
+	}
+	if !strings.Contains(body, "Last used") || !strings.Contains(body, lastUsed.Format("Jan 2, 2006 15:04 MST")) || !strings.Contains(body, "Never") {
+		t.Fatalf("inventory lacks last-used states: %s", body)
 	}
 
 	confirmation := settingsRequest(t, srv, cookies, http.MethodGet, "https://nori.example/settings/mcp/grants/"+first.ManagementID+"/revoke", "", "")

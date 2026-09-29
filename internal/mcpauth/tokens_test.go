@@ -3,6 +3,7 @@ package mcpauth
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -120,6 +121,92 @@ func TestAccessLifetimeDoesNotExceedGrant(t *testing.T) {
 				t.Fatal("advertised expiry differs from stored expiry")
 			}
 		})
+	}
+}
+
+func TestProtectedMCPRequestRecordsGrantLastUse(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "oauth.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s, _, params := seedTokenGrant(t, st, "refresh", time.Hour)
+
+	registrations, err := s.ListOAuthGrantManagement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registrations) != 1 || len(registrations[0].Grants) != 1 || !registrations[0].Grants[0].LastUsedAt.IsZero() {
+		t.Fatalf("new grant usage = %+v", registrations)
+	}
+
+	tokens := decodeTokens(t, tokenRequest(s, params))
+	registrations, err = s.ListOAuthGrantManagement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registrations[0].Grants[0].LastUsedAt.IsZero() {
+		t.Fatalf("token refresh counted as use: %+v", registrations[0].Grants[0])
+	}
+	if status := accessStatus(s, "not-a-token"); status != http.StatusUnauthorized {
+		t.Fatalf("invalid access status = %d", status)
+	}
+	registrations, err = s.ListOAuthGrantManagement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registrations[0].Grants[0].LastUsedAt.IsZero() {
+		t.Fatalf("invalid token counted as use: %+v", registrations[0].Grants[0])
+	}
+
+	before := time.Now().Add(-time.Second)
+	if status := accessStatus(s, tokens.Access); status != http.StatusNoContent {
+		t.Fatalf("valid access status = %d", status)
+	}
+	registrations, err = s.ListOAuthGrantManagement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastUsed := registrations[0].Grants[0].LastUsedAt
+	if lastUsed.Before(before) || lastUsed.After(time.Now().Add(time.Second)) {
+		t.Fatalf("successful request last used = %v", lastUsed)
+	}
+}
+
+func TestProtectedMCPRequestStopsWhenGrantUseCannotBeRecorded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oauth.db")
+	st, err := store.Open(path, make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s, _, params := seedTokenGrant(t, st, "refresh", time.Hour)
+	tokens := decodeTokens(t, tokenRequest(s, params))
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER reject_oauth_last_use
+		BEFORE UPDATE OF last_used_at ON mcp_oauth
+		WHEN NEW.last_used_at <> OLD.last_used_at
+		BEGIN SELECT RAISE(FAIL, 'last-use write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	handled := false
+	r := httptest.NewRequest(http.MethodPost, "https://nori.example/mcp", nil)
+	r.Header.Set("Authorization", "Bearer "+tokens.Access)
+	w := httptest.NewRecorder()
+	s.Protect(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		handled = true
+	})).ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("last-use write failure status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if handled {
+		t.Fatal("MCP handler ran without recording grant use")
 	}
 }
 

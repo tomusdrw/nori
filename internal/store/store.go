@@ -92,6 +92,10 @@ func Open(path string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrateOAuth(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(revisionSchema); err != nil {
 		db.Close()
 		return nil, err
