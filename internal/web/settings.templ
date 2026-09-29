@@ -162,6 +162,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 									<tr>
 										<th scope="col">Scopes</th>
 										<th scope="col">Approved</th>
+										<th scope="col">Last used</th>
 										<th scope="col">Expires</th>
 										<th scope="col">Status</th>
 										<th scope="col"><span class="sr-only">Connection actions</span></th>
@@ -172,6 +173,13 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 										<tr>
 											<td data-label="Scopes" class="oauth-grant-scopes">{ grant.Scopes }</td>
 											<td data-label="Approved">{ grant.ApprovedAt.Format("Jan 2, 2006 15:04 MST") }</td>
+											<td data-label="Last used">
+												if grant.LastUsedAt.IsZero() {
+													<span class="oauth-grant-never">Never</span>
+												} else {
+													{ grant.LastUsedAt.Format("Jan 2, 2006 15:04 MST") }
+												}
+											</td>
 											<td data-label="Expires">{ grant.ExpiresAt.Format("Jan 2, 2006 15:04 MST") }</td>
 											<td data-label="Status"><span class="badge oauth-grant-status" data-status={ string(grant.Status) }>{ grant.Status }</span></td>
 											<td data-label="Action" class="oauth-grant-action">

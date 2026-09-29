@@ -54,7 +54,11 @@ on an already initialized client connection.
   tombstones only that token family and preserves the client registration and
   every other family. Safe grant projections are retained through the same
   post-expiry revocation window so a recent revoked connection is not shown as
-  active after a restart.
+  active after a restart. Their last-use timestamp advances monotonically only
+  after successful bearer authentication at the MCP resource boundary; token
+  issuance, refresh, and rejected credentials do not count as use. If the
+  timestamp cannot be persisted, the request is rejected before MCP dispatch so
+  the inventory never silently misses accepted activity.
 - Credentials are hashed before they reach storage. Do not log credentials,
   authorization query strings, deploy scripts or environment contents.
 - Disabling MCP, changing its public URL or revoking all access changes the
@@ -105,10 +109,10 @@ When verifying changes to this page:
   URL plus `/mcp`, alongside the read/write access explanation. Check note padding
   and the separate revoke-access section at desktop and mobile widths.
 - The Connected OAuth clients section lists only approved connections. Its
-  rows show the original approved scopes, approval and expiry times, and
-  lifecycle status; they must not reveal codes, tokens, credential hashes,
-  client secrets, redirect URLs, or token-family identifiers. Check long,
-  untrusted client names at desktop and narrow widths.
+  rows show the original approved scopes, approval, last-use and expiry times,
+  and lifecycle status; unused grants show `Never`. They must not reveal codes,
+  tokens, credential hashes, client secrets, redirect URLs, or token-family
+  identifiers. Check long, untrusted client names at desktop and narrow widths.
 - Individual revocation starts with a confirmation page that names the selected
   client and scope. A confirmed revoke must leave sibling grants usable. It
   requires the signed administrator session, CSRF proof, a body no larger than

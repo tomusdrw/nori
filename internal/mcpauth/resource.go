@@ -56,6 +56,10 @@ func (s *Server) Protect(next http.Handler) http.Handler {
 			failure(w, 401, "invalid_token")
 			return
 		}
+		if err := s.st.RecordOAuthGrantUse(r.Context(), g.Family, time.Now()); err != nil {
+			failure(w, http.StatusServiceUnavailable, "temporarily_unavailable")
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, Identity{ClientID: g.ClientID, Scope: g.Scope})))
 	})
 }

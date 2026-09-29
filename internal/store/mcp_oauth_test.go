@@ -142,6 +142,64 @@ func TestOAuthGrantManagementRevokesExactlyOneFamily(t *testing.T) {
 	}
 }
 
+func TestOAuthGrantManagementRecordsLatestUsePerFamily(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	if err := st.PutOAuth(ctx, OAuthRecord{Key: "client", Kind: "client", Data: []byte(`{}`), Expires: now.Add(time.Hour).Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := st.ApproveOAuthGrant(ctx, OAuthGrantApproval{
+		ClientKey: "client", ClientName: "Agent", ClientExpiresAt: now.Add(time.Hour),
+		ApprovedAt: now, Family: "used-family", FamilyExpiresAt: now.Add(30 * time.Minute), Scopes: "nori:read",
+		Code: OAuthRecord{Key: "code", Kind: "code", Family: "used-family", Data: []byte(`{}`), Expires: now.Add(time.Minute).Unix()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := st.ListOAuthGrantManagement(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := listed[0].Grants[0].LastUsedAt; !got.IsZero() {
+		t.Fatalf("new grant last used = %v, want zero", got)
+	}
+
+	firstUse := now.Add(time.Minute)
+	if err := st.RecordOAuthGrantUse(ctx, "used-family", firstUse); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordOAuthGrantUse(ctx, "used-family", firstUse.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	confirmation, err := st.GetOAuthGrantManagement(ctx, grant.ManagementID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !confirmation.LastUsedAt.Equal(firstUse) {
+		t.Fatalf("out-of-order use moved timestamp to %v, want %v", confirmation.LastUsedAt, firstUse)
+	}
+
+	latestUse := firstUse.Add(time.Minute)
+	if err := st.RecordOAuthGrantUse(ctx, "used-family", latestUse); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RevokeOAuthGrant(ctx, grant.ManagementID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordOAuthGrantUse(ctx, "used-family", latestUse.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = st.ListOAuthGrantManagement(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := listed[0].Grants[0].LastUsedAt; !got.Equal(latestUse) {
+		t.Fatalf("revoked grant last used = %v, want %v", got, latestUse)
+	}
+}
+
 func TestOAuthGrantManagementFamilyRevocationMarksProjectionAndBlocksNewCredentials(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -186,6 +244,40 @@ func TestBootstrapOAuthGrantReturnsNotFoundWhenExpiryRaces(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired client metadata error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBootstrapOAuthGrantPreservesUseRecordedBeforeProjection(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	if err := st.PutOAuth(ctx, OAuthRecord{Key: "client", Kind: "client", Data: []byte(`{}`), Expires: now.Add(time.Hour).Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutOAuth(ctx, OAuthRecord{Key: "legacy-refresh", Kind: "refresh", Family: "legacy-family", Data: []byte(`{}`), Expires: now.Add(30 * time.Minute).Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	usedAt := now
+	if err := st.RecordOAuthGrantUse(ctx, "legacy-family", usedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BootstrapOAuthGrant(ctx, OAuthGrantBootstrap{
+		ClientKey:       "client",
+		ClientName:      "Legacy client",
+		ClientExpiresAt: now.Add(time.Hour),
+		ApprovedAt:      now.Add(-time.Minute),
+		Family:          "legacy-family",
+		FamilyExpiresAt: now.Add(30 * time.Minute),
+		Scopes:          "nori:read",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registrations, err := st.ListOAuthGrantManagement(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registrations) != 1 || len(registrations[0].Grants) != 1 || !registrations[0].Grants[0].LastUsedAt.Equal(usedAt) {
+		t.Fatalf("bootstrapped last use = %+v, want %v", registrations, usedAt)
 	}
 }
 
@@ -357,8 +449,20 @@ family TEXT NOT NULL DEFAULT '', used INTEGER NOT NULL DEFAULT 0)`); err != nil 
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if _, err := st.GetOAuth(context.Background(), "legacy-code", "code"); err != nil {
+	ctx := context.Background()
+	if _, err := st.GetOAuth(ctx, "legacy-code", "code"); err != nil {
 		t.Fatalf("pre-feature OAuth row lost after Open: %v", err)
+	}
+	usedAt := time.Now().Truncate(time.Second)
+	if err := st.RecordOAuthGrantUse(ctx, "legacy-family", usedAt); err != nil {
+		t.Fatalf("record use after schema migration: %v", err)
+	}
+	record, err := st.GetOAuth(ctx, "legacy-code", "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.LastUsedAt != usedAt.Unix() {
+		t.Fatalf("migrated last_used_at = %d, want %d", record.LastUsedAt, usedAt.Unix())
 	}
 }
 
@@ -381,6 +485,10 @@ func TestOAuthGrantManagementPersistsRevocationAndGlobalResetClearsProjection(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	usedAt := now
+	if err := st.RecordOAuthGrantUse(ctx, "family", usedAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.RevokeOAuthGrant(ctx, grant.ManagementID); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +504,7 @@ func TestOAuthGrantManagementPersistsRevocationAndGlobalResetClearsProjection(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registrations) != 1 || len(registrations[0].Grants) != 1 || registrations[0].Grants[0].Status != OAuthGrantRevoked {
+	if len(registrations) != 1 || len(registrations[0].Grants) != 1 || registrations[0].Grants[0].Status != OAuthGrantRevoked || !registrations[0].Grants[0].LastUsedAt.Equal(usedAt) {
 		t.Fatalf("reopened projection = %+v", registrations)
 	}
 	if err := st.SetMCPConfig(ctx, true, "https://nori.example", true); err != nil {

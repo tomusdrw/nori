@@ -16,7 +16,8 @@ import (
 
 const oauthSchema = `CREATE TABLE IF NOT EXISTS mcp_oauth (
  key TEXT PRIMARY KEY, kind TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL,
- family TEXT NOT NULL DEFAULT '', used INTEGER NOT NULL DEFAULT 0);
+ family TEXT NOT NULL DEFAULT '', used INTEGER NOT NULL DEFAULT 0,
+ last_used_at INTEGER NOT NULL DEFAULT 0);
  CREATE INDEX IF NOT EXISTS mcp_oauth_family ON mcp_oauth(family);
  CREATE INDEX IF NOT EXISTS mcp_oauth_expiry ON mcp_oauth(expires);`
 
@@ -33,6 +34,7 @@ type OAuthRecord struct {
 	Key, Kind, Family string
 	Data              []byte
 	Expires           int64
+	LastUsedAt        int64
 	Used              bool
 }
 
@@ -54,8 +56,42 @@ type OAuthGrant struct {
 	ClientName   string
 	Scopes       string
 	ApprovedAt   time.Time
+	LastUsedAt   time.Time
 	ExpiresAt    time.Time
 	Status       OAuthGrantStatus
+}
+
+func migrateOAuth(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(mcp_oauth)`)
+	if err != nil {
+		return err
+	}
+	hasLastUsedAt := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "last_used_at" {
+			hasLastUsedAt = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasLastUsedAt {
+		return nil
+	}
+	_, err = db.Exec(`ALTER TABLE mcp_oauth ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0`)
+	return err
 }
 
 // OAuthRegistration groups safe OAuth grants under one approved client label.
@@ -128,7 +164,7 @@ func (s *Store) PutOAuth(ctx context.Context, r OAuthRecord) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM mcp_oauth WHERE expires <= ?`, time.Now().Unix()); err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO mcp_oauth(key,kind,data,expires,family) SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth WHERE kind=? AND family=?) AND (SELECT count(*) FROM mcp_oauth)<? AND (? != 'client' OR (SELECT count(*) FROM mcp_oauth WHERE kind='client')<?)`, r.Key, r.Kind, r.Data, r.Expires, r.Family, oauthRevokedKind, r.Family, oauthRecordLimit, r.Kind, oauthClientLimit)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO mcp_oauth(key,kind,data,expires,family,last_used_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth WHERE kind=? AND family=?) AND (SELECT count(*) FROM mcp_oauth)<? AND (? != 'client' OR (SELECT count(*) FROM mcp_oauth WHERE kind='client')<?)`, r.Key, r.Kind, r.Data, r.Expires, r.Family, r.LastUsedAt, oauthRevokedKind, r.Family, oauthRecordLimit, r.Kind, oauthClientLimit)
 	if err != nil {
 		return err
 	}
@@ -141,7 +177,7 @@ func (s *Store) PutOAuth(ctx context.Context, r OAuthRecord) error {
 
 func (s *Store) GetOAuth(ctx context.Context, key, kind string) (OAuthRecord, error) {
 	r := OAuthRecord{Key: key, Kind: kind}
-	err := s.db.QueryRowContext(ctx, `SELECT data,expires,family,used FROM mcp_oauth WHERE key=? AND kind=? AND expires>?`, key, kind, time.Now().Unix()).Scan(&r.Data, &r.Expires, &r.Family, &r.Used)
+	err := s.db.QueryRowContext(ctx, `SELECT data,expires,family,used,last_used_at FROM mcp_oauth WHERE key=? AND kind=? AND expires>?`, key, kind, time.Now().Unix()).Scan(&r.Data, &r.Expires, &r.Family, &r.Used, &r.LastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -155,6 +191,18 @@ func (s *Store) ConsumeOAuth(ctx context.Context, key string) (bool, error) {
 	}
 	n, err := r.RowsAffected()
 	return n == 1, err
+}
+
+// RecordOAuthGrantUse advances the last-use timestamp for every live record in
+// one grant family. Updating the credential rows as well as the safe projection
+// preserves usage that happens before a legacy family is first projected.
+func (s *Store) RecordOAuthGrantUse(ctx context.Context, family string, usedAt time.Time) error {
+	if family == "" || usedAt.IsZero() {
+		return errors.New("invalid OAuth grant use")
+	}
+	usedAtUnix := usedAt.Unix()
+	_, err := s.db.ExecContext(ctx, `UPDATE mcp_oauth SET last_used_at=? WHERE family=? AND used=0 AND expires>? AND last_used_at<?`, usedAtUnix, family, time.Now().Unix(), usedAtUnix)
+	return err
 }
 
 func (s *Store) ExtendOAuthClient(ctx context.Context, key string, expires time.Time) error {
@@ -234,7 +282,7 @@ func (s *Store) ListOAuthRecords(ctx context.Context, kind string) ([]OAuthRecor
 // path. It avoids loading retained records for families that already have a
 // browser-safe management projection.
 func (s *Store) ListOAuthRecordsExceptFamilies(ctx context.Context, kind string, excluded map[string]struct{}) ([]OAuthRecord, error) {
-	query := `SELECT key,data,expires,family,used FROM mcp_oauth WHERE kind=? AND expires>?`
+	query := `SELECT key,data,expires,family,used,last_used_at FROM mcp_oauth WHERE kind=? AND expires>?`
 	args := []any{kind, time.Now().Unix()}
 	if len(excluded) > 0 {
 		families := make([]string, 0, len(excluded))
@@ -256,7 +304,7 @@ func (s *Store) ListOAuthRecordsExceptFamilies(ctx context.Context, kind string,
 	for rows.Next() {
 		var record OAuthRecord
 		record.Kind = kind
-		if err := rows.Scan(&record.Key, &record.Data, &record.Expires, &record.Family, &record.Used); err != nil {
+		if err := rows.Scan(&record.Key, &record.Data, &record.Expires, &record.Family, &record.Used, &record.LastUsedAt); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -340,6 +388,10 @@ func (s *Store) BootstrapOAuthGrant(ctx context.Context, a OAuthGrantBootstrap) 
 	if txExisting != 0 {
 		return tx.Commit()
 	}
+	var lastUsedAt int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(last_used_at),0) FROM mcp_oauth WHERE family=?`, a.Family).Scan(&lastUsedAt); err != nil {
+		return err
+	}
 	registrationKey := oauthManagementKey("oauth-managed-registration", a.ClientKey)
 	registration := oauthManagedRegistration{ClientName: a.ClientName, ApprovedAt: a.ApprovedAt.Unix(), ExpiresAt: a.ClientExpiresAt.Unix()}
 	if err := upsertOAuthManagedRegistrationTx(ctx, tx, registrationKey, registration); err != nil {
@@ -353,7 +405,7 @@ func (s *Store) BootstrapOAuthGrant(ctx context.Context, a OAuthGrantBootstrap) 
 	if err != nil {
 		return err
 	}
-	if err := insertOAuthTx(ctx, tx, OAuthRecord{Key: oauthManagementKey("oauth-managed-grant", id), Kind: oauthManagedGrantKind, Data: data, Family: a.Family, Expires: a.FamilyExpiresAt.Add(oauthFamilyTombstoneLifetime).Unix()}); err != nil {
+	if err := insertOAuthTx(ctx, tx, OAuthRecord{Key: oauthManagementKey("oauth-managed-grant", id), Kind: oauthManagedGrantKind, Data: data, Family: a.Family, Expires: a.FamilyExpiresAt.Add(oauthFamilyTombstoneLifetime).Unix(), LastUsedAt: lastUsedAt}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -388,7 +440,7 @@ func upsertOAuthManagedRegistrationTx(ctx context.Context, tx *sql.Tx, key strin
 }
 
 func insertOAuthTx(ctx context.Context, tx *sql.Tx, r OAuthRecord) error {
-	result, err := tx.ExecContext(ctx, `INSERT INTO mcp_oauth(key,kind,data,expires,family,used) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth WHERE kind=? AND family=?) AND (SELECT count(*) FROM mcp_oauth)<? AND (? != 'client' OR (SELECT count(*) FROM mcp_oauth WHERE kind='client')<?)`, r.Key, r.Kind, r.Data, r.Expires, r.Family, boolToInt(r.Used), oauthRevokedKind, r.Family, oauthRecordLimit, r.Kind, oauthClientLimit)
+	result, err := tx.ExecContext(ctx, `INSERT INTO mcp_oauth(key,kind,data,expires,family,used,last_used_at) SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM mcp_oauth WHERE kind=? AND family=?) AND (SELECT count(*) FROM mcp_oauth)<? AND (? != 'client' OR (SELECT count(*) FROM mcp_oauth WHERE kind='client')<?)`, r.Key, r.Kind, r.Data, r.Expires, r.Family, boolToInt(r.Used), r.LastUsedAt, oauthRevokedKind, r.Family, oauthRecordLimit, r.Kind, oauthClientLimit)
 	if err != nil {
 		return err
 	}
@@ -409,7 +461,7 @@ func (s *Store) ListOAuthGrantManagement(ctx context.Context) ([]OAuthRegistrati
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT data,used FROM mcp_oauth WHERE kind=? AND expires>?`, oauthManagedGrantKind, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT data,used,last_used_at FROM mcp_oauth WHERE kind=? AND expires>?`, oauthManagedGrantKind, now)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +469,8 @@ func (s *Store) ListOAuthGrantManagement(ctx context.Context) ([]OAuthRegistrati
 	for rows.Next() {
 		var data []byte
 		var used bool
-		if err := rows.Scan(&data, &used); err != nil {
+		var lastUsedAt int64
+		if err := rows.Scan(&data, &used, &lastUsedAt); err != nil {
 			return nil, err
 		}
 		projection, err := decodeOAuthManagedGrant(data)
@@ -428,7 +481,7 @@ func (s *Store) ListOAuthGrantManagement(ctx context.Context) ([]OAuthRegistrati
 		if !ok {
 			continue
 		}
-		registration.Grants = append(registration.Grants, oauthGrantView(projection, used, now))
+		registration.Grants = append(registration.Grants, oauthGrantView(projection, used, lastUsedAt, now))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -515,14 +568,18 @@ func decodeOAuthManagedGrant(data []byte) (oauthManagedGrant, error) {
 	return projection, nil
 }
 
-func oauthGrantView(projection oauthManagedGrant, used bool, now int64) OAuthGrant {
+func oauthGrantView(projection oauthManagedGrant, used bool, lastUsedAt, now int64) OAuthGrant {
 	status := OAuthGrantActive
 	if used {
 		status = OAuthGrantRevoked
 	} else if projection.GrantExpiresAt <= now {
 		status = OAuthGrantExpired
 	}
-	return OAuthGrant{ManagementID: projection.ManagementID, ClientName: projection.ClientName, Scopes: projection.Scopes, ApprovedAt: time.Unix(projection.ApprovedAt, 0), ExpiresAt: time.Unix(projection.GrantExpiresAt, 0), Status: status}
+	grant := OAuthGrant{ManagementID: projection.ManagementID, ClientName: projection.ClientName, Scopes: projection.Scopes, ApprovedAt: time.Unix(projection.ApprovedAt, 0), ExpiresAt: time.Unix(projection.GrantExpiresAt, 0), Status: status}
+	if lastUsedAt > 0 {
+		grant.LastUsedAt = time.Unix(lastUsedAt, 0)
+	}
+	return grant
 }
 
 // GetOAuthGrantManagement resolves exactly one opaque management ID and only
@@ -539,19 +596,20 @@ func (s *Store) GetOAuthGrantManagement(ctx context.Context, id string) (OAuthGr
 	if row.used || row.projection.GrantExpiresAt <= now {
 		return OAuthGrant{}, ErrNotFound
 	}
-	return oauthGrantView(row.projection, false, now), nil
+	return oauthGrantView(row.projection, false, row.lastUsedAt, now), nil
 }
 
 type oauthManagedGrantRow struct {
 	projection oauthManagedGrant
 	family     string
 	used       bool
+	lastUsedAt int64
 }
 
 func (s *Store) getOAuthManagedGrant(ctx context.Context, id string) (oauthManagedGrantRow, error) {
 	var row oauthManagedGrantRow
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT data,family,used FROM mcp_oauth WHERE key=? AND kind=? AND expires>?`, oauthManagementKey("oauth-managed-grant", id), oauthManagedGrantKind, time.Now().Unix()).Scan(&data, &row.family, &row.used)
+	err := s.db.QueryRowContext(ctx, `SELECT data,family,used,last_used_at FROM mcp_oauth WHERE key=? AND kind=? AND expires>?`, oauthManagementKey("oauth-managed-grant", id), oauthManagedGrantKind, time.Now().Unix()).Scan(&data, &row.family, &row.used, &row.lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, ErrNotFound
 	}
