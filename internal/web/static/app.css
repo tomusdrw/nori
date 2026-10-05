@@ -375,6 +375,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .service-form { display: grid; gap: 18px; }
 .editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: stretch; }
 .form-panel, .editor-panel { overflow: hidden; }
+.editor-panel:not([hidden]), .template-panel:not([hidden]) { display: flex; flex-direction: column; }
+.template-panel > .form-grid { flex: 1; }
+.template-panel > .form-notes { padding: 0 24px 24px; }
+.template-panel .field { grid-template-rows: auto minmax(240px, 1fr) auto; }
+.template-panel textarea { padding: 12px; resize: vertical; font-family: var(--font-mono); font-size: 0.78rem; }
 .step-number { color: rgba(155, 140, 255, 0.48); font-family: var(--font-mono); font-size: 0.74rem; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 20px; padding: 24px; }
 .form-notes { display: grid; grid-column: 1 / -1; min-width: 0; gap: 12px; }
@@ -412,8 +417,8 @@ select { appearance: none; background-image: linear-gradient(45deg, transparent 
 
 @keyframes blink { 50% { opacity: 0.4; } }
 
-.editor-host { background: #090d18; }
-.editor-host .cm-editor { border: 0; background: #090d18; font-size: 0.78rem; }
+.editor-host { display: flex; flex: 1; flex-direction: column; background: #090d18; }
+.editor-host .cm-editor { flex: 1 0 auto; border: 0; background: #090d18; font-size: 0.78rem; }
 .editor-host .cm-editor.cm-focused { outline: 0; box-shadow: inset 0 0 0 1px rgba(155, 140, 255, 0.32); }
 .editor-host .cm-gutters { border-right-color: rgba(148, 163, 184, 0.1); background: #090d18; color: #4e5970; }
 .editor-host .cm-activeLine, .editor-host .cm-activeLineGutter { background: rgba(124, 109, 242, 0.055); }
@@ -476,6 +481,7 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
   .panel-heading-actions { align-items: flex-end; flex-direction: column-reverse; gap: 8px; }
   .editor-health { max-width: 190px; }
   .form-grid { padding: 18px; }
+  .template-panel > .form-notes { padding: 0 18px 18px; }
   .detail-version-summary { justify-content: flex-start; margin-left: 1px; }
   .editor-footer { align-items: flex-start; flex-direction: column; }
   .danger-zone { align-items: flex-start; flex-direction: column; }
