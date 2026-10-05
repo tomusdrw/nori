@@ -94,8 +94,8 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			</div>
 		</section>
 
-		<div class="editor-grid" data-deployment-mode-panel="custom" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" }>
-		<section class="panel editor-panel">
+		<div class="editor-grid">
+		<section class="panel editor-panel" data-deployment-mode-panel="custom" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" }>
 			<div class="panel-heading">
 				<div>
 					<h2>Deployment script</h2>
@@ -115,7 +115,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>
 			</div>
 		</section>
-		</div>
 
 		<section class="panel form-panel" data-deployment-mode-panel="single_container" hidden?={ form.DeploymentMode != "single_container" }>
 			<div class="panel-heading"><div><h2>Single-container template</h2><p>Structured configuration for the managed application container. Values in the environment editor remain encrypted and are never included here.</p></div><span class="step-number">02</span></div>
@@ -133,7 +132,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			}
 		</section>
 
-		<div class="editor-grid">
 		<section class="panel editor-panel">
 			<div class="panel-heading">
 				<div>
