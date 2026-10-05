@@ -94,8 +94,8 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			</div>
 		</section>
 
-		<div class="editor-grid" data-deployment-mode-panel="custom" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" }>
-		<section class="panel editor-panel">
+		<div class="editor-grid">
+		<section class="panel editor-panel" data-deployment-mode-panel="custom" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" }>
 			<div class="panel-heading">
 				<div>
 					<h2>Deployment script</h2>
@@ -115,9 +115,8 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>
 			</div>
 		</section>
-		</div>
 
-		<section class="panel form-panel" data-deployment-mode-panel="single_container" hidden?={ form.DeploymentMode != "single_container" }>
+		<section class="panel form-panel template-panel" data-deployment-mode-panel="single_container" hidden?={ form.DeploymentMode != "single_container" }>
 			<div class="panel-heading"><div><h2>Single-container template</h2><p>Structured configuration for the managed application container. Values in the environment editor remain encrypted and are never included here.</p></div><span class="step-number">02</span></div>
 			<div class="form-grid"><div class="field form-notes"><label for="template-config">Template configuration</label><textarea id="template-config" name="template_config_single" class="code-editor" spellcheck="false" aria-label="Single-container template configuration" placeholder='{"version":1,"internal_port":8080,"restart_policy":"unless-stopped","health":{"url":"https://app.example/health","timeout_seconds":30}}'>{ form.TemplateConfig }</textarea><span class="field-help">Use a versioned JSON object. Include named volumes, serving network, proxy settings, and exactly one bounded health URL or command when needed.</span></div></div>
 			if form.TemplatePreview != "" {
@@ -125,7 +124,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			}
 		</section>
 
-		<section class="panel form-panel" data-deployment-mode-panel="postgres" hidden?={ form.DeploymentMode != "postgres" }>
+		<section class="panel form-panel template-panel" data-deployment-mode-panel="postgres" hidden?={ form.DeploymentMode != "postgres" }>
 			<div class="panel-heading"><div><h2>Application with PostgreSQL</h2><p>Use the same structured application fields plus an explicit PostgreSQL image and environment key bindings.</p></div><span class="step-number">02</span></div>
 			<div class="form-grid"><div class="field form-notes"><label for="template-config-postgres">Template configuration</label><textarea id="template-config-postgres" name="template_config_postgres" class="code-editor" spellcheck="false" aria-label="PostgreSQL template configuration" placeholder='{"version":1,"internal_port":8080,"restart_policy":"unless-stopped","health":{"command":"curl -f http://localhost:8080/health","timeout_seconds":30},"postgres":{"image":"postgres:16.4","database":"app","user":"app","password_env":"POSTGRES_PASSWORD","connection_url_env":"DATABASE_URL","ready_timeout_seconds":30}}'>{ form.TemplateConfig }</textarea><span class="field-help">Nori creates only labeled private database resources and requires a matching private connection URL before changing the application.</span></div></div>
 			if form.TemplatePreview != "" {
@@ -133,7 +132,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			}
 		</section>
 
-		<div class="editor-grid">
 		<section class="panel editor-panel">
 			<div class="panel-heading">
 				<div>
