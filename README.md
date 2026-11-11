@@ -4,6 +4,18 @@ Self-hosted deployment control panel for Docker-based services. Watches containe
 registries for new images, runs your bash deploy scripts, and provides a dashboard to
 manage services.
 
+Nori takes its name from Elanor "Nori" Brandyfoot, the curious young Harfoot in
+*The Lord of the Rings: The Rings of Power*. When the Stranger falls from the sky,
+she helps him find his feet, and eventually sets out with him beyond the trails
+her people know.
+
+This Nori looks after a shorter journey: from a published container image to a
+running service.
+
+Together with [Sadoc](https://github.com/tomusdrw/sadoc), named after fellow Harfoot
+Sadoc Burrows, it forms a suite of self-hosted development tools: Sadoc keeps
+dependencies up to date, while Nori deploys and manages Docker-based services.
+
 ## Why Nori?
 
 Nori is for operators whose CI already produces container images and who want the last
