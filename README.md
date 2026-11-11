@@ -1,5 +1,9 @@
 # Nori
 
+<p align="center">
+  <img src="assets/nori-readme.png" alt="Nori, a Harfoot holding a lantern beneath three stars" width="240" height="240" />
+</p>
+
 Self-hosted deployment control panel for Docker-based services. Watches container
 registries for new images, runs your bash deploy scripts, and provides a dashboard to
 manage services.
