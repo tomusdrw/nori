@@ -69,17 +69,17 @@ code { color: #c9c2ff; font-size: 0.88em; }
 
 .brand-mark {
   display: grid;
+  flex: 0 0 auto;
   width: 34px;
   height: 34px;
   place-items: center;
-  border: 1px solid rgba(155, 140, 255, 0.34);
+  border: 1px solid rgba(208, 174, 95, 0.45);
   border-radius: 10px;
-  background: linear-gradient(145deg, rgba(124, 109, 242, 0.28), rgba(40, 201, 216, 0.1));
+  background: #f7e9d0;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 8px 30px rgba(82, 66, 190, 0.2);
-  color: #b9aeff;
 }
 
-.brand-mark svg { width: 22px; height: 22px; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
 .nav-links { display: flex; align-items: center; gap: 10px; color: var(--text-soft); }
 .nav-links > a:not(.button) { padding: 8px 10px; transition: color 150ms ease; }
 .nav-links > a:not(.button):hover { color: var(--text); }
@@ -447,7 +447,6 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
 .login-glow-two { width: 450px; height: 450px; right: -240px; bottom: -230px; background: radial-gradient(circle, rgba(40, 201, 216, 0.12), transparent 68%); }
 .login-card { position: relative; width: min(420px, 100%); padding: 39px; border: 1px solid var(--border); border-radius: 20px; background: rgba(16, 23, 41, 0.82); box-shadow: var(--shadow); backdrop-filter: blur(20px); }
 .login-brand { width: 48px; height: 48px; margin-bottom: 25px; border-radius: 13px; }
-.login-brand svg { width: 28px; height: 28px; }
 .login-card h1 { margin: 0 0 7px; font-size: 2rem; letter-spacing: -0.045em; }
 .login-copy { margin: 0 0 26px; color: var(--text-muted); }
 .login-form { display: grid; gap: 9px; }

@@ -7,7 +7,8 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#0b1020"/>
-			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
+			<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"/>
+			<link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180"/>
 			<title>{ title } · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/htmx.min.js" defer></script>
@@ -34,7 +35,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 				<header class="topbar">
 					<a class="brand" href="/" aria-label={ BotName(ctx) + " dashboard" }>
 						<span class="brand-mark" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+							<img src="/static/nori-mark.png" alt="" width="34" height="34"/>
 						</span>
 						<span>{ BotName(ctx) }</span>
 					</a>
@@ -66,7 +67,8 @@ templ LoginPage(csrf string, errMsg string, next string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="theme-color" content="#080c18"/>
-			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
+			<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"/>
+			<link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180"/>
 			<title>Sign in · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 		</head>
@@ -75,7 +77,7 @@ templ LoginPage(csrf string, errMsg string, next string) {
 			<div class="login-glow login-glow-two"></div>
 			<main class="login-card">
 				<div class="login-brand brand-mark" aria-hidden="true">
-					<svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 12 20l7-3.5M5 12l7 3.5 7-3.5M12 4 5 7.5l7 3.5 7-3.5L12 4Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+					<img src="/static/nori-mark.png" alt="" width="48" height="48"/>
 				</div>
 				<p class="eyebrow">{ BotName(ctx) }</p>
 				<h1>Welcome back</h1>
