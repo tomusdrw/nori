@@ -47,6 +47,11 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 				<span class="step-number">01</span>
 			</div>
 			<div class="form-grid">
+				<div class="field form-notes">
+					<label for="description">Description <span class="field-help">(optional)</span></label>
+					<textarea id="description" name="description" rows="3" aria-describedby="description-help">{ form.Description }</textarea>
+					<span id="description-help" class="field-help">Describe the service’s purpose and deployment details, such as environment, domains, dependencies, storage, and operational notes. Do not include secrets.</span>
+				</div>
 				<div class="field">
 					<label for="name">Service name</label>
 					if isEdit {

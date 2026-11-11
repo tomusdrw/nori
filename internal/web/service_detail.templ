@@ -43,6 +43,12 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 		</div>
 	</section>
 
+	if data.Service.Description != "" {
+		<section class="panel detail-panel">
+			<div class="panel-heading"><div><h2>Description</h2><p class="service-description">{ data.Service.Description }</p></div></div>
+		</section>
+	}
+
 	if data.UpdateAvail {
 		<div class="update-banner">
 			<div><span class="update-icon">↗</span><strong>A newer image is ready</strong><span>The registry digest differs from the running version.</span></div>

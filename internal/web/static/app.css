@@ -285,6 +285,7 @@ code { color: #c9c2ff; font-size: 0.88em; }
 
 .detail-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 18px; margin-bottom: 18px; }
 .panel { border-radius: var(--radius); }
+.service-description { white-space: pre-wrap; overflow-wrap: anywhere; }
 .detail-panel { min-width: 0; overflow: hidden; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 23px 24px; border-bottom: 1px solid var(--border); }
 .panel-heading h2 { margin: 0 0 3px; font-size: 1rem; letter-spacing: -0.01em; }
@@ -399,6 +400,7 @@ input, select, textarea {
 }
 
 input, select { height: 42px; padding: 0 12px; }
+#description { padding: 12px; resize: vertical; }
 input::placeholder, textarea::placeholder { color: #566178; }
 input:focus, select:focus, textarea:focus { border-color: rgba(155, 140, 255, 0.65); background: rgba(10, 14, 28, 0.82); box-shadow: 0 0 0 3px rgba(124, 109, 242, 0.12); }
 input[readonly] { cursor: not-allowed; color: var(--text-muted); }

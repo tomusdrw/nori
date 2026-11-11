@@ -29,6 +29,7 @@ type mcpID struct {
 	ServiceID int64 `json:"service_id" jsonschema:"Service ID"`
 }
 type mcpCreate struct {
+	Description    string          `json:"description,omitempty" jsonschema:"Describe the service purpose and deployment-specific context such as environment, domains, dependencies, persistent storage, and operational notes. Do not include secrets."`
 	Name           string          `json:"name"`
 	WatchedImage   string          `json:"watched_image"`
 	DeployScript   string          `json:"deploy_script,omitempty"`
@@ -40,6 +41,7 @@ type mcpCreate struct {
 	EnvFile        *string         `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
 }
 type mcpUpdate struct {
+	Description           *string          `json:"description,omitempty" jsonschema:"Keep the service purpose and deployment-specific context up to date. Do not include secrets. Omit to preserve; send an empty string to clear."`
 	ServiceID             int64            `json:"service_id"`
 	ExpectedConfigVersion int64            `json:"expected_config_version" jsonschema:"Configuration generation returned by get_service; required for updates"`
 	WatchedImage          *string          `json:"watched_image,omitempty"`
@@ -133,7 +135,9 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 }
 
 func (s *Server) newMCPHandler() http.Handler {
-	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, &mcp.ServerOptions{
+		Instructions: "When creating or updating a service, use its optional description to explain the service's purpose and relevant deployment-specific information, such as its environment, domains, dependencies, persistent storage, and operational notes. Keep it accurate as deployments change, preserve relevant existing context, and never include secrets or credentials.",
+	})
 	addNoriTool(s, server, "list_services", "List service configurations without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
 	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
@@ -150,7 +154,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
-		svc := &store.Service{Name: in.Name, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
+		svc := &store.Service{Name: in.Name, Description: in.Description, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
 		if err := setMCPDeploymentTemplate(svc, in.DeploymentMode, in.TemplateConfig); err != nil {
 			return nil, err
 		}
@@ -171,6 +175,9 @@ func (s *Server) newMCPHandler() http.Handler {
 			return nil, err
 		}
 		expected := &store.Service{ID: svc.ID, Name: svc.Name, ConfigVersion: in.ExpectedConfigVersion}
+		if in.Description != nil {
+			svc.Description = *in.Description
+		}
 		if in.WatchedImage != nil {
 			svc.WatchedImage = *in.WatchedImage
 		}

@@ -26,9 +26,9 @@ func (s *Store) CreateService(ctx context.Context, svc *Service) error {
 	now := time.Now().UTC()
 	svc.CreatedAt, svc.UpdatedAt = now, now
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO service (name, watched_image, policy, cron_expr, deploy_script, health_url, is_self, deployment_mode, template_config, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		svc.Name, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
+		`INSERT INTO service (name, description, watched_image, policy, cron_expr, deploy_script, health_url, is_self, deployment_mode, template_config, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		svc.Name, svc.Description, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
 		boolToInt(svc.IsSelf), svc.DeploymentMode, svc.TemplateConfig, svc.CreatedAt.Unix(), svc.UpdatedAt.Unix())
 	if err != nil {
 		return err
@@ -40,14 +40,14 @@ func (s *Store) CreateService(ctx context.Context, svc *Service) error {
 
 func (s *Store) GetService(ctx context.Context, id int64) (*Service, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
+		`SELECT id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
 		 FROM service WHERE id=?`, id)
 	return scanService(row)
 }
 
 func (s *Store) GetServiceByName(ctx context.Context, name string) (*Service, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
+		`SELECT id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
 		 FROM service WHERE name=?`, name)
 	return scanService(row)
 }
@@ -56,9 +56,9 @@ func (s *Store) UpdateService(ctx context.Context, svc *Service) error {
 	normalizeDeploymentConfig(svc)
 	svc.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE service SET name=?, watched_image=?, policy=?, cron_expr=?, deploy_script=?, health_url=?, is_self=?, deployment_mode=?, template_config=?, updated_at=?
+		`UPDATE service SET name=?, description=?, watched_image=?, policy=?, cron_expr=?, deploy_script=?, health_url=?, is_self=?, deployment_mode=?, template_config=?, updated_at=?
 		 WHERE id=?`,
-		svc.Name, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
+		svc.Name, svc.Description, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
 		boolToInt(svc.IsSelf), svc.DeploymentMode, svc.TemplateConfig, svc.UpdatedAt.Unix(), svc.ID)
 	return err
 }
@@ -110,7 +110,7 @@ func (s *Store) RecordTemplateDatabaseIdentity(ctx context.Context, serviceID in
 
 func (s *Store) ListServices(ctx context.Context) ([]*Service, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
+		`SELECT id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
 		 FROM service ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func scanService(sc rowScanner) (*Service, error) {
 	var deploymentMode string
 	var templateConfig string
 	var configVersion int64
-	err := sc.Scan(&svc.ID, &svc.Name, &svc.WatchedImage, &policy,
+	err := sc.Scan(&svc.ID, &svc.Name, &svc.Description, &svc.WatchedImage, &policy,
 		&svc.CronExpr, &svc.DeployScript, &healthURL, &isSelf, &deploymentMode, &templateConfig, &configVersion, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -170,7 +170,7 @@ func scanService(sc rowScanner) (*Service, error) {
 // has one.
 func (s *Store) GetSelfService(ctx context.Context) (*Service, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id,name,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
+		`SELECT id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at
 		 FROM service WHERE is_self=1`)
 	return scanService(row)
 }

@@ -609,6 +609,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 	form := parseServiceForm(r)
 	svc := &store.Service{
 		Name:         form.Name,
+		Description:  form.Description,
 		WatchedImage: form.WatchedImage,
 		Policy:       store.Policy(form.Policy),
 		CronExpr:     form.CronExpr,
@@ -676,6 +677,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		form.TemplateConfig = "{}"
 	}
 	previous := *svc
+	svc.Description = form.Description
 	svc.WatchedImage = form.WatchedImage
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
@@ -1022,7 +1024,7 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 
 func serviceForm(svc *store.Service) ServiceFormData {
 	return ServiceFormData{
-		Name: svc.Name, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
+		Name: svc.Name, Description: svc.Description, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
 		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
 		ConfigVersion:  svc.ConfigVersion,
 		DeploymentMode: string(svc.DeploymentMode), TemplateConfig: svc.TemplateConfig,
@@ -1050,7 +1052,8 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	}
 	configVersion, _ := strconv.ParseInt(r.FormValue("expected_config_version"), 10, 64)
 	return ServiceFormData{
-		Name: r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
+		Description: executor.NormalizeNewlines(r.FormValue("description")),
+		Name:        r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
 		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"), HealthURL: r.FormValue("health_url"),
 		DeployScript:   executor.NormalizeNewlines(r.FormValue("deploy_script")),
 		EnvFile:        executor.NormalizeNewlines(r.FormValue("env_file")),
