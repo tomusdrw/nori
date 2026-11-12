@@ -51,6 +51,7 @@ func parseRoutingForm(channels Channels, form url.Values) notify.Routing {
 }
 
 type ServiceFormData struct {
+	Description     string
 	Name            string
 	WatchedImage    string
 	Policy          string

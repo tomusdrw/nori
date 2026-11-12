@@ -141,6 +141,19 @@ partial writes; clients can retry. Templates normalize dotenv syntax and omit
 comments; values are always quoted to retain leading zeros and literal dollars.
 Names and managed status are immutable through MCP.
 
+## Service descriptions
+
+`create_service` and `update_service` accept an optional `description` string,
+returned by service reads and shown in the dashboard. Agents should describe
+what the service does and record deployment-specific context: environment,
+domains, dependencies, persistent storage, and operational notes. Keep this
+context current when changing a deployment. Descriptions are plain text, not
+secret storage; never put credentials or other secrets in them.
+
+Omitting `description` on update preserves it; an empty string clears it.
+Existing services default to an empty description. Description updates use the
+same configuration version checks as other fields.
+
 ## Deployment templates
 
 MCP `create_service` and `update_service` accept `deployment_mode` (`custom`,

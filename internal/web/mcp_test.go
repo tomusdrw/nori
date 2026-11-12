@@ -88,7 +88,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		return res
 	}
-	call("create_service", map[string]any{"name": "app", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
+	call("create_service", map[string]any{"name": "app", "description": "Public API; production behind Caddy", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
 	call("create_service", map[string]any{
 		"name": "strict-template", "watched_image": "nginx:latest", "deployment_mode": "single_container",
 		"template_config": map[string]any{
@@ -124,18 +124,37 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		res := call(name, a, false)
 		data, _ := json.Marshal(res)
+		if !bytes.Contains(data, []byte("Public API; production behind Caddy")) {
+			t.Fatalf("%s omitted service description: %s", name, data)
+		}
 		if bytes.Contains(data, []byte("unlisted")) {
 			t.Fatal("environment leaked")
 		}
 	}
 	call("update_service", map[string]any{"service_id": svc.ID, "health_url": "https://example.com/health"}, false)
 	got, _ := st.GetService(ctx, svc.ID)
-	if got.DeployScript != "echo ok" || got.WatchedImage != "nginx:latest" {
+	if got.Description != "Public API; production behind Caddy" || got.DeployScript != "echo ok" || got.WatchedImage != "nginx:latest" {
 		t.Fatal("partial update lost fields")
 	}
 	env, _ := st.GetEnvFile(ctx, svc.ID)
 	if env != "SECRET=\"unlisted\"\n" {
 		t.Fatal("partial update lost environment")
+	}
+	for _, description := range []string{"Internal API; staging on port 8080", ""} {
+		call("update_service", map[string]any{"service_id": svc.ID, "description": description}, false)
+		// An unrelated update must preserve the description, including a cleared one.
+		call("update_service", map[string]any{"service_id": svc.ID, "policy": "manual"}, false)
+		result := call("get_service", args, false)
+		data, _ := json.Marshal(result.StructuredContent)
+		var decoded struct {
+			Service struct{ Description *string }
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Service.Description == nil || *decoded.Service.Description != description {
+			t.Fatalf("description after partial update = %s, want %q", data, description)
+		}
 	}
 	call("stop_service", args, false)
 	if dk.Containers["app"][0].State != "exited" {

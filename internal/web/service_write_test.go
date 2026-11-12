@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -251,5 +252,39 @@ func TestCrossSurfaceWritersAllowOneGenerationWinner(t *testing.T) {
 	}
 	if got.ConfigVersion != 2 {
 		t.Fatalf("final config version = %d, want 2", got.ConfigVersion)
+	}
+}
+
+func TestDashboardServiceDescription(t *testing.T) {
+	st, _, srv, cookies, _ := newSelfServiceServer(t)
+	ctx := context.Background()
+	newPage := getAuthed(t, srv, cookies, "/services/new")
+	form := url.Values{
+		"csrf_token": {csrfFromBody(newPage)}, "name": {"described"},
+		"watched_image": {"nginx:latest"}, "policy": {"manual"}, "deploy_script": {"true"},
+		"description": {"Public API <production>\r\nBehind Caddy on port 8080"},
+	}
+	postAuthed(t, srv, cookies, "/services", form.Encode())
+	for _, path := range []string{"/services/described", "/services/described/edit"} {
+		body := getAuthed(t, srv, cookies, path)
+		if !strings.Contains(body, "Public API &lt;production&gt;\nBehind Caddy on port 8080") || strings.Contains(body, "<production>") {
+			t.Fatalf("%s must render the saved description as escaped multiline text: %s", path, body)
+		}
+	}
+	for _, description := range []string{"Private API; staging", ""} {
+		svc, err := st.GetServiceByName(ctx, "described")
+		if err != nil {
+			t.Fatal(err)
+		}
+		form.Set("expected_config_version", strconv.FormatInt(svc.ConfigVersion, 10))
+		form.Set("description", description)
+		postAuthed(t, srv, cookies, "/services/described", form.Encode())
+		svc, err = st.GetServiceByName(ctx, "described")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if svc.Description != description {
+			t.Fatalf("saved description = %q, want %q", svc.Description, description)
+		}
 	}
 }

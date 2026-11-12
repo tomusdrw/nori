@@ -34,6 +34,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS service (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL UNIQUE,
+	description TEXT NOT NULL DEFAULT '',
 	watched_image TEXT NOT NULL,
 	policy TEXT NOT NULL,
 	cron_expr TEXT NOT NULL DEFAULT '',
@@ -116,6 +117,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	defer rows.Close()
+	hasDescription := false
 	hasSelf := false
 	hasHealth := false
 	hasDeploymentMode := false
@@ -128,6 +130,9 @@ func migrate(db *sql.DB) error {
 		var defaultValue any
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
 			return err
+		}
+		if name == "description" {
+			hasDescription = true
 		}
 		if name == "is_self" {
 			hasSelf = true
@@ -147,6 +152,11 @@ func migrate(db *sql.DB) error {
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if !hasDescription {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
 	if !hasSelf {
 		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN is_self INTEGER NOT NULL DEFAULT 0`); err != nil {

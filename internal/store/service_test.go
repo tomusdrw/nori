@@ -21,7 +21,7 @@ func testStore(t *testing.T) *Store {
 func TestServiceCRUD(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	svc := &Service{Name: "blog", WatchedImage: "ghcr.io/me/blog:latest", Policy: PolicyManual}
+	svc := &Service{Name: "blog", Description: "Public blog; production", WatchedImage: "ghcr.io/me/blog:latest", Policy: PolicyManual}
 	if err := st.CreateService(ctx, svc); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestServiceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetService: %v", err)
 	}
-	if got.Name != "blog" || got.WatchedImage != "ghcr.io/me/blog:latest" || got.Policy != PolicyManual {
+	if got.Description != "Public blog; production" || got.Name != "blog" || got.WatchedImage != "ghcr.io/me/blog:latest" || got.Policy != PolicyManual {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 
@@ -116,6 +116,7 @@ func TestEnsureSelfServiceIsManagedAndKeepsPolicy(t *testing.T) {
 	if self.DeployScript != SelfDeployScript {
 		t.Fatal("self service did not receive managed handoff script")
 	}
+	self.Description = "Deployment manager; production host"
 	self.Policy = PolicyScheduled
 	self.CronExpr = "0 3 * * *"
 	if err := st.UpdateService(ctx, self); err != nil {
@@ -125,7 +126,7 @@ func TestEnsureSelfServiceIsManagedAndKeepsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.ID != self.ID || again.Policy != PolicyScheduled || again.WatchedImage != "ghcr.io/acme/nori:v2" {
+	if again.Description != "Deployment manager; production host" || again.ID != self.ID || again.Policy != PolicyScheduled || again.WatchedImage != "ghcr.io/acme/nori:v2" {
 		t.Fatalf("self service was not safely refreshed: %+v", again)
 	}
 }
@@ -215,6 +216,9 @@ func TestOpenMigratesLegacyServiceToCustomDeployment(t *testing.T) {
 	got, err := st.GetServiceByName(context.Background(), "legacy")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.Description != "" {
+		t.Fatalf("legacy description = %q, want empty", got.Description)
 	}
 	if got.DeploymentMode != DeploymentModeCustom {
 		t.Fatalf("deployment mode = %q, want %q", got.DeploymentMode, DeploymentModeCustom)
