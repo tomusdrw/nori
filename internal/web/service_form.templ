@@ -19,9 +19,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<h1>{ formTitle(isEdit) }</h1>
 			if form.IsSelf {
 				<p class="page-subtitle">Launcher-managed self-update. You can change its deployment policy and runtime environment, but the image and handoff are protected.</p>
-			} else {
-				<p class="page-subtitle" data-manual-service-copy hidden?={ !form.ManualScript }>Run a Bash deployment script manually from Nori. No container image is monitored.</p>
-				<p class="page-subtitle" data-image-service-copy hidden?={ form.ManualScript }>Define what to watch and exactly how this service is deployed.</p>
 			}
 		</div>
 	</section>
@@ -43,8 +40,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<div class="panel-heading">
 				<div>
 					<h2>Service details</h2>
-					<p data-manual-service-copy hidden?={ !form.ManualScript }>This service has no watched image and only runs when you ask Nori to run its script.</p>
-					<p data-image-service-copy hidden?={ form.ManualScript }>The image and policy Nori should track.</p>
 				</div>
 				<span class="step-number">01</span>
 			</div>
@@ -63,6 +58,18 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					}
 					<span class="field-help">Used for the <code>nori.service</code> container label.</span>
 				</div>
+				if !form.IsSelf {
+					<div class="field">
+						<label for="deployment-mode">Deployment mode</label>
+						<select id="deployment-mode" name="deployment_mode" data-deployment-mode>
+							<option value="custom" selected?={ form.DeploymentMode == "custom" }>Custom deployment script</option>
+							<option value="manual_script" selected?={ form.DeploymentMode == "manual_script" }>Manual script (no watched image)</option>
+							<option value="single_container" selected?={ form.DeploymentMode == "single_container" }>Single container</option>
+							<option value="postgres" selected?={ form.DeploymentMode == "postgres" }>Application with PostgreSQL</option>
+						</select>
+						<span class="field-help">Choose Manual script to deploy on request without watching an image.</span>
+					</div>
+				}
 				<div class="field" data-watched-image-field hidden?={ form.ManualScript }>
 					<label for="watched-image">Watched image</label>
 					<input id="watched-image" name="watched_image" value={ form.WatchedImage } data-watched-image required?={ !form.ManualScript } disabled?={ form.ManualScript } placeholder="ghcr.io/you/app:latest" readonly?={ form.IsSelf }/>
@@ -71,7 +78,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 				<div class="field" data-policy-field>
 					<label for="policy">Deployment policy</label>
 					<select id="policy" name="policy" data-policy-select disabled?={ form.ManualScript }>
-						<option value="manual" selected?={ form.Policy == "manual" }>Manual only</option>
+						<option value="manual" selected?={ form.Policy == "manual" }>Watch image, deploy on request</option>
 						<option value="immediate" selected?={ form.Policy == "immediate" }>Deploy immediately</option>
 						<option value="scheduled" selected?={ form.Policy == "scheduled" }>On a schedule</option>
 					</select>
@@ -88,18 +95,6 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					<input id="health-url" name="health_url" value={ form.HealthURL } placeholder="https://service.example/health"/>
 					<span class="field-help">Optional health probe URL. If empty, no per-service probe is performed.</span>
 				</div>
-				if !form.IsSelf {
-					<div class="field">
-						<label for="deployment-mode">Deployment mode</label>
-						<select id="deployment-mode" name="deployment_mode" data-deployment-mode>
-							<option value="custom" selected?={ form.DeploymentMode == "custom" }>Custom deployment script</option>
-							<option value="manual_script" selected?={ form.DeploymentMode == "manual_script" }>Manual script (no watched image)</option>
-							<option value="single_container" selected?={ form.DeploymentMode == "single_container" }>Single container</option>
-							<option value="postgres" selected?={ form.DeploymentMode == "postgres" }>Application with PostgreSQL</option>
-						</select>
-						<span class="field-help">Templates manage an owned Docker lifecycle; Custom keeps the current Bash contract.</span>
-					</div>
-				}
 			</div>
 		</section>
 

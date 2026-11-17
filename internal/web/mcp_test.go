@@ -88,6 +88,14 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		return res
 	}
+	call("create_service", map[string]any{"name": "inventory", "deployment_mode": "manual_script", "deploy_script": "docker ps"}, false)
+	inventory, err := st.GetServiceByName(ctx, "inventory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.Policy != store.PolicyManual || inventory.WatchedImage != "" || inventory.DeploymentMode != store.DeploymentModeManualScript {
+		t.Fatalf("unexpected configuration for manual service: %+v", inventory)
+	}
 	call("create_service", map[string]any{"name": "nightly", "deploy_script": "true", "watched_image": "nginx:stable", "policy": "scheduled", "cron_expr": "0 3 * * *"}, false)
 	nightly, err := st.GetServiceByName(ctx, "nightly")
 	if err != nil {

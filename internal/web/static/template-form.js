@@ -6,8 +6,6 @@ const policyField = form?.querySelector('[data-policy-field]');
 const policySelect = form?.querySelector('[data-policy-select]');
 const manualPolicy = form?.querySelector('[data-manual-policy]');
 const cronField = form?.querySelector('[data-cron-field]');
-const manualServiceCopy = document.querySelectorAll('[data-manual-service-copy]');
-const imageServiceCopy = document.querySelectorAll('[data-image-service-copy]');
 const manualScriptHelp = form?.querySelector('[data-manual-script-help]');
 const imageScriptHelp = form?.querySelector('[data-image-script-help]');
 
@@ -20,8 +18,6 @@ function syncMode() {
 	}
   }
   const manualScript = mode.value === 'manual_script';
-  for (const copy of manualServiceCopy) copy.hidden = !manualScript;
-  for (const copy of imageServiceCopy) copy.hidden = manualScript;
   if (manualScriptHelp) manualScriptHelp.hidden = !manualScript;
   if (imageScriptHelp) imageScriptHelp.hidden = manualScript;
   if (policyField) policyField.hidden = manualScript;

@@ -31,7 +31,7 @@ type mcpID struct {
 type mcpCreate struct {
 	Description    string          `json:"description,omitempty" jsonschema:"Describe the service purpose and deployment-specific context such as environment, domains, dependencies, persistent storage, and operational notes. Do not include secrets."`
 	Name           string          `json:"name"`
-	WatchedImage   string          `json:"watched_image,omitempty"`
+	WatchedImage   string          `json:"watched_image,omitempty" jsonschema:"Image reference to track. Omit for manual_script. Required for all other deployment modes."`
 	DeployScript   string          `json:"deploy_script,omitempty"`
 	DeploymentMode string          `json:"deployment_mode,omitempty" jsonschema:"custom, manual_script, single_container, or postgres; defaults to custom"`
 	TemplateConfig json.RawMessage `json:"template_config,omitempty" jsonschema:"Required for template modes; structured non-secret deployment configuration"`
