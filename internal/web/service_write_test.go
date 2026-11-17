@@ -288,3 +288,25 @@ func TestDashboardServiceDescription(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardConvertsServiceToManualScript(t *testing.T) {
+	st, _, srv, cookies, _ := newSelfServiceServer(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "job", DeployScript: "true", WatchedImage: "nginx:stable", Policy: store.PolicyImmediate}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	page := getAuthed(t, srv, cookies, "/services/job/edit")
+	form := url.Values{
+		"csrf_token": {csrfFromBody(page)}, "expected_config_version": {strconv.FormatInt(svc.ConfigVersion, 10)},
+		"name": {"job"}, "deploy_script": {"true"}, "deployment_mode": {"manual_script"}, "policy": {"manual"},
+	}
+	postAuthed(t, srv, cookies, "/services/job", form.Encode())
+	got, err := st.GetService(ctx, svc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DeploymentMode != store.DeploymentModeManualScript || got.Policy != store.PolicyManual || got.WatchedImage != "" {
+		t.Fatalf("converted service: %+v", got)
+	}
+}

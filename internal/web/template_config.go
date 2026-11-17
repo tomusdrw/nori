@@ -15,7 +15,7 @@ func normalizedTemplateConfig(rawMode, rawConfig string) (store.DeploymentMode, 
 		mode = store.DeploymentModeCustom
 	}
 	switch mode {
-	case store.DeploymentModeCustom:
+	case store.DeploymentModeCustom, store.DeploymentModeManualScript:
 		return mode, "{}", nil
 	case store.DeploymentModeSingleContainer, store.DeploymentModePostgres:
 	default:
@@ -59,7 +59,7 @@ func templatePlan(svc *store.Service) (*deploytemplate.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mode == store.DeploymentModeCustom {
+	if mode == store.DeploymentModeCustom || mode == store.DeploymentModeManualScript {
 		return nil, nil
 	}
 	parsed, err := deploytemplate.ParseConfig(deploytemplate.Mode(mode), config)
