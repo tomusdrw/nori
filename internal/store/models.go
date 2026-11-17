@@ -14,6 +14,7 @@ type DeploymentMode string
 
 const (
 	DeploymentModeCustom          DeploymentMode = "custom"
+	DeploymentModeManualScript    DeploymentMode = "manual_script"
 	DeploymentModeSingleContainer DeploymentMode = "single_container"
 	DeploymentModePostgres        DeploymentMode = "postgres"
 )

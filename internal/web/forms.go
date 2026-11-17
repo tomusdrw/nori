@@ -62,6 +62,7 @@ type ServiceFormData struct {
 	ConfigVersion   int64
 	ReloadURL       string
 	IsSelf          bool
+	ManualScript    bool
 	DeploymentMode  string
 	TemplateConfig  string
 	TemplatePreview string

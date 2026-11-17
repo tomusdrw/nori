@@ -17,9 +17,16 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 					if data.Service.IsSelf {
 						<span class="badge badge-update">managed</span>
 					}
+					if data.Service.ManualScript {
+						<span class="badge badge-manual">Manual deployment</span>
+					}
 					<span class={ "badge badge-state badge-state-" + data.State }><span class={ "status-dot status-" + data.State }></span>{ data.State }</span>
 				</div>
-				<p class="page-subtitle">{ data.Service.WatchedImage }</p>
+				if data.Service.ManualScript {
+					<p class="page-subtitle">No watched image · deployment script runs only on request</p>
+				} else {
+					<p class="page-subtitle">{ data.Service.WatchedImage }</p>
+				}
 			</div>
 		</div>
 		<div class="action-row">
@@ -36,6 +43,8 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 				<input type="hidden" name="csrf_token" value={ csrf }/>
 				if data.UpdateAvail {
 					<button class="button button-primary" type="submit">Update</button>
+				} else if data.Service.ManualScript {
+					<button class="button button-secondary button-redeploy" type="submit">Run script</button>
 				} else {
 					<button class="button button-secondary button-redeploy" type="submit">Re-deploy</button>
 				}
@@ -73,7 +82,9 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			<span class="stat-caption">Most recent deployment attempt</span>
 		</div>
 	</section>
-	<div class="detail-version-summary" title="Running and latest image digests"><span>Image versions</span><code>{ data.Running }</code><span>→</span><code>{ data.Latest }</code></div>
+	if !data.Service.ManualScript {
+		<div class="detail-version-summary" title="Running and latest image digests"><span>Image versions</span><code>{ data.Running }</code><span>→</span><code>{ data.Latest }</code></div>
+	}
 
 	<section id="logs" class="panel detail-panel log-panel full-width-log-panel">
 			<div class="panel-heading compact-heading">

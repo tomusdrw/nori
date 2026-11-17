@@ -18,6 +18,7 @@ type ServiceView struct {
 	RecentLogs      string
 	UpdateAvailable bool
 	Managed         bool
+	ManualScript    bool
 }
 
 func repoOf(ref string) string {

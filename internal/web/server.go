@@ -545,9 +545,14 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 		runningDigest := ""
 		if err == nil {
 			state = summarizeState(cs)
-			runningDigest = watchedDigest(cs, svc.WatchedImage)
+			if svc.DeploymentMode != store.DeploymentModeManualScript {
+				runningDigest = watchedDigest(cs, svc.WatchedImage)
+			}
 		}
-		latest := s.poller.CachedDigest(svc.Name)
+		latest := ""
+		if svc.DeploymentMode != store.DeploymentModeManualScript {
+			latest = s.poller.CachedDigest(svc.Name)
+		}
 		deploys, err := s.store.ListDeployments(ctx, svc.ID, 1)
 		if err != nil {
 			return nil, err
@@ -566,8 +571,9 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 			LastDeploy:     lastDeploy,
 			RecentLogs:     s.recentLogs(ctx, cs, 6),
 			Managed:        svc.IsSelf,
+			ManualScript:   svc.DeploymentMode == store.DeploymentModeManualScript,
 		}
-		v.UpdateAvailable = runningDigest != "" && latest != "" && runningDigest != latest
+		v.UpdateAvailable = !v.ManualScript && runningDigest != "" && latest != "" && runningDigest != latest
 		views = append(views, v)
 	}
 	return views, nil
@@ -678,7 +684,9 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := *svc
 	svc.Description = form.Description
-	svc.WatchedImage = form.WatchedImage
+	if form.DeploymentMode != string(store.DeploymentModeManualScript) || form.WatchedImage != "" {
+		svc.WatchedImage = form.WatchedImage
+	}
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript
@@ -965,9 +973,14 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	running := ""
 	if err == nil {
 		state = summarizeState(cs)
-		running = watchedDigest(cs, svc.WatchedImage)
+		if svc.DeploymentMode != store.DeploymentModeManualScript {
+			running = watchedDigest(cs, svc.WatchedImage)
+		}
 	}
-	latest := s.poller.CachedDigest(svc.Name)
+	latest := ""
+	if svc.DeploymentMode != store.DeploymentModeManualScript {
+		latest = s.poller.CachedDigest(svc.Name)
+	}
 	deploys, err := s.store.ListDeployments(ctx, svc.ID, 20)
 	if err != nil {
 		return ServiceDetailData{}, err
@@ -990,7 +1003,7 @@ func (s *Server) buildDetail(ctx context.Context, svc *store.Service) (ServiceDe
 	return ServiceDetailData{
 		Service: form, State: state, Running: shortDigest(running), Latest: shortDigest(latest),
 		RunningFor: runningFor(cs, time.Now()), LastDeploy: lastDeploy,
-		UpdateAvail: running != "" && latest != "" && running != latest,
+		UpdateAvail: svc.DeploymentMode != store.DeploymentModeManualScript && running != "" && latest != "" && running != latest,
 		Containers:  cviews, Deployments: dviews,
 	}, nil
 }
@@ -1013,7 +1026,7 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 	}
 	form := serviceForm(svc)
 	form.EnvFile = content
-	if form.DeploymentMode != string(store.DeploymentModeCustom) {
+	if form.DeploymentMode == string(store.DeploymentModeSingleContainer) || form.DeploymentMode == string(store.DeploymentModePostgres) {
 		form.TemplatePreview, err = templatePreview(svc)
 		if err != nil {
 			return ServiceFormData{}, err
@@ -1028,6 +1041,7 @@ func serviceForm(svc *store.Service) ServiceFormData {
 		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
 		ConfigVersion:  svc.ConfigVersion,
 		DeploymentMode: string(svc.DeploymentMode), TemplateConfig: svc.TemplateConfig,
+		ManualScript: svc.DeploymentMode == store.DeploymentModeManualScript,
 	}
 }
 
@@ -1059,6 +1073,7 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 		EnvFile:        executor.NormalizeNewlines(r.FormValue("env_file")),
 		ConfigVersion:  configVersion,
 		DeploymentMode: mode, TemplateConfig: executor.NormalizeNewlines(templateConfig),
+		ManualScript: mode == string(store.DeploymentModeManualScript),
 	}
 }
 
@@ -1083,10 +1098,10 @@ func validateServiceForm(ctx context.Context, form ServiceFormData) error {
 	if err != nil {
 		return fmt.Errorf("template configuration: %w", err)
 	}
-	if mode != store.DeploymentModeCustom && !deploytemplate.ValidServiceName(form.Name) {
+	if (mode == store.DeploymentModeSingleContainer || mode == store.DeploymentModePostgres) && !deploytemplate.ValidServiceName(form.Name) {
 		return errors.New("template service name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,62}")
 	}
-	if mode == store.DeploymentModeCustom {
+	if mode == store.DeploymentModeCustom || mode == store.DeploymentModeManualScript {
 		if err := executor.ValidateScript(ctx, form.DeployScript); err != nil {
 			return fmt.Errorf("deploy script: %w", err)
 		}

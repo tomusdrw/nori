@@ -47,6 +47,9 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 					if v.Managed {
 						<span class="badge badge-update">managed</span>
 					}
+					if v.ManualScript {
+						<span class="badge badge-manual">Manual deployment</span>
+					}
 					if v.UpdateAvailable {
 						<span class="badge badge-update">update available</span>
 					}
@@ -61,9 +64,11 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 						<strong>{ v.LastDeploy }</strong>
 					</div>
 				</div>
-				<div class="version-summary" title="Running and latest image digests">
-					<span>Image</span><code>{ v.RunningVersion }</code><span>→</span><code>{ v.LatestVersion }</code>
-				</div>
+				if !v.ManualScript {
+					<div class="version-summary" title="Running and latest image digests">
+						<span>Image</span><code>{ v.RunningVersion }</code><span>→</span><code>{ v.LatestVersion }</code>
+					</div>
+				}
 				<div class="dashboard-log-preview">
 					<div class="log-preview-heading"><span class="metric-label">Recent logs</span><a href={ templ.SafeURL("/services/" + v.Name + "#logs") }>Open full logs</a></div>
 					<pre>{ v.RecentLogs }</pre>
@@ -71,7 +76,9 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 				<div class="service-card-actions">
 					<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
 						<input type="hidden" name="csrf_token" value={ csrf }/>
-						if v.UpdateAvailable {
+						if v.ManualScript {
+							<button class="button button-secondary button-small" type="submit">Run script</button>
+						} else if v.UpdateAvailable {
 							<button class="button button-primary button-small" type="submit">Update</button>
 						} else {
 							<button class="button-redeploy" type="submit">Re-deploy</button>

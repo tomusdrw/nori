@@ -20,7 +20,8 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			if form.IsSelf {
 				<p class="page-subtitle">Launcher-managed self-update. You can change its deployment policy and runtime environment, but the image and handoff are protected.</p>
 			} else {
-				<p class="page-subtitle">Define what to watch and exactly how this service is deployed.</p>
+				<p class="page-subtitle" data-manual-service-copy hidden?={ !form.ManualScript }>Run a Bash deployment script manually from Nori. No container image is monitored.</p>
+				<p class="page-subtitle" data-image-service-copy hidden?={ form.ManualScript }>Define what to watch and exactly how this service is deployed.</p>
 			}
 		</div>
 	</section>
@@ -42,7 +43,8 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<div class="panel-heading">
 				<div>
 					<h2>Service details</h2>
-					<p>The image and policy Nori should track.</p>
+					<p data-manual-service-copy hidden?={ !form.ManualScript }>This service has no watched image and only runs when you ask Nori to run its script.</p>
+					<p data-image-service-copy hidden?={ form.ManualScript }>The image and policy Nori should track.</p>
 				</div>
 				<span class="step-number">01</span>
 			</div>
@@ -61,21 +63,22 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					}
 					<span class="field-help">Used for the <code>nori.service</code> container label.</span>
 				</div>
-				<div class="field">
+				<div class="field" data-watched-image-field hidden?={ form.ManualScript }>
 					<label for="watched-image">Watched image</label>
-					<input id="watched-image" name="watched_image" value={ form.WatchedImage } required placeholder="ghcr.io/you/app:latest" readonly?={ form.IsSelf }/>
+					<input id="watched-image" name="watched_image" value={ form.WatchedImage } data-watched-image required?={ !form.ManualScript } disabled?={ form.ManualScript } placeholder="ghcr.io/you/app:latest" readonly?={ form.IsSelf }/>
 					<span class="field-help">The tag checked for newly published digests.</span>
 				</div>
-				<div class="field">
+				<div class="field" data-policy-field>
 					<label for="policy">Deployment policy</label>
-					<select id="policy" name="policy" data-policy-select>
+					<select id="policy" name="policy" data-policy-select disabled?={ form.ManualScript }>
 						<option value="manual" selected?={ form.Policy == "manual" }>Manual only</option>
 						<option value="immediate" selected?={ form.Policy == "immediate" }>Deploy immediately</option>
 						<option value="scheduled" selected?={ form.Policy == "scheduled" }>On a schedule</option>
 					</select>
 					<span class="field-help">Controls what happens when a new digest is found.</span>
 				</div>
-				<div class="field" data-cron-field>
+				<input type="hidden" name="policy" value="manual" data-manual-policy disabled?={ !form.ManualScript }/>
+				<div class="field" data-cron-field hidden?={ form.ManualScript }>
 					<label for="cron-expr">Cron expression</label>
 					<input id="cron-expr" name="cron_expr" value={ form.CronExpr } placeholder="0 3 * * *"/>
 					<span class="field-help">For example, <code>0 3 * * *</code> deploys daily at 03:00.</span>
@@ -90,6 +93,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 						<label for="deployment-mode">Deployment mode</label>
 						<select id="deployment-mode" name="deployment_mode" data-deployment-mode>
 							<option value="custom" selected?={ form.DeploymentMode == "custom" }>Custom deployment script</option>
+							<option value="manual_script" selected?={ form.DeploymentMode == "manual_script" }>Manual script (no watched image)</option>
 							<option value="single_container" selected?={ form.DeploymentMode == "single_container" }>Single container</option>
 							<option value="postgres" selected?={ form.DeploymentMode == "postgres" }>Application with PostgreSQL</option>
 						</select>
@@ -100,11 +104,12 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 		</section>
 
 		<div class="editor-grid">
-		<section class="panel editor-panel" data-deployment-mode-panel="custom" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" }>
+		<section class="panel editor-panel" data-deployment-mode-panel="custom,manual_script" hidden?={ !form.IsSelf && form.DeploymentMode != "custom" && !form.ManualScript }>
 			<div class="panel-heading">
 				<div>
 					<h2>Deployment script</h2>
-					<p>Runs with <code>$SERVICE</code>, <code>$IMAGE</code>, <code>$TARGET_IMAGE</code>, <code>$TARGET_DIGEST</code> and <code>$ENV_FILE</code> injected.</p>
+					<p data-manual-script-help hidden?={ !form.ManualScript }>Runs with <code>$SERVICE</code>, <code>$ENV_FILE</code> and your service environment variables. Image and digest variables are unavailable.</p>
+					<p data-image-script-help hidden?={ form.ManualScript }>Runs with <code>$SERVICE</code>, <code>$IMAGE</code>, <code>$TARGET_IMAGE</code>, <code>$TARGET_DIGEST</code> and <code>$ENV_FILE</code> injected.</p>
 				</div>
 				<div class="panel-heading-actions">
 					<div class="editor-health" data-validation-status="bash"><span class="validation-dot"></span><span data-validation-message>Checking Bash…</span></div>
@@ -114,7 +119,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
             if isEdit {
                 @configHistory(form.Name, "script", "deploy_script", form.IsSelf)
             }
-			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="# Injected: $SERVICE $IMAGE $TARGET_IMAGE $TARGET_DIGEST $ENV_FILE (+ your .env vars)&#10;# $ENV_FILE is this service's .env, ready for docker run --env-file.&#10;&#10;docker pull $TARGET_IMAGE&#10;docker rm -f $SERVICE 2&gt;/dev/null || true&#10;docker run -d --name $SERVICE --label nori.service=$SERVICE --env-file $ENV_FILE $TARGET_IMAGE" readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
+			<textarea class="code-editor" name="deploy_script" data-editor="bash" aria-label="Bash deployment script" spellcheck="false" placeholder="Write the Bash deployment steps. Available variables are listed above." readonly?={ form.IsSelf }>{ form.DeployScript }</textarea>
 			<div class="editor-footer">
 				<span>Bash · syntax checked before save and deploy</span>
 				<span><kbd>⌘</kbd><kbd>S</kbd> to save</span>
@@ -173,7 +178,7 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 			<button class="button button-primary" type="submit">Save service</button>
 		</div>
 	</form>
-	if isEdit && !form.IsSelf && form.DeploymentMode != "custom" {
+	if isEdit && !form.IsSelf && (form.DeploymentMode == "single_container" || form.DeploymentMode == "postgres") {
 		<section class="danger-zone">
 			<div><h2>Convert to Custom script</h2><p>This one-way conversion writes an inspectable Bash script and stops structured template management.</p></div>
 			<form method="post" action={ templ.SafeURL("/services/" + form.Name + "/convert-to-custom") }><input type="hidden" name="csrf_token" value={ csrf }/><button class="button button-secondary" type="submit" onclick="return confirm('Convert this managed template to a Custom script?')">Convert to Custom</button></form>

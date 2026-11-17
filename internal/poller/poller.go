@@ -57,6 +57,12 @@ func (p *Poller) Tick(ctx context.Context) {
 		return
 	}
 	for _, svc := range svcs {
+		if svc.DeploymentMode == store.DeploymentModeManualScript {
+			p.mu.Lock()
+			delete(p.cache, svc.Name)
+			p.mu.Unlock()
+			continue
+		}
 		digest, err := p.latest(ctx, svc.WatchedImage)
 		if err != nil {
 			log.Printf("poller: digest %s: %v", svc.WatchedImage, err)

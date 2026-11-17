@@ -31,9 +31,9 @@ type mcpID struct {
 type mcpCreate struct {
 	Description    string          `json:"description,omitempty" jsonschema:"Describe the service purpose and deployment-specific context such as environment, domains, dependencies, persistent storage, and operational notes. Do not include secrets."`
 	Name           string          `json:"name"`
-	WatchedImage   string          `json:"watched_image"`
+	WatchedImage   string          `json:"watched_image,omitempty"`
 	DeployScript   string          `json:"deploy_script,omitempty"`
-	DeploymentMode string          `json:"deployment_mode,omitempty" jsonschema:"custom, single_container, or postgres; defaults to custom"`
+	DeploymentMode string          `json:"deployment_mode,omitempty" jsonschema:"custom, manual_script, single_container, or postgres; defaults to custom"`
 	TemplateConfig json.RawMessage `json:"template_config,omitempty" jsonschema:"Required for template modes; structured non-secret deployment configuration"`
 	Policy         string          `json:"policy,omitempty"`
 	CronExpr       string          `json:"cron_expr,omitempty"`
@@ -46,7 +46,7 @@ type mcpUpdate struct {
 	ExpectedConfigVersion int64            `json:"expected_config_version" jsonschema:"Configuration generation returned by get_service; required for updates"`
 	WatchedImage          *string          `json:"watched_image,omitempty"`
 	DeployScript          *string          `json:"deploy_script,omitempty"`
-	DeploymentMode        *string          `json:"deployment_mode,omitempty"`
+	DeploymentMode        *string          `json:"deployment_mode,omitempty" jsonschema:"custom, manual_script, single_container, or postgres"`
 	TemplateConfig        *json.RawMessage `json:"template_config,omitempty"`
 	Policy                *string          `json:"policy,omitempty"`
 	CronExpr              *string          `json:"cron_expr,omitempty"`
@@ -150,7 +150,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return map[string]any{"service": svc, "containers": containers}, nil
 	})
-	addNoriTool(s, server, "create_service", "Create a Custom-script or structured template service. Template configuration never includes environment values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
+	addNoriTool(s, server, "create_service", "Create a Custom-script, manual_script, or structured template service. manual_script runs only when explicitly requested and does not require a watched image. Template configuration never includes environment values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
@@ -226,7 +226,7 @@ func (s *Server) newMCPHandler() http.Handler {
 			return nil, err
 		}
 		if plan == nil {
-			return nil, errors.New("Custom services do not have a managed template preview")
+			return nil, errors.New("service does not use a structured deployment template")
 		}
 		return plan, nil
 	})
@@ -541,7 +541,7 @@ func validateMCPService(ctx context.Context, svc *store.Service, env *string) er
 		return fmt.Errorf("invalid template configuration: %w", err)
 	}
 	svc.DeploymentMode, svc.TemplateConfig = mode, config
-	if mode != store.DeploymentModeCustom && !deploytemplate.ValidServiceName(svc.Name) {
+	if (mode == store.DeploymentModeSingleContainer || mode == store.DeploymentModePostgres) && !deploytemplate.ValidServiceName(svc.Name) {
 		return errors.New("template service name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,62}")
 	}
 	return validateOrdinaryService(ctx, svc, env, true, true)
@@ -551,11 +551,26 @@ func validateOrdinaryService(ctx context.Context, svc *store.Service, env *strin
 	if validateName && (!mcpServiceName.MatchString(svc.Name) || svc.Name == store.SelfServiceName) {
 		return errors.New("invalid or reserved service name")
 	}
-	if strings.TrimSpace(svc.WatchedImage) == "" || len(svc.WatchedImage) > 512 {
-		return errors.New("watched_image is required and must be at most 512 bytes")
-	}
-	if _, err := reference.ParseNormalizedNamed(svc.WatchedImage); err != nil {
-		return errors.New("invalid watched_image reference")
+	manualScript := svc.DeploymentMode == store.DeploymentModeManualScript
+	if manualScript {
+		if svc.Policy != store.PolicyManual {
+			return errors.New("manual_script requires the manual deployment policy")
+		}
+		if strings.TrimSpace(svc.WatchedImage) != "" {
+			if len(svc.WatchedImage) > 512 {
+				return errors.New("watched_image must be at most 512 bytes")
+			}
+			if _, err := reference.ParseNormalizedNamed(svc.WatchedImage); err != nil {
+				return errors.New("invalid watched_image reference")
+			}
+		}
+	} else {
+		if strings.TrimSpace(svc.WatchedImage) == "" || len(svc.WatchedImage) > 512 {
+			return errors.New("watched_image is required and must be at most 512 bytes")
+		}
+		if _, err := reference.ParseNormalizedNamed(svc.WatchedImage); err != nil {
+			return errors.New("invalid watched_image reference")
+		}
 	}
 	switch svc.Policy {
 	case store.PolicyManual, store.PolicyImmediate:
@@ -566,7 +581,7 @@ func validateOrdinaryService(ctx context.Context, svc *store.Service, env *strin
 	default:
 		return errors.New("policy must be manual, immediate or scheduled")
 	}
-	if svc.DeploymentMode == store.DeploymentModeCustom {
+	if svc.DeploymentMode == store.DeploymentModeCustom || manualScript {
 		if strings.TrimSpace(svc.DeployScript) == "" || len(svc.DeployScript) > 128*1024 {
 			return errors.New("deploy_script is required and must be at most 128 KiB")
 		}
@@ -599,7 +614,7 @@ func setMCPDeploymentTemplate(svc *store.Service, rawMode string, rawConfig json
 	if mode == "" {
 		mode = string(store.DeploymentModeCustom)
 	}
-	if rawConfig != nil && store.DeploymentMode(mode) == store.DeploymentModeCustom {
+	if rawConfig != nil && (store.DeploymentMode(mode) == store.DeploymentModeCustom || store.DeploymentMode(mode) == store.DeploymentModeManualScript) {
 		return errors.New("template_config requires deployment_mode single_container or postgres")
 	}
 	persistedConfig := svc.TemplateConfig

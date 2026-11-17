@@ -144,7 +144,17 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 	if err != nil {
 		return 0, err
 	}
-	isTemplate := svc.DeploymentMode != "" && svc.DeploymentMode != store.DeploymentModeCustom
+	isTemplate := false
+	switch svc.DeploymentMode {
+	case "", store.DeploymentModeCustom, store.DeploymentModeManualScript:
+	case store.DeploymentModeSingleContainer, store.DeploymentModePostgres:
+		isTemplate = true
+	default:
+		return 0, fmt.Errorf("unsupported deployment mode %q", svc.DeploymentMode)
+	}
+	if svc.DeploymentMode == store.DeploymentModeManualScript && trigger != store.TriggerManual {
+		return 0, errors.New("manual script deployments require an explicit manual trigger")
+	}
 	if isTemplate && svc.IsSelf {
 		return 0, errors.New("the launcher-managed self-service cannot use a deployment template")
 	}
@@ -165,9 +175,12 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 			return 0, err
 		}
 	}
-	digest, err := e.latest(ctx, svc.WatchedImage)
-	if err != nil {
-		return 0, fmt.Errorf("latest digest: %w", err)
+	digest := ""
+	if svc.DeploymentMode != store.DeploymentModeManualScript {
+		digest, err = e.latest(ctx, svc.WatchedImage)
+		if err != nil {
+			return 0, fmt.Errorf("latest digest: %w", err)
+		}
 	}
 	var plan *deploytemplate.Plan
 	if isTemplate {
@@ -780,11 +793,13 @@ func (e *Executor) buildEnv(ctx context.Context, svc *store.Service, digest stri
 	if err != nil {
 		return nil, "", err
 	}
-	env := []string{
-		fmt.Sprintf("SERVICE=%s", svc.Name),
-		fmt.Sprintf("IMAGE=%s", svc.WatchedImage),
-		fmt.Sprintf("TARGET_DIGEST=%s", digest),
-		fmt.Sprintf("TARGET_IMAGE=%s", pinnedImage(svc.WatchedImage, digest)),
+	env := []string{fmt.Sprintf("SERVICE=%s", svc.Name)}
+	if svc.DeploymentMode != store.DeploymentModeManualScript {
+		env = append(env,
+			fmt.Sprintf("IMAGE=%s", svc.WatchedImage),
+			fmt.Sprintf("TARGET_DIGEST=%s", digest),
+			fmt.Sprintf("TARGET_IMAGE=%s", pinnedImage(svc.WatchedImage, digest)),
+		)
 	}
 	if svc.IsSelf {
 		for _, key := range []string{"NORI_CONFIG_VOLUME", "NORI_SELF_IMAGE"} {
