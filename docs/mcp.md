@@ -154,10 +154,33 @@ Omitting `description` on update preserves it; an empty string clears it.
 Existing services default to an empty description. Description updates use the
 same configuration version checks as other fields.
 
+## Manual script services
+
+To register a script for explicit execution, call `create_service` with these arguments:
+
+```json
+{
+  "name": "container-inventory",
+  "deployment_mode": "manual_script",
+  "deploy_script": "docker ps"
+}
+```
+
+Call `deploy_service` with the returned service ID to run it. Nori returns a
+deployment ID for reading status and logs with `get_deployment`.
+
+To convert a service, pass its `service_id`, current `expected_config_version`,
+and `"deployment_mode": "manual_script"` to `update_service`. Nori clears the
+watched image and cron expression and selects the manual policy. Supply
+`deploy_script` as well if the service needs a new script. The script receives
+`SERVICE`, `ENV_FILE`, and the service environment. If explicitly supplied,
+`policy` must be `manual`.
+
 ## Deployment templates
 
-MCP `create_service` and `update_service` accept `deployment_mode` (`custom`,
-`single_container`, or `postgres`) plus a typed, non-secret `template_config`.
+For managed deployments, `create_service` and `update_service` accept
+`single_container` or `postgres` as the `deployment_mode`, along with a typed,
+non-secret `template_config`.
 The exact same parser and validator serve the Dashboard and MCP. Template
 services do not accept a generated Bash script as their durable configuration;
 Custom services retain the established script contract when mode/configuration

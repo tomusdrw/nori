@@ -237,8 +237,13 @@ root access to the Docker host.
 
 ## Per-service configuration
 
-Each service is configured with a watched image, one complete `.env` document, and a
-Bash deployment script. The form uses code editors with syntax highlighting, line
+Choose **Manual script (no watched image)** for a Bash deployment that runs only
+on request. Save the script, then select **Run script** on the service card or
+detail page. Both show the **Manual deployment** badge. Switching an existing
+service to this mode clears its watched image and schedule.
+
+**Custom deployment script** watches an image and makes its digest available to
+Bash. Both script modes support a complete `.env` document. The form uses code editors with syntax highlighting, line
 numbers, and live validation. Invalid dotenv or Bash syntax cannot be saved, and Bash
 is checked again immediately before every deployment.
 
@@ -295,13 +300,14 @@ these two intentionally bounded layouts.
 
 ## Per-service contract
 
-Each service requires two declarations in your deploy script:
+For image deployments, the watched image's digest drives update detection.
+Label containers with `--label nori.service=$SERVICE` so Nori can display
+their state and logs in either script mode. Monitoring also applies to manual
+services. A successful one-off script that leaves no running labeled container
+can trigger a service-down alert after two consecutive monitoring checks.
 
-1. **Watched image** — configured in the UI (e.g. `registry.example.com/you/app:latest`). This image's
-   digest drives "update available" and auto-deploy.
-2. **Container label** — add `--label nori.service=$SERVICE` to every `docker run`.
-
-The app injects these variables into your script's environment on every deploy:
+Both script modes receive `$SERVICE`, `$ENV_FILE`, and the service's environment
+variables. Nori supplies the three image variables only for image deployments.
 
 | Variable | Value |
 |----------|-------|
@@ -334,7 +340,7 @@ docker run -d --name "$SERVICE" \
 
 | Policy | Behavior |
 |--------|----------|
-| `manual` | Deploy only via dashboard button |
+| `manual` | Deploy on request from the dashboard or via MCP |
 | `immediate` | Auto-deploy when registry digest changes (polled every 60s) |
 | `scheduled` | Deploy on cron schedule (e.g. `0 3 * * *`) |
 
@@ -522,7 +528,8 @@ Available tools: `list_services`, `get_service`, `create_service`,
 `deploy_service`, `list_deployments`, `get_deployment`, `get_container_logs`,
 `get_service_environment`, `set_service_environment`, and `set_service_secret`. Tools use numeric
 service IDs, validate configuration, and save service/environment changes
-atomically. Creating a service defaults to manual deployment.
+atomically. The default mode is `custom` with the `manual` policy. To run scripts without
+a watched image, select `manual_script`. See the [MCP example](docs/mcp.md#manual-script-services).
 Concurrent configuration edits return a conflict instead of overwriting a newer
 configuration; read the service again before retrying. Scheduled-service
 changes are picked up within one second without restarting Nori. Deleting a

@@ -88,6 +88,25 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		return res
 	}
+	call("create_service", map[string]any{"name": "nightly", "deploy_script": "true", "watched_image": "nginx:stable", "policy": "scheduled", "cron_expr": "0 3 * * *"}, false)
+	nightly, err := st.GetServiceByName(ctx, "nightly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := call("update_service", map[string]any{"service_id": nightly.ID, "deployment_mode": "manual_script", "policy": "immediate"}, true)
+	message, _ := json.Marshal(bad.Content)
+	if !bytes.Contains(message, []byte("manual_script requires")) {
+		t.Fatalf("expected specific policy error, got %s", message)
+	}
+	call("update_service", map[string]any{"service_id": nightly.ID, "expected_config_version": nightly.ConfigVersion, "deployment_mode": "manual_script"}, false)
+	converted, err := st.GetService(ctx, nightly.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.DeploymentMode != store.DeploymentModeManualScript || converted.Policy != store.PolicyManual || converted.WatchedImage != "" || converted.CronExpr != "" {
+		t.Fatalf("converted service: %+v", converted)
+	}
+	call("delete_service", map[string]any{"service_id": nightly.ID}, false)
 	call("create_service", map[string]any{"name": "app", "description": "Public API; production behind Caddy", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
 	call("create_service", map[string]any{
 		"name": "strict-template", "watched_image": "nginx:latest", "deployment_mode": "single_container",

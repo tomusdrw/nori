@@ -36,4 +36,5 @@ The executor will skip registry resolution for this mode, use an empty target di
 
 - Keep the implementation within the existing `DeploymentMode` representation and Bash runner.
 - `PolicyManual` remains the policy value for the new mode; it is a human-triggered script run, not an image update policy.
-- No tests will be added or run for this change.
+- Converting a service clears its watched image and cron expression. An omitted policy defaults to manual when selecting this mode. An explicit conflicting policy is rejected.
+- Regression coverage includes dashboard and MCP conversion and script execution without registry access.

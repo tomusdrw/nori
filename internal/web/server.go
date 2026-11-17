@@ -684,9 +684,7 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := *svc
 	svc.Description = form.Description
-	if form.DeploymentMode != string(store.DeploymentModeManualScript) || form.WatchedImage != "" {
-		svc.WatchedImage = form.WatchedImage
-	}
+	svc.WatchedImage = form.WatchedImage
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
 	svc.DeployScript = form.DeployScript

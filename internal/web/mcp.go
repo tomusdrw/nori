@@ -166,7 +166,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return svc, nil
 	})
-	addNoriTool(s, server, "update_service", "Update supplied configuration fields; omitted fields are preserved and names are immutable. Templates use the same typed validation as the dashboard.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
+	addNoriTool(s, server, "update_service", "Update supplied service fields. Names are immutable and omitted fields are preserved. Selecting manual_script sets the policy to manual and clears the watched image and schedule.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
 		if in.ExpectedConfigVersion <= 0 {
 			return nil, errors.New("expected_config_version is required")
 		}
@@ -197,6 +197,8 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		if in.Policy != nil {
 			svc.Policy = store.Policy(*in.Policy)
+		} else if in.DeploymentMode != nil && svc.DeploymentMode == store.DeploymentModeManualScript {
+			svc.Policy = store.PolicyManual
 		}
 		if in.CronExpr != nil {
 			svc.CronExpr = *in.CronExpr
@@ -207,6 +209,9 @@ func (s *Server) newMCPHandler() http.Handler {
 		if _, err := s.saveOrdinaryService(ctx, ordinaryWrite{Service: svc, Previous: expected, Environment: in.EnvFile, EnvironmentMode: templateEnvironment}); err != nil {
 			if errors.Is(err, store.ErrServiceConflict) {
 				return nil, errors.New("configuration changed; read it again and retry")
+			}
+			if errors.Is(err, errManualScriptPolicy) {
+				return nil, errManualScriptPolicy
 			}
 			var validationErr *ordinaryValidationError
 			if errors.As(err, &validationErr) {
@@ -533,6 +538,8 @@ func (s *Server) mcpService(ctx context.Context, id int64, mutation bool) (*stor
 	return svc, nil
 }
 
+var errManualScriptPolicy = errors.New("manual_script requires policy to be manual")
+
 var mcpServiceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 func validateMCPService(ctx context.Context, svc *store.Service, env *string) error {
@@ -552,19 +559,10 @@ func validateOrdinaryService(ctx context.Context, svc *store.Service, env *strin
 		return errors.New("invalid or reserved service name")
 	}
 	manualScript := svc.DeploymentMode == store.DeploymentModeManualScript
-	if manualScript {
-		if svc.Policy != store.PolicyManual {
-			return errors.New("manual_script requires the manual deployment policy")
-		}
-		if strings.TrimSpace(svc.WatchedImage) != "" {
-			if len(svc.WatchedImage) > 512 {
-				return errors.New("watched_image must be at most 512 bytes")
-			}
-			if _, err := reference.ParseNormalizedNamed(svc.WatchedImage); err != nil {
-				return errors.New("invalid watched_image reference")
-			}
-		}
-	} else {
+	if manualScript && svc.Policy != store.PolicyManual {
+		return errManualScriptPolicy
+	}
+	if !manualScript || svc.WatchedImage != "" {
 		if strings.TrimSpace(svc.WatchedImage) == "" || len(svc.WatchedImage) > 512 {
 			return errors.New("watched_image is required and must be at most 512 bytes")
 		}

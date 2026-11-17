@@ -130,6 +130,10 @@ func (s *Store) ListServices(ctx context.Context) ([]*Service, error) {
 type rowScanner interface{ Scan(...any) error }
 
 func normalizeDeploymentConfig(svc *Service) {
+	if svc.DeploymentMode == DeploymentModeManualScript {
+		svc.WatchedImage = ""
+		svc.CronExpr = ""
+	}
 	if svc.DeploymentMode == "" {
 		svc.DeploymentMode = DeploymentModeCustom
 	}

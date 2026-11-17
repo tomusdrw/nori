@@ -14,7 +14,7 @@
 
 - Keep implementation within the existing `DeploymentMode` representation and Bash runner.
 - `PolicyManual` remains the policy value for the new mode; it is a human-triggered script run, not an image update policy.
-- No tests will be added or run for this change.
+- Cover dashboard and MCP conversion and explicit script execution in regression tests.
 
 ## Review Focus
 
@@ -43,7 +43,7 @@
 - [x] Add the new deployment mode constant and ensure `normalizedTemplateConfig` recognizes it without passing it to the structured template parser.
 - [x] In ordinary service validation, allow an empty `WatchedImage` only in `manual_script`; validate any non-empty image reference as before; require `PolicyManual`; require a non-empty syntactically valid Bash script.
 - [x] In create/update form and MCP inputs, preserve the selected mode, permit omitted `watched_image` only in this mode, and update the MCP schema description to include `manual_script`.
-- [x] Check the relevant validation and conversion paths by source inspection; do not add or run tests per the approved spec.
+- [x] Check the relevant validation and conversion paths by source inspection and regression tests.
 
 ### Task 2: Run scripts without registry lookups
 
@@ -80,7 +80,7 @@
 - [x] Add manual-script help in the script panel that documents `$SERVICE`, `$ENV_FILE`, and service environment variables, and that image/digest variables are unavailable.
 - [x] Add a `ManualScript` view flag in `ServiceView` and `ServiceFormData`, populate it in `internal/web/server.go`, then render a prominent “Manual deployment” badge on dashboard cards and service details.
 - [x] Hide image version/update presentation for this mode and show “Run script” for the existing explicit deploy action; retain state, health, logs, and history.
-- [x] Regenerate templ Go sources with the repository's existing `templ generate` workflow and run `go build ./...` to verify generated sources compile; do not run tests.
+- [x] Regenerate templ Go sources with the repository's existing `templ generate` workflow and run `go build ./...` to verify generated sources compile.
 
 ### Task 4: Review the completed behavior
 
@@ -89,4 +89,4 @@
 
 - [x] Inspect create, update, MCP, polling, explicit deploy, dashboard, and detail paths for the five review-focus cases above.
 - [x] Review the final diff for migration requirements and confirm none are needed because empty strings fit the existing `watched_image` column and the mode is stored in the existing deployment-mode column.
-- [x] Run `go build ./...` after the final edits; report build output and note that tests were not run, as required by the approved spec.
+- [x] Run `go build ./...` after the final edits; verify the regression cases with the Go test suite.

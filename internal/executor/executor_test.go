@@ -1160,3 +1160,35 @@ func assertNoDeployments(t *testing.T, st *store.Store, serviceID int64) {
 		t.Fatalf("invalid configuration created %d deployment records", len(deployments))
 	}
 }
+
+func TestManualScriptRunsOnlyOnRequestWithoutRegistry(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	svc := &store.Service{Name: "job", DeploymentMode: store.DeploymentModeManualScript, Policy: store.PolicyManual,
+		DeployScript: `set -eu
+test "$SERVICE" = job
+test -f "$ENV_FILE"
+test -z "${IMAGE+x}${TARGET_IMAGE+x}${TARGET_DIGEST+x}"
+echo finished`}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	ex := New(st, OSRunner{}, func(context.Context, string) (string, error) {
+		t.Error("manual script consulted the registry")
+		return "", errors.New("unexpected registry lookup")
+	}, 0)
+	for _, trigger := range []string{store.TriggerAuto, store.TriggerScheduled} {
+		if _, err := ex.Deploy(ctx, svc.ID, trigger); err == nil {
+			t.Fatalf("accepted trigger %q", trigger)
+		}
+	}
+	assertNoDeployments(t, st, svc.ID)
+	id, err := ex.Deploy(ctx, svc.ID, store.TriggerManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForDeployment(t, st, id)
+	if got.Status != store.DeploySuccess || got.TargetDigest != "" || !strings.Contains(got.Log, "finished") {
+		t.Fatalf("unexpected deployment: %+v", got)
+	}
+}
