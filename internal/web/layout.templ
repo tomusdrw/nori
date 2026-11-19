@@ -12,6 +12,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<title>{ title } · { BotName(ctx) }</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/htmx.min.js" defer></script>
+			<script src="/static/log-updates.js" defer></script>
 			<script src="/static/editor.js" type="module"></script>
 			<script src="/static/template-form.js" type="module"></script>
 			if title == "Terminal" {

@@ -89,9 +89,10 @@ type Executor struct {
 	botName  string
 	managed  docker.ManagedClient
 
-	locks    sync.Map // int64 -> *sync.Mutex
-	inFlight sync.Map // int64 -> struct{} for deployments and backups
-	failures sync.Map // int64 -> failureRecord
+	locks       sync.Map // service ID -> *sync.Mutex
+	inFlight    sync.Map // service ID -> struct{} for deployments and backups
+	deployments sync.Map // deployment ID -> struct{} for active workers
+	failures    sync.Map // service ID -> failureRecord
 }
 
 type failureRecord struct {
@@ -220,11 +221,19 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 
 	log.Printf("deploy: %s %q started (id=%d digest=%s)", trigger, svc.Name, deploy.ID, shortDigest(digest))
 	background = true
+	e.deployments.Store(deploy.ID, struct{}{})
 	go func() {
 		defer release()
+		defer e.deployments.Delete(deploy.ID)
 		e.runDeploy(svc, deploy, env, envFile, plan)
 	}()
 	return deploy.ID, nil
+}
+
+// DeploymentActive reports whether this executor is handling the run.
+func (e *Executor) DeploymentActive(id int64) bool {
+	_, active := e.deployments.Load(id)
+	return active
 }
 
 func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env []string, envFile string, plan *deploytemplate.Plan) {

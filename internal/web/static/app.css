@@ -330,6 +330,13 @@ tbody tr:last-child td { border-bottom: 0; }
 
 .log-box-large { min-height: 520px; }
 .deployment-log-panel { max-width: 1000px; }
+.deployment-log-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 20px; color: var(--text-soft); font-size: 0.8rem; }
+.badge-deploy-unconfirmed { color: var(--amber); }
+.log-connection { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 0.78rem; font-weight: 600; }
+.log-connection .status-dot { flex: none; margin-right: 0; background: var(--amber); }
+.log-connection[data-state="connected"] .status-dot { background: var(--green); }
+.log-connection[data-state="unavailable"] .status-dot { background: var(--red); }
+.log-connection [data-log-checked] { margin-top: 2px; color: var(--text-muted); font-weight: 400; }
 
 .terminal-page { min-width: 0; }
 .terminal-heading { align-items: center; }

@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -30,7 +32,10 @@ func TestReadLogLinesFormatsJSON(t *testing.T) {
 		{"empty object", `{}`, `{}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := readLogLines(strings.NewReader(tc.input + "\n"))
+			got, err := readLogLines(strings.NewReader(tc.input + "\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(got) != 1 || got[0] != tc.want {
 				t.Fatalf("readLogLines = %q, want [%q]", got, []string{tc.want})
 			}
@@ -136,6 +141,7 @@ func TestServiceDetailLogsPanel(t *testing.T) {
 	for _, want := range []string{
 		`id="container-logs"`,
 		`hx-get="/services/app/logs/stream"`,
+		`hx-trigger="load, every 3s"`,
 		`hx-swap="outerHTML"`,
 		"The latest 100 lines from the selected container.",
 		`class="log-copy button button-ghost button-small"`,
@@ -146,5 +152,24 @@ func TestServiceDetailLogsPanel(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail page missing %q: %s", want, body)
 		}
+	}
+}
+
+type failingContainerLogReader struct{ *docker.Fake }
+
+func (failingContainerLogReader) Logs(context.Context, string, int) (io.ReadCloser, error) {
+	return nil, errors.New("Docker log read failed")
+}
+
+func TestLogsStreamReportsDockerReadFailure(t *testing.T) {
+	srv := &Server{docker: failingContainerLogReader{&docker.Fake{
+		Containers: map[string][]docker.Container{"app": {{ID: "web", Name: "app-web"}}},
+	}}}
+	router := chi.NewRouter()
+	router.Get("/services/{name}/logs/stream", srv.handleLogsStream)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/services/app/logs/stream", nil))
+	if rec.Code != 503 || rec.Header().Get("X-Nori-Log-Refresh") != "docker-error" {
+		t.Fatalf("failed log request: status %d, headers %v, body %q", rec.Code, rec.Header(), rec.Body.String())
 	}
 }
