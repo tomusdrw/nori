@@ -26,21 +26,25 @@ type Coordinator interface {
 }
 
 type Manager struct {
-	store        *store.Store
-	docker       docker.Client
-	coord        Coordinator
-	dockerHost   string
-	instanceID   string
-	dir          string
-	dataDir      string
-	identity     *age.X25519Identity
-	recipient    age.Recipient
-	notify       func(context.Context, string) error
-	wake         chan struct{}
-	restoreSlots chan struct{}
-	archiveMu    sync.Mutex
-	restoreMu    sync.Mutex
+	store             *store.Store
+	docker            docker.Client
+	coord             Coordinator
+	dockerHost        string
+	instanceID        string
+	dir               string
+	dataDir           string
+	identity          *age.X25519Identity
+	recipient         age.Recipient
+	notify            func(context.Context, string) error
+	wake              chan struct{}
+	restoreSlots      chan struct{}
+	archiveMu         sync.Mutex
+	restoreMu         sync.Mutex
+	completedRestores map[string]bool
+	uploadResults     map[string]uploadOutcome
 }
+
+const WriterRecoveryTimeout = 10 * time.Minute
 
 const identitySetting = "backup_identity"
 
@@ -150,6 +154,7 @@ func (m *Manager) runCaptures(ctx context.Context) {
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		m.recoverWriters(ctx)
+		m.recoverCaptures(ctx)
 		m.recoverRestores(ctx)
 		if err := m.schedule(ctx); err != nil {
 			log.Printf("backup: schedule: %v", err)
@@ -223,6 +228,7 @@ func (m *Manager) Open(job store.BackupJob) (*os.File, error) {
 }
 
 func (m *Manager) reconcile(ctx context.Context) {
+	m.finishUploads(ctx)
 	if err := m.store.ResetInterruptedUploads(ctx); err != nil {
 		log.Printf("backup: reconcile interrupted uploads: %v", err)
 	}
@@ -237,13 +243,32 @@ func (m *Manager) reconcile(ctx context.Context) {
 			}
 		}
 	}
+	m.recoverCaptures(ctx)
+}
+
+func (m *Manager) recoverCaptures(ctx context.Context) {
 	jobs, err := m.store.BackupsByStatus(ctx, "running")
 	if err != nil {
 		log.Printf("backup: read interrupted jobs: %v", err)
 	}
 	for _, job := range jobs {
-		_ = os.Remove(m.archivePath(job.ID))
-		m.finishJob(ctx, job.ID, "failed", "Interrupted by Nori restart", 0, "")
+		info, err := os.Stat(m.archivePath(job.ID))
+		if err == nil {
+			upload := ""
+			policy, _, policyErr := m.store.BackupPolicy(ctx, job.ServiceID)
+			target, targetErr := m.B2(ctx)
+			if policyErr != nil || targetErr != nil {
+				continue
+			}
+			if target.UploadEnabled() && !policy.LocalOnly {
+				upload = "pending"
+			}
+			if m.finishJob(ctx, job.ID, "complete", "", info.Size(), upload) {
+				m.prune(ctx, job.ServiceID)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			m.finishJob(ctx, job.ID, "failed", "Backup interrupted before publication", 0, "")
+		}
 	}
 }
 
@@ -452,12 +477,12 @@ func (m *Manager) recoverRestores(ctx context.Context) {
 	}
 	for _, attempt := range attempts {
 		cleanup, cancel := context.WithTimeout(ctx, time.Minute)
-		err := m.discardRestore(cleanup, attempt)
+		err := m.recoverRestore(cleanup, attempt)
 		cancel()
 		if err != nil {
 			log.Printf("backup: could not clean up interrupted restore for service %d: %v", attempt.ServiceID, err)
 			continue
 		}
-		log.Printf("backup: cleaned up interrupted restore for service %d", attempt.ServiceID)
+		log.Printf("backup: reconciled pending restore for service %d", attempt.ServiceID)
 	}
 }

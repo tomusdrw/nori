@@ -343,6 +343,10 @@ func (s *Server) handleBackupUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireBackups(w, r) {
 		return
 	}
+	// Renew the deadline on each read so slow, progressing uploads can finish.
+	controller := http.NewResponseController(w)
+	defer controller.SetReadDeadline(time.Time{})
+	r.Body = &backupUploadBody{ReadCloser: r.Body, controller: controller}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<40)
 	multipart, err := r.MultipartReader()
 	if err != nil {
@@ -514,4 +518,16 @@ func backupUploadStatus(status string) string {
 		return "—"
 	}
 	return status
+}
+
+type backupUploadBody struct {
+	io.ReadCloser
+	controller *http.ResponseController
+}
+
+func (body *backupUploadBody) Read(p []byte) (int, error) {
+	if err := body.controller.SetReadDeadline(time.Now().Add(2 * time.Minute)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return 0, err
+	}
+	return body.ReadCloser.Read(p)
 }

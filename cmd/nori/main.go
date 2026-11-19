@@ -131,13 +131,21 @@ func main() {
 	cancel()
 	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
 	defer stop()
-	_ = httpSrv.Shutdown(shutdown)
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = httpSrv.Shutdown(shutdown)
+	}()
 	if backupDone != nil {
+		recovery, stopRecovery := context.WithTimeout(context.Background(), backup.WriterRecoveryTimeout+30*time.Second)
+		defer stopRecovery()
 		select {
 		case <-backupDone:
-		case <-shutdown.Done():
+		case <-recovery.Done():
+			log.Print("backup: graceful shutdown timed out")
 		}
 	}
+	<-httpDone
 }
 
 // buildNotifier returns the notifier chosen by configuration. When no

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -142,6 +143,9 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 	dotenv := manifest.Env
 	token := rand.Text()
 	err := m.store.SaveRestoredService(ctx, &svc, dotenv, policy, token, func(id int64, env string) (string, error) {
+		if err := validateRestoreDestinations(id, config, policy.Sources); err != nil {
+			return "", err
+		}
 		if config.Postgres != nil && (manifest.Postgres != nil || hasEnv(env, config.Postgres.ConnectionURLEnv)) {
 			var err error
 			dotenv, err = remapPostgresEnv(id, source.ID, env, *config.Postgres)
@@ -152,17 +156,87 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 		return dotenv, nil
 	})
 	if err != nil {
+		var fieldErr *RestoreFieldError
+		if errors.As(err, &fieldErr) {
+			return svc, fieldErr
+		}
 		return svc, errors.New("could not save the new service configuration")
 	}
 	if err := m.restoreData(ctx, svc, dotenv, manifest, policy, dir, token); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
+		if paths, _ := m.restoreBindPaths(token); len(paths) != 0 {
+			err = fmt.Errorf("%w; inspect these bind destinations for partial data before retrying: %q", err, paths)
+		}
 		if cleanupErr := m.discardRestore(cleanupCtx, store.RestoreAttempt{ServiceID: svc.ID, Token: token}); cleanupErr != nil {
 			return svc, fmt.Errorf("%w; new resources could not all be removed", err)
 		}
 		return svc, err
 	}
-	return svc, m.store.FinishRestore(ctx, svc.ID)
+	attempt := store.RestoreAttempt{ServiceID: svc.ID, Token: token}
+	if m.completedRestores == nil {
+		m.completedRestores = make(map[string]bool)
+	}
+	m.completedRestores[token] = true
+	if err := m.writeJournal(m.restoreDoneFile(token), true); err != nil {
+		log.Printf("backup: write completed restore marker: %v", err)
+	}
+	finalize, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	return svc, m.recoverRestore(finalize, attempt)
+}
+
+func validateRestoreDestinations(id int64, config deploytemplate.Config, sources []store.BackupSource) error {
+	names := make(map[string]bool)
+	for _, mount := range config.Volumes {
+		names[fmt.Sprintf("nori-%d-volume-%s", id, mount.Name)] = true
+	}
+	if config.Postgres != nil {
+		names[fmt.Sprintf("nori-%d-volume-postgres-data", id)] = true
+	}
+	for i, source := range sources {
+		if source.Type == "volume" && names[source.Path] {
+			return restoreFieldError(fmt.Sprintf("target-%d", i), "destination volume overlaps a managed volume for this service")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) restoreDoneFile(token string) string { return "restore-done-" + token }
+
+func (m *Manager) recoverRestore(ctx context.Context, attempt store.RestoreAttempt) error {
+	path := filepath.Join(m.dir, m.restoreDoneFile(attempt.Token))
+	_, err := os.Stat(path)
+	if !m.completedRestores[attempt.Token] && errors.Is(err, os.ErrNotExist) {
+		return m.discardRestore(ctx, attempt)
+	}
+	if !m.completedRestores[attempt.Token] && err != nil {
+		return err
+	}
+	if err := m.store.FinishRestore(ctx, attempt.ServiceID); err != nil {
+		return err
+	}
+	delete(m.completedRestores, attempt.Token)
+	_ = os.Remove(path)
+	_ = os.Remove(m.restoreBindsFile(attempt.Token))
+	return nil
+}
+
+func (m *Manager) restoreBindsFile(token string) string {
+	return filepath.Join(m.dir, "restore-binds-"+token)
+}
+
+func (m *Manager) restoreBindPaths(token string) ([]string, error) {
+	data, err := os.ReadFile(m.restoreBindsFile(token))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	err = json.Unmarshal(data, &paths)
+	return paths, err
 }
 
 func remapPostgresEnv(target, original int64, content string, config deploytemplate.PostgresConfig) (string, error) {
@@ -229,8 +303,14 @@ func (m *Manager) preflightRestore(ctx context.Context, svc store.Service, diges
 				return errors.New("backup contains an invalid running image digest")
 			}
 		}
-		if err := m.docker.Pull(ctx, image.String()); err != nil {
-			return errors.New("the destination Docker host could not pull the backed-up image")
+		check, err := m.diskGuard(ctx)
+		if err != nil {
+			return err
+		}
+		if err := watchDisk(ctx, check, func(ctx context.Context) error {
+			return m.docker.Pull(ctx, image.String())
+		}); err != nil {
+			return fmt.Errorf("the destination Docker host could not pull the backed-up image: %w", err)
 		}
 	}
 	network := config.ServingNetwork
@@ -271,7 +351,9 @@ func (m *Manager) restoreData(ctx context.Context, svc store.Service, dotenv str
 		return err
 	}
 	var plan deploytemplate.Plan
-	if svc.DeploymentMode == store.DeploymentModePostgres || svc.DeploymentMode == store.DeploymentModeSingleContainer {
+	_, hasPostgres := files["postgres"]
+	hasManagedVolume := slices.ContainsFunc(policy.Sources, func(source store.BackupSource) bool { return source.Type == "managed" })
+	if hasPostgres || hasManagedVolume {
 		plan, err = managedPlan(svc)
 		if err != nil {
 			return errors.New("could not build the destination deployment plan")
@@ -282,11 +364,18 @@ func (m *Manager) restoreData(ctx context.Context, svc store.Service, dotenv str
 		if !ok || m.docker == nil {
 			return errors.New("managed restore requires Docker")
 		}
+		if !hasPostgres && plan.Database != nil {
+			plan.Database, plan.Postgres, plan.InternalNetwork = nil, nil, nil
+			dbVolume := fmt.Sprintf("nori-%d-volume-postgres-data", svc.ID)
+			plan.Volumes = slices.DeleteFunc(plan.Volumes, func(volume deploytemplate.Resource) bool { return volume.Name == dbVolume })
+		}
 		if err := m.requireFreshManaged(ctx, plan); err != nil {
 			return err
 		}
 		labelRestorePlan(&plan, token)
-		if err := provisioner.PrepareRestore(ctx, &svc, plan, dotenv); err != nil {
+		if err := watchDisk(ctx, check, func(ctx context.Context) error {
+			return provisioner.PrepareRestore(ctx, &svc, plan, dotenv)
+		}); err != nil {
 			return errors.New("could not initialize fresh managed resources")
 		}
 	}
@@ -383,8 +472,16 @@ func (m *Manager) createTarget(ctx context.Context, svc store.Service, source st
 		}
 		return source, nil
 	case "bind":
+		paths, err := m.restoreBindPaths(token)
+		if err != nil {
+			return source, err
+		}
+		// Record before mkdir so a crash cannot hide a partially created path.
+		if err := m.writeJournal(filepath.Base(m.restoreBindsFile(token)), append(paths, source.Path)); err != nil {
+			return source, err
+		}
 		parent, base := filepath.Dir(source.Path), filepath.Base(source.Path)
-		err := m.dockerCommand(ctx, nil, io.Discard, "run", "--rm", "--network", "none", "--read-only", "--mount",
+		err = m.dockerCommand(ctx, nil, io.Discard, "run", "--rm", "--network", "none", "--read-only", "--mount",
 			"type=bind,src="+parent+",dst=/contents", "alpine:3.21", "mkdir", "--", "/contents/"+base)
 		if err != nil {
 			return source, errors.New("destination bind directory already exists or its parent cannot be written")
@@ -423,7 +520,18 @@ func (m *Manager) discardRestore(ctx context.Context, attempt store.RestoreAttem
 	if err := m.cleanupRestore(ctx, *svc, policy, attempt.Token); err != nil {
 		return err
 	}
-	return m.store.DeleteIncompleteRestore(ctx, svc.ID, attempt.Token)
+	paths, err := m.restoreBindPaths(attempt.Token)
+	if err != nil {
+		return err
+	}
+	if len(paths) != 0 {
+		log.Printf("backup: interrupted restore for service %d may have left bind directories; inspect before retrying: %q", svc.ID, paths)
+	}
+	if err := m.store.DeleteIncompleteRestore(ctx, svc.ID, attempt.Token); err != nil {
+		return err
+	}
+	_ = os.Remove(m.restoreBindsFile(attempt.Token))
+	return nil
 }
 
 func (m *Manager) cleanupRestore(ctx context.Context, svc store.Service, policy store.BackupPolicy, token string) error {

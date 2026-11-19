@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,5 +83,34 @@ func TestB2UploadFailureCanBeRetriedWithoutRecreatingArchive(t *testing.T) {
 	job, err = st.BackupJob(ctx, job.ID)
 	if err != nil || job.UploadStatus != "uploaded" {
 		t.Fatalf("retry didn't upload the same archive: %v %v", job, err)
+	}
+}
+
+func TestRecoverUploadOutcomeWithoutSendingAgain(t *testing.T) {
+	ctx := context.Background()
+	m, st := newTestManager(t, nil)
+	svc := &store.Service{Name: "app", Policy: store.PolicyManual, DeploymentMode: store.DeploymentModeManualScript, DeployScript: "true"}
+	if err := st.SaveServiceConfig(ctx, svc, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := m.Queue(ctx, *svc); !queued || err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	jobs, err := st.BackupsByStatus(ctx, "queued")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("queued jobs: %v, %v", jobs, err)
+	}
+	job := jobs[0]
+	if err := st.SetBackupStatus(ctx, job.ID, "complete", "", 1, "uploading"); err != nil {
+		t.Fatal(err)
+	}
+	outcome := uploadOutcome{ID: job.ID, ServiceID: svc.ID, Status: "uploaded", Attempts: 1}
+	if err := m.writeJournal(fmt.Sprintf("upload-result-%d", job.ID), outcome); err != nil {
+		t.Fatal(err)
+	}
+	m.reconcile(ctx)
+	got, err := st.BackupJob(ctx, job.ID)
+	if err != nil || got.UploadStatus != "uploaded" || got.UploadAttempts != 1 {
+		t.Fatalf("result not recovered: %+v %v", got, err)
 	}
 }

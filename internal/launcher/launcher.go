@@ -203,7 +203,7 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 			return fmt.Errorf("read current image digest: %w", err)
 		}
 	}
-	if err := l.runner().Run(ctx, "docker", "stop", spec.ContainerName); err != nil {
+	if err := l.runner().Run(ctx, "docker", "stop", "--timeout", "645", spec.ContainerName); err != nil {
 		return fmt.Errorf("stop %s: %w", spec.ContainerName, err)
 	}
 	if err := l.runner().Run(ctx, "docker", "rm", spec.ContainerName); err != nil {
@@ -364,7 +364,7 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 }
 
 func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string) error {
-	args := []string{"run", "-d", "--name", spec.ContainerName, "--restart", spec.Restart, "--env-file", l.envPath()}
+	args := []string{"run", "-d", "--name", spec.ContainerName, "--restart", spec.Restart, "--stop-timeout", "645", "--env-file", l.envPath()}
 	for _, port := range spec.Ports {
 		args = append(args, "-p", port)
 	}

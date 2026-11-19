@@ -209,7 +209,7 @@ func (m *Manager) captureData(ctx context.Context, job store.BackupJob, manifest
 			return err
 		}
 		defer func() {
-			resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+			resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), WriterRecoveryTimeout)
 			defer cancel()
 			if err := m.resume(resumeCtx, job, action); err != nil {
 				result = errors.Join(result, errors.New("could not resume service writers; Nori will retry"))
@@ -359,7 +359,7 @@ func (m *Manager) hook(parent context.Context, service, dotenv, dir, script stri
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "bash", "-e", "-o", "pipefail", "-c", script)
+	cmd := exec.CommandContext(ctx, "bash", "-e", "-o", "pipefail", "-c", executor.NormalizeNewlines(script))
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Env = append(cmd.Env, "SERVICE="+service, "NORI_BACKUP_WORK="+dir)
 	if m.dockerHost != "" {
@@ -428,7 +428,7 @@ func (m *Manager) recoverWriters(ctx context.Context) {
 			err = json.Unmarshal([]byte(raw), &action)
 		}
 		if err == nil {
-			child, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			child, cancel := context.WithTimeout(ctx, WriterRecoveryTimeout)
 			err = m.resume(child, job, action)
 			cancel()
 		}

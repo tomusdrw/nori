@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -138,6 +139,7 @@ func (m *Manager) runUploads(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
+		m.finishUploads(ctx)
 		c, err := m.B2(ctx)
 		if err == nil && c.UploadEnabled() {
 			jobs, err := m.store.PendingUploads(ctx)
@@ -182,9 +184,6 @@ func (m *Manager) uploadJob(parent context.Context, client *s3.Client, c B2Confi
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &c.Bucket, Key: &key, Body: file})
-	if parent.Err() != nil {
-		return
-	}
 	status, attempts, next := "uploaded", job.UploadAttempts+1, int64(0)
 	if err != nil {
 		status = "retry"
@@ -193,16 +192,78 @@ func (m *Manager) uploadJob(parent context.Context, client *s3.Client, c B2Confi
 			status = "failed"
 		}
 	}
-	if err := m.store.SetBackupUpload(parent, job.ID, status, attempts, next); err != nil {
+	outcome := uploadOutcome{job.ID, job.ServiceID, status, attempts, next}
+	name := fmt.Sprintf("upload-result-%d", job.ID)
+	if m.uploadResults == nil {
+		m.uploadResults = make(map[string]uploadOutcome)
+	}
+	m.uploadResults[name] = outcome
+	if err := m.writeJournal(name, outcome); err != nil {
+		log.Printf("backup: save upload recovery record: %v", err)
+	}
+	finish, cancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
+	defer cancel()
+	m.finishUpload(finish, name, outcome)
+}
+
+type uploadOutcome struct {
+	ID, ServiceID int64
+	Status        string
+	Attempts      int
+	Next          int64
+}
+
+func (m *Manager) finishUploads(ctx context.Context) {
+	files, err := os.ReadDir(m.dir)
+	if err != nil {
+		log.Printf("backup: list upload recovery records: %v", err)
+	}
+	if m.uploadResults == nil {
+		m.uploadResults = make(map[string]uploadOutcome)
+	}
+	for _, file := range files {
+		name := file.Name()
+		if !strings.HasPrefix(name, "upload-result-") {
+			continue
+		}
+		if _, exists := m.uploadResults[name]; exists {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(m.dir, name))
+		var outcome uploadOutcome
+		if err == nil {
+			err = json.Unmarshal(data, &outcome)
+		}
+		if err != nil {
+			log.Printf("backup: read upload recovery record %s: %v", name, err)
+			continue
+		}
+		m.uploadResults[name] = outcome
+	}
+	for name, outcome := range m.uploadResults {
+		m.finishUpload(ctx, name, outcome)
+	}
+}
+
+func (m *Manager) finishUpload(ctx context.Context, name string, outcome uploadOutcome) {
+	if err := m.store.SetBackupUpload(ctx, outcome.ID, outcome.Status, outcome.Attempts, outcome.Next); err != nil {
 		log.Printf("backup: save upload status: %v", err)
 		return
 	}
-	m.prune(parent, job.ServiceID)
+	if err := os.Remove(filepath.Join(m.dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("backup: remove upload recovery record: %v", err)
+		return
+	}
+	delete(m.uploadResults, name)
+	m.prune(ctx, outcome.ServiceID)
 }
 
 func (m *Manager) startUpload(ctx context.Context, id int64) (*os.File, error) {
 	m.archiveMu.Lock()
 	defer m.archiveMu.Unlock()
+	if _, recorded := m.uploadResults[fmt.Sprintf("upload-result-%d", id)]; recorded {
+		return nil, errors.New("upload completion is pending")
+	}
 	job, err := m.store.BackupJob(ctx, id)
 	if err != nil {
 		return nil, err

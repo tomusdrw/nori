@@ -214,3 +214,65 @@ func TestInterruptedRestoreCleanupLeavesExistingVolumeAlone(t *testing.T) {
 		t.Fatal("cleanup removed a volume belonging to another service")
 	}
 }
+
+func TestRecoverPublishedArchiveAfterStatusWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	m, st := newTestManager(t, nil)
+	svc := &store.Service{Name: "app", Policy: store.PolicyManual, DeploymentMode: store.DeploymentModeManualScript, DeployScript: "true"}
+	if err := st.SaveServiceConfig(ctx, svc, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := m.Queue(ctx, *svc); !queued || err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	jobs, err := st.BackupsByStatus(ctx, "queued")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("queued jobs: %v, %v", jobs, err)
+	}
+	job := jobs[0]
+	if err := st.SetBackupStatus(ctx, job.ID, "running", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	size, _, err := m.write(ctx, job, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.recoverCaptures(ctx)
+	job, err = st.BackupJob(ctx, job.ID)
+	if err != nil || job.Status != "complete" || job.Size != size {
+		t.Fatalf("published archive was not recovered: %+v %v", job, err)
+	}
+	f, err := m.Open(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+func TestBackupHookRunsCRLFScript(t *testing.T) {
+	ctx := context.Background()
+	m, _ := newTestManager(t, nil)
+	if err := m.hook(ctx, "app", "", t.TempDir(), "true\r\ntrue", ctx.Err); err != nil {
+		t.Fatalf("CRLF script rejected by Bash: %v", err)
+	}
+}
+
+func TestRecoverCompletedRestoreFinalizesWithoutDiscard(t *testing.T) {
+	ctx := context.Background()
+	m, st := newTestManager(t, nil)
+	svc := &store.Service{Name: "restored", Policy: store.PolicyManual, DeploymentMode: store.DeploymentModeManualScript, DeployScript: "true"}
+	const token = "completed-attempt"
+	if err := st.SaveRestoredService(ctx, svc, "", store.BackupPolicy{Keep: 7}, token, func(_ int64, env string) (string, error) { return env, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.writeJournal(m.restoreDoneFile(token), true); err != nil {
+		t.Fatal(err)
+	}
+	m.recoverRestores(ctx)
+	if _, err := st.GetService(ctx, svc.ID); err != nil {
+		t.Fatalf("discarded a completed restore: %v", err)
+	}
+	if pending, err := st.RestorePending(ctx, svc.ID); pending || err != nil {
+		t.Fatalf("restore not finalized: %v %v", pending, err)
+	}
+}

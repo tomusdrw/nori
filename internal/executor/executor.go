@@ -942,13 +942,15 @@ func (e *Executor) BeginServiceOperation(ctx context.Context, id int64) (func(),
 	return e.claimServiceOperation(ctx, id)
 }
 
+var ErrServiceBusy = errors.New("a deployment or backup is already running for this service")
+
 func (e *Executor) claimServiceOperation(ctx context.Context, id int64) (func(), error) {
 	pending, err := e.store.BackupResumePending(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if pending {
-		return nil, errors.New("service writers still need to resume after a backup")
+		return nil, fmt.Errorf("%w: service writers still need to resume", ErrServiceBusy)
 	}
 	restoring, err := e.store.RestorePending(ctx, id)
 	if err != nil {
@@ -958,7 +960,7 @@ func (e *Executor) claimServiceOperation(ctx context.Context, id int64) (func(),
 		return nil, errors.New("service restore is incomplete")
 	}
 	if _, busy := e.inFlight.LoadOrStore(id, struct{}{}); busy {
-		return nil, errors.New("a deployment or backup is already running for this service")
+		return nil, ErrServiceBusy
 	}
 	return func() { e.inFlight.Delete(id) }, nil
 }

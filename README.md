@@ -383,7 +383,9 @@ the main **Backups** page. You need it to import on another instance.
   capture or configure paired **Quiesce** and **Resume** commands for the
   writers. Keep the database available for its logical dump. Resume commands
   must be safe to retry after an interruption and must work independently of
-  temporary export files.
+  temporary export files. Launcher-managed containers allow time for writer
+  recovery before Docker stops Nori. When stopping a container directly, allow
+  at least 645 seconds (for example, `docker stop --timeout 645 nori`).
 
 The **Backups** page shows free space and configurable warning and critical
 thresholds. Initially Nori warns below 15% or 5 GiB free, and defers backup
