@@ -64,8 +64,22 @@ func (s *Store) UpdateService(ctx context.Context, svc *Service) error {
 }
 
 func (s *Store) DeleteService(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM service WHERE id=?`, id)
-	return err
+	result, err := s.db.ExecContext(ctx, `DELETE FROM service WHERE id=? AND
+		NOT EXISTS(SELECT 1 FROM service_backup WHERE service_id=? AND (status='running' OR resume<>'')) AND
+		NOT EXISTS(SELECT 1 FROM backup_restore WHERE service_id=?)`, id, id, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil || n > 0 {
+		return err
+	}
+	if _, err := s.GetService(ctx, id); err == nil {
+		return errors.New("service has an active backup or an incomplete restore")
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // GetTemplateState returns the non-secret managed-template state for a

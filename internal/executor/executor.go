@@ -90,7 +90,7 @@ type Executor struct {
 	managed  docker.ManagedClient
 
 	locks    sync.Map // int64 -> *sync.Mutex
-	inFlight sync.Map // int64 -> struct{} for template deployments
+	inFlight sync.Map // int64 -> struct{} for deployments and backups
 	failures sync.Map // int64 -> failureRecord
 }
 
@@ -158,18 +158,16 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 	if isTemplate && svc.IsSelf {
 		return 0, errors.New("the launcher-managed self-service cannot use a deployment template")
 	}
-	templateClaimed := false
-	if isTemplate {
-		if _, loaded := e.inFlight.LoadOrStore(serviceID, struct{}{}); loaded {
-			return 0, errors.New("a deployment is already running for this service")
-		}
-		templateClaimed = true
-		defer func() {
-			if templateClaimed {
-				e.inFlight.Delete(serviceID)
-			}
-		}()
+	release, err := e.claimServiceOperation(ctx, serviceID)
+	if err != nil {
+		return 0, err
 	}
+	background := false
+	defer func() {
+		if !background {
+			release()
+		}
+	}()
 	if !isTemplate {
 		if err := ValidateScript(ctx, svc.DeployScript); err != nil {
 			return 0, err
@@ -221,13 +219,11 @@ func (e *Executor) Deploy(ctx context.Context, serviceID int64, trigger string) 
 	}
 
 	log.Printf("deploy: %s %q started (id=%d digest=%s)", trigger, svc.Name, deploy.ID, shortDigest(digest))
+	background = true
 	go func() {
+		defer release()
 		e.runDeploy(svc, deploy, env, envFile, plan)
-		if isTemplate {
-			e.inFlight.Delete(serviceID)
-		}
 	}()
-	templateClaimed = false
 	return deploy.ID, nil
 }
 
@@ -728,16 +724,19 @@ func postgresIdentity(config *deploytemplate.PostgresConfig) string {
 }
 
 func deploymentEnvironment(env []string) map[string]string {
-	values := map[string]string{}
 	for index, entry := range env {
 		if strings.HasPrefix(entry, "ENV_FILE=") {
-			for _, variable := range env[index+1:] {
-				key, value, ok := strings.Cut(variable, "=")
-				if ok {
-					values[key] = value
-				}
-			}
-			break
+			return environmentValues(env[index+1:])
+		}
+	}
+	return nil
+}
+
+func environmentValues(env []string) map[string]string {
+	values := make(map[string]string, len(env))
+	for _, variable := range env {
+		if key, value, ok := strings.Cut(variable, "="); ok {
+			values[key] = value
 		}
 	}
 	return values
@@ -930,4 +929,66 @@ func truncateReason(s string) string {
 
 func (e *Executor) clearFailure(serviceID int64) {
 	e.failures.Delete(serviceID)
+}
+
+// BeginServiceOperation excludes deployments, container control and backups
+// for this service. The mutex covers synchronous deployment initialization.
+func (e *Executor) BeginServiceOperation(ctx context.Context, id int64) (func(), error) {
+	mu := e.lockFor(id)
+	if !mu.TryLock() {
+		return nil, errors.New("service deployment is being prepared")
+	}
+	defer mu.Unlock()
+	return e.claimServiceOperation(ctx, id)
+}
+
+func (e *Executor) claimServiceOperation(ctx context.Context, id int64) (func(), error) {
+	pending, err := e.store.BackupResumePending(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, errors.New("service writers still need to resume after a backup")
+	}
+	restoring, err := e.store.RestorePending(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if restoring {
+		return nil, errors.New("service restore is incomplete")
+	}
+	if _, busy := e.inFlight.LoadOrStore(id, struct{}{}); busy {
+		return nil, errors.New("a deployment or backup is already running for this service")
+	}
+	return func() { e.inFlight.Delete(id) }, nil
+}
+
+// PrepareRestore creates fresh template data resources without starting the
+// application or attaching it to the serving network.
+func (e *Executor) PrepareRestore(ctx context.Context, svc *store.Service, plan deploytemplate.Plan, dotenv string) error {
+	if e.managed == nil {
+		return errors.New("Docker is unavailable")
+	}
+	if _, err := preflightTemplateResources(ctx, e.managed, plan); err != nil {
+		return err
+	}
+	if plan.Database == nil {
+		return ensureTemplateResources(ctx, e.managed, plan)
+	}
+	env, err := envfile.Parse(dotenv)
+	if err != nil {
+		return err
+	}
+	values := environmentValues(env)
+	runtime, err := postgresEnvironment(plan, values)
+	if err != nil {
+		return err
+	}
+	if err := e.managed.Pull(ctx, plan.Database.Image); err != nil {
+		return err
+	}
+	if err := ensureTemplateResources(ctx, e.managed, plan); err != nil {
+		return err
+	}
+	return e.ensurePostgres(ctx, svc, plan, runtime, false, values, io.Discard)
 }

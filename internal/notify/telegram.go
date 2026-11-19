@@ -179,3 +179,8 @@ func (t *Telegram) redact(s string) string {
 	}
 	return s
 }
+
+// SendAdmin sends a plain-text notice through the configured administrator chat.
+func (t *Telegram) SendAdmin(ctx context.Context, text string) error {
+	return t.send(ctx, html.EscapeString(text))
+}

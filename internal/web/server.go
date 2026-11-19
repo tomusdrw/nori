@@ -50,6 +50,7 @@ type Server struct {
 	selfEnvironment selfEnvironmentStore
 	channels        Channels
 	router          chi.Router
+	backups         *backupPages
 }
 
 func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *poller.Poller, a *auth.Auth, channels Channels, terminals ...terminalsession.Attacher) *Server {
@@ -81,6 +82,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
 		r.Use(s.auth.CSRFMiddleware)
+		s.backupRoutes(r)
 
 		r.Get("/", s.handleDashboard)
 		r.Get("/terminal", s.handleTerminal)
@@ -110,6 +112,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	r.Group(func(r chi.Router) {
 		r.Use(s.auth.Middleware)
 		r.Get("/settings", s.handleSettingsGet)
+		r.Post("/backups/import", s.handleBackupUpload)
 		r.Get("/settings/mcp/grants/{id}/revoke", s.handleMCPGrantRevokeConfirm)
 	})
 
@@ -805,6 +808,18 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if s.backups != nil {
+		svc, err := s.getServiceByName(w, r)
+		if err != nil {
+			return
+		}
+		release, err := s.executor.BeginServiceOperation(r.Context(), svc.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+	}
 	if err := s.docker.StartByService(r.Context(), name); err != nil {
 		log.Printf("service: start %q failed: %v", name, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -816,6 +831,18 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if s.backups != nil {
+		svc, err := s.getServiceByName(w, r)
+		if err != nil {
+			return
+		}
+		release, err := s.executor.BeginServiceOperation(r.Context(), svc.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+	}
 	if err := s.docker.StopByService(r.Context(), name); err != nil {
 		log.Printf("service: stop %q failed: %v", name, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

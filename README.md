@@ -355,6 +355,56 @@ the service's expression. Invalid expressions saved by older dashboard versions
 are skipped and logged once per change. `scheduler: reload` indicates that the
 scheduler could not read configuration; it retries on the next refresh.
 
+## Service backups
+
+Open **Backups** on a service to configure its independent cron schedule, choose
+data sources or create a backup immediately. Ordinary services start with one
+local backup per day and retain seven successful copies. Clear the schedule for
+manual-only operation. Each age-encrypted `.nori` file contains the saved
+deployment script or template, the exact dotenv document and the selected
+application data. Download and store the **recovery key** outside the host from
+the main **Backups** page. You need it to import on another instance.
+
+- Managed PostgreSQL uses a logical dump of the application database. Restore
+  uses the original database image configuration and checks server version and
+  extension availability. Global roles and tablespaces belong to the
+  PostgreSQL installation. Manage those separately if the application needs them.
+- To include application files, select a detected mount or enter a source using
+  `managed LOGICAL_NAME`, `volume NAME` or `bind /host/directory`. Ordinary
+  file capture archives directories, regular files, hardlinks and symbolic
+  links contained within the selected data. Special files and links leaving the
+  source cause capture to fail while preserving previous good backups.
+- Set paired **Export** and **Import** Bash commands for SQLite, external
+  databases or other data sources. Export writes files under
+  `$NORI_BACKUP_WORK`; import reads them there. Commands receive the service
+  environment and `$SERVICE`. Use a database-aware export, such as SQLite
+  `VACUUM INTO`, for a database that stays online.
+- For data that must match across sources, stop the managed application during
+  capture or configure paired **Quiesce** and **Resume** commands for the
+  writers. Keep the database available for its logical dump. Resume commands
+  must be safe to retry after an interruption and must work independently of
+  temporary export files.
+
+The **Backups** page shows free space and configurable warning and critical
+thresholds. Initially Nori warns below 15% or 5 GiB free, and defers backup
+writes below 5% or 1 GiB free. Warnings and recoveries go to the configured
+administrator Telegram chat and SMS number. Add paths to monitor other host
+filesystems. Mount those paths read-only inside containerized Nori. For a
+remote Docker daemon, these measurements cover the filesystems visible to
+Nori.
+
+To enable **Backblaze B2**, enter the region, private bucket, object prefix and
+a bucket-scoped B2 application key in **Backups**. Local download remains
+available if upload fails, and uploads can be retried from backup history.
+Configure remote retention in Backblaze lifecycle rules for the chosen prefix.
+An import-only destination can use a key limited to list and read operations.
+
+Review an archive from the local history, an uploaded file, or the B2 browser.
+Choose a new service name and fresh destinations for unmanaged data. Review
+any imported Bash commands and update names and paths for the target host.
+The restored service starts with manual deploy policy. Deploy it separately
+after checking the configuration and choosing the correct proxy and ports.
+
 ## Notifications (optional)
 
 Nori can notify external channels about four kinds of events:
@@ -599,6 +649,8 @@ For implementation boundaries, regression tests and proposed follow-ups, see
 | `NORI_SESSION_KEY` | yes | Base64-encoded 32+ byte key for signing session cookies |
 | `NORI_ADMIN_HASH` | yes | Bcrypt hash of admin password (`nori hash-password`) |
 | `NORI_DB` | no | SQLite path (default: `nori.db`) |
+| `NORI_BACKUP_DIR` | no | Persistent backup directory (default: `backups` next to `NORI_DB`) |
+| `NORI_BACKUP_RECIPIENT` | no | Use an existing age X25519 public recipient. Keep its private recovery key outside Nori. |
 | `NORI_LISTEN` | no | Listen address (default: `:8080`) |
 | `NORI_DOCKER_HOST` | no | Docker host override |
 | `NORI_TERMINAL_DIR` | no | Initial terminal directory (default: current directory; Docker image: `/data`) |

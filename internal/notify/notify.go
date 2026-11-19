@@ -359,3 +359,8 @@ func (m *Multi) each(send func(Notifier) error) error {
 	}
 	return errors.Join(errs...)
 }
+
+// SendAdmin sends a plain-text notice to the configured administrator number.
+func (t *Twilio) SendAdmin(ctx context.Context, text string) error {
+	return t.send(ctx, text)
+}

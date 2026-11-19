@@ -1,0 +1,288 @@
+package web
+
+import (
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"nori/internal/backup"
+	"nori/internal/store"
+)
+
+templ backupPage(data backupPageData, csrf string) {
+	@Layout("Backups", csrf, backupContent(data, csrf))
+}
+
+templ backupContent(data backupPageData, csrf string) {
+	<section class="page-heading">
+		if data.Service != nil {
+			<div class="breadcrumb"><a href={ templ.SafeURL("/services/" + url.PathEscape(data.Service.Name)) }>← { data.Service.Name }</a></div>
+		}
+		<h1>Backups</h1>
+	</section>
+	if data.Service != nil {
+		@serviceBackupPolicy(*data.Service, data.Policy, data.Detected, csrf)
+	} else {
+		<section class="panel form-panel">
+			<h2>Import a backup</h2>
+			<form method="post" action="/backups/import" enctype="multipart/form-data" class="service-form">
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<div class="field">
+					<label for="backup-identity">Recovery key for a different instance</label>
+					<input id="backup-identity" type="password" name="identity" autocomplete="off"/>
+				</div>
+				<div class="field">
+					<label for="backup-file">Backup file</label>
+					<input id="backup-file" type="file" name="archive" accept=".nori" required/>
+				</div>
+				<div class="form-actions"><button class="button button-primary" type="submit">Review import</button></div>
+			</form>
+			if data.B2.Enabled() {
+				<a href="/backups/b2">Browse Backblaze B2 backups</a>
+			}
+		</section>
+		if data.KeyAvailable {
+			<section class="panel form-panel">
+				<h2>Recovery key</h2>
+				<p>Store an exported key outside this server. You’ll need it to restore on another instance.</p>
+				<form method="post" action="/backups/key">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<button class="button button-secondary" type="submit">Download recovery key</button>
+				</form>
+			</section>
+		}
+		@backupDiskSettings(data.Disks, data.DiskPolicy, csrf)
+		@backupB2Settings(data.B2, csrf)
+	}
+	@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+}
+
+templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []store.BackupSource, csrf string) {
+	<section class="panel form-panel">
+		<div class="panel-heading">
+			<h2>{ svc.Name } backup policy</h2>
+			<form method="post" class="inline-form" action={ templ.SafeURL(serviceBackupsURL(svc.Name) + "/create") }>
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<button class="button button-primary" type="submit">Create backup now</button>
+			</form>
+		</div>
+		<form method="post" action={ templ.SafeURL(serviceBackupsURL(svc.Name)) } class="service-form">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="form-grid">
+				<div class="field"><label for="backup-schedule">Schedule</label><input id="backup-schedule" name="schedule" value={ p.Schedule } placeholder="0 3 * * *"/><span class="field-help">Cron in the server’s timezone. Leave blank for manual backups.</span></div>
+				<div class="field"><label for="backup-keep">Local copies to retain</label><input required id="backup-keep" type="number" min="1" max="100" name="keep" value={ strconv.Itoa(p.Keep) }/></div>
+				<label><input name="local_only" type="checkbox" checked?={ p.LocalOnly }/> Store copies locally only</label>
+				if svc.DeploymentMode == store.DeploymentModePostgres {
+					<label><input name="skip_postgres" type="checkbox" checked?={ p.SkipPostgres }/> Exclude the managed PostgreSQL database</label>
+				}
+				if svc.DeploymentMode == store.DeploymentModePostgres || svc.DeploymentMode == store.DeploymentModeSingleContainer {
+					<label><input name="stop_app" type="checkbox" checked?={ p.StopApp }/> Stop the managed application during data capture</label>
+				}
+				<div class="field field-wide">
+					<label for="backup-sources">Filesystem sources</label>
+					<textarea id="backup-sources" name="sources" rows="4" placeholder="volume app-data">{ backupSources(p.Sources) }</textarea>
+					<span class="field-help">One per line. Use <code>volume NAME</code>, <code>managed LOGICAL_NAME</code> or <code>bind /absolute/path</code>.</span>
+					if len(detected) > 0 {
+						<details><summary>Detected mounts</summary><pre>{ backupSources(detected) }</pre></details>
+					}
+				</div>
+				<div class="field"><label for="backup-quiesce">Quiesce command</label><textarea id="backup-quiesce" name="quiesce" rows="3">{ p.Quiesce }</textarea></div>
+				<div class="field"><label for="backup-resume">Resume command</label><textarea id="backup-resume" name="resume" rows="3">{ p.Resume }</textarea></div>
+				<div class="field"><label for="backup-export">Export command</label><textarea id="backup-export" name="export" rows="3">{ p.Export }</textarea></div>
+				<div class="field"><label for="backup-import">Import command</label><textarea id="backup-import" name="import" rows="3">{ p.Import }</textarea></div>
+			</div>
+			<p class="field-help">Commands run with the service environment. Export writes to <code>$NORI_BACKUP_WORK</code> and import reads from it. Quiesce and resume must be safe to retry. Use the service dotenv for credentials.</p>
+			<div class="form-actions"><button class="button button-primary" type="submit">Save backup policy</button></div>
+		</form>
+	</section>
+}
+
+templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
+	<section class="panel detail-panel history-panel">
+		<h2>Backup history</h2>
+		if len(jobs) == 0 {
+			<p>No backups yet.</p>
+		} else {
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Service</th><th>Created</th><th>Local archive</th><th>Backblaze B2</th><th>Actions</th></tr></thead>
+					<tbody>
+						for _, job := range jobs {
+							<tr>
+								<td>{ job.ServiceName }</td>
+								<td>{ job.Created.Format("2006-01-02 15:04 MST") }</td>
+								<td>{ job.Status }
+									if job.Message != "" {
+										<div>{ job.Message }</div>
+									}
+								</td>
+								<td>{ job.UploadStatus }</td>
+								<td>
+									if job.Status == "complete" {
+										<div class="action-row">
+											<a class="button button-secondary button-small" href={ templ.SafeURL(backupJobURL(job.ID) + "/download") }>Download</a>
+											<form method="post" action={ templ.SafeURL(backupJobURL(job.ID) + "/import") } class="inline-form">
+												<input type="hidden" name="csrf_token" value={ csrf }/>
+												<button class="button button-secondary button-small" type="submit">Review restore</button>
+											</form>
+											if b2 && (job.UploadStatus == "retry" || job.UploadStatus == "failed") {
+												<form method="post" action={ templ.SafeURL(backupJobURL(job.ID) + "/retry") } class="inline-form">
+													<input type="hidden" name="csrf_token" value={ csrf }/>
+													<button class="button button-secondary button-small" type="submit">Retry upload</button>
+												</form>
+											}
+										</div>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}
+
+templ backupDiskSettings(disks []backup.DiskUsage, p backup.DiskPolicy, csrf string) {
+	<section class="panel form-panel" id="disk-space">
+		<h2>Disk space</h2>
+		<ul>
+			for _, disk := range disks {
+				<li><code>{ disk.Path }</code> · { disk.Status } · { fmt.Sprintf("%.1f GiB of %.1f GiB free", float64(disk.Available)/float64(backup.GiB), float64(disk.Total)/float64(backup.GiB)) }</li>
+			}
+		</ul>
+		<form method="post" action="/backups/disks" class="service-form">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="form-grid">
+				<div class="field"><label for="backup-wp">Warning threshold (%)</label><input id="backup-wp" name="warning_percent" type="number" min="0" max="95" required value={ strconv.FormatInt(p.WarningPercent, 10) }/></div>
+				<div class="field"><label for="backup-wb">Warning threshold (GiB)</label><input id="backup-wb" name="warning_gib" type="number" min="0" required value={ strconv.FormatInt(p.WarningBytes / backup.GiB, 10) }/></div>
+				<div class="field"><label for="backup-cp">Critical threshold (%)</label><input id="backup-cp" name="critical_percent" type="number" min="0" max="95" required value={ strconv.FormatInt(p.CriticalPercent, 10) }/></div>
+				<div class="field"><label for="backup-cb">Critical threshold (GiB)</label><input id="backup-cb" name="critical_gib" type="number" min="0" required value={ strconv.FormatInt(p.CriticalBytes / backup.GiB, 10) }/></div>
+				<div class="field field-wide"><label for="backup-paths">Additional paths to monitor</label><textarea id="backup-paths" name="paths" rows="3">{ strings.Join(p.Paths, "\n") }</textarea><span class="field-help">One absolute path per line, visible from Nori.</span></div>
+			</div>
+			<p class="field-help">Either threshold can trigger an alert through configured administrator notification channels.</p>
+			<div class="form-actions"><button class="button button-primary" type="submit">Save disk thresholds</button></div>
+		</form>
+	</section>
+}
+
+templ backupB2Settings(c backup.B2Config, csrf string) {
+	<section class="panel form-panel" id="backblaze">
+		<h2>Backblaze B2</h2>
+		<form method="post" action="/backups/b2" class="service-form">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="form-grid">
+				<div class="field"><label for="b2-bucket">Private bucket</label><input id="b2-bucket" name="bucket" value={ c.Bucket }/></div>
+				<div class="field"><label for="b2-region">S3 region</label><input id="b2-region" name="region" value={ c.Region } placeholder="eu-central-003"/></div>
+				<div class="field"><label for="b2-prefix">Object prefix</label><input id="b2-prefix" name="prefix" value={ c.Prefix }/></div>
+				<div class="field"><label for="b2-key-id">Application key ID</label><input id="b2-key-id" name="key_id" value={ c.KeyID } autocomplete="off"/></div>
+				<div class="field"><label for="b2-app-key">Application key</label><input id="b2-app-key" type="password" name="app_key" autocomplete="new-password"/><span class="field-help">Leave blank to keep the saved key.</span></div>
+				<label><input name="disabled" type="checkbox" checked?={ c.Disabled }/> Pause Backblaze B2 access</label>
+				<label><input name="read_only" type="checkbox" checked?={ c.ReadOnly }/> Use Backblaze B2 for imports only</label>
+			</div>
+			<div class="form-actions"><button class="button button-primary" type="submit">Save Backblaze settings</button></div>
+		</form>
+	</section>
+}
+
+templ backupB2Page(objects []string, next, csrf string) {
+	@Layout("Backblaze backups", csrf, backupB2Content(objects, next, csrf))
+}
+
+templ backupB2Content(objects []string, next, csrf string) {
+	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
+	<h1>Backblaze backups</h1>
+	<section class="panel form-panel">
+		if len(objects) > 0 {
+			<form method="post" action="/backups/b2/import" class="service-form">
+				<input type="hidden" name="csrf_token" value={ csrf }/>
+				<div class="field"><label for="b2-object">Backup object</label>
+					<select id="b2-object" name="key" required>
+						for _, object := range objects {
+							<option value={ object }>{ object }</option>
+						}
+					</select>
+				</div>
+				<div class="field"><label for="b2-identity">Recovery key for a different instance</label><input id="b2-identity" type="password" name="identity" autocomplete="off"/></div>
+				<div class="form-actions"><button class="button button-primary" type="submit">Review import</button></div>
+			</form>
+		} else {
+			<p>No backup files on this page.</p>
+		}
+		if next != "" {
+			<a href={ templ.SafeURL("/backups/b2?cursor=" + url.QueryEscape(next)) }>Next page</a>
+		}
+	</section>
+}
+
+templ backupReviewPage(manifest backup.Manifest, token, csrf string) {
+	@Layout("Review restore", csrf, backupReviewContent(manifest, token, csrf))
+}
+
+templ backupReviewContent(manifest backup.Manifest, token, csrf string) {
+	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
+	<h1>Restore { manifest.Service.Name }</h1>
+	<section class="panel form-panel">
+		<p>This backup contains service configuration and its environment document.</p>
+		if _, exists := manifest.Files["postgres"]; exists {
+			<p>Managed PostgreSQL dump
+				if timestamp := manifest.Captured["postgres"]; !timestamp.IsZero() {
+					<span>· { timestamp.Local().Format("2006-01-02 15:04 MST") }</span>
+				}
+			</p>
+			if manifest.Postgres != nil {
+				<p>Source PostgreSQL major version { strconv.Itoa(manifest.Postgres.ServerVersion / 10000) }</p>
+			}
+		}
+		if manifest.Service.WatchedImage != "" {
+			<p>Application image <code>{ manifest.Service.WatchedImage }</code> { manifest.Digest }</p>
+		}
+		<form method="post" action={ templ.SafeURL("/backups/restore/" + token) } class="service-form">
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="form-grid">
+				<div class="field"><label for="restore-name">New service name</label><input id="restore-name" name="name" required value={ manifest.Service.Name }/></div>
+				if manifest.Service.DeploymentMode == store.DeploymentModePostgres || manifest.Service.DeploymentMode == store.DeploymentModeSingleContainer {
+					<div class="field"><label for="restore-network">Override serving network</label><input id="restore-network" name="network"/></div>
+					<div class="field"><label for="restore-domain">Override proxy domain</label><input id="restore-domain" name="domain"/></div>
+				} else {
+					<div class="field field-wide"><label for="restore-script">Deployment script</label><textarea id="restore-script" name="deploy_script" rows="8">{ manifest.Service.DeployScript }</textarea></div>
+				}
+				for i, source := range manifest.Policy.Sources {
+					if source.Type == "managed" {
+						<p>Managed volume <code>{ source.Path }</code> will be restored into a new volume.</p>
+					} else {
+						<div class="field"><label for={ "restore-target-" + strconv.Itoa(i) }>New destination for <code>{ source.Type + " " + source.Path }</code></label><input id={ "restore-target-" + strconv.Itoa(i) } name={ "target_" + strconv.Itoa(i) } required value={ source.Path }/>
+							if timestamp := manifest.Captured["source-" + strconv.Itoa(i)]; !timestamp.IsZero() {
+								<span class="field-help">Captured { timestamp.Local().Format("2006-01-02 15:04 MST") }</span>
+							}
+						</div>
+					}
+				}
+				if manifest.Policy.Import != "" || manifest.Policy.Resume != "" {
+					<div class="field field-wide">
+						<details><summary>Review backup commands</summary>
+							if manifest.Policy.Import != "" {
+								<h3>Import</h3><pre>{ manifest.Policy.Import }</pre>
+							}
+							if manifest.Policy.Export != "" {
+								<h3>Export</h3><pre>{ manifest.Policy.Export }</pre>
+							}
+							if manifest.Policy.Resume != "" {
+								<h3>Resume</h3><pre>{ manifest.Policy.Resume }</pre>
+							}
+							if manifest.Policy.Quiesce != "" {
+								<h3>Quiesce</h3><pre>{ manifest.Policy.Quiesce }</pre>
+							}
+						</details>
+						<label><input name="reviewed" type="checkbox"/> I reviewed these commands and authorize them on this host</label>
+					</div>
+				}
+			</div>
+			<div class="form-actions">
+				<button class="button button-secondary" name="cancel" value="1" type="submit" formnovalidate>Cancel</button>
+				<button class="button button-primary" type="submit">Restore as new service</button>
+			</div>
+		</form>
+	</section>
+}
