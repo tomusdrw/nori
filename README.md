@@ -411,6 +411,47 @@ instance using the exported key, then check the restored database and files.
 The restored service starts with manual deploy policy. Deploy it separately
 after checking the configuration and choosing the correct proxy and ports.
 
+## Service resources
+
+Open **Resources** to rank services and individual storage sources by size or
+growth over 24 hours and seven days. Open a service to see the containers,
+volumes, and directories behind its totals and compare its history with
+deployment times. A shared volume appears under each attached service and
+counts once in the instance total. Unlabelled resources appear under
+**Unattributed**. Custom deployments can identify their containers with the
+`nori.service` label set to the service name.
+
+Nori samples CPU (100% per core), memory and its limit, network throughput,
+disk read/write throughput, and process/thread counts every minute. Storage
+is sampled independently every 15 minutes. Sources include Docker volumes,
+container writable layers, accessible container logs, local backup archives,
+and host directories selected in resource settings or in the service's backup
+policy. With a local Docker socket and containerized Nori, mount directories
+that should be measured read-only in Nori. Remote daemon paths are never
+interpreted as local paths.
+Nori reports unavailable measurements and partial totals when the daemon,
+driver, or filesystem cannot supply a size. Totals use Docker-reported sizes
+and file lengths, which can differ from allocated disk blocks for sparse or
+compressed files. They cover the tracked sources; free space for the whole
+filesystem is shown under **Backups**.
+
+After a container restarts or more than two minutes pass between samples,
+Nori shows current gauges such as memory immediately. CPU and throughput
+return with the next sample, once Nori can calculate a fresh rate.
+
+Managed PostgreSQL storage has its own entry. Enable PostgreSQL details in
+the service's resource settings to measure the logical database size and its
+ten largest tables. Those figures are shown separately from physical usage.
+SQLite retains detailed samples for 24 hours and the last observation in each
+hour for 30 days. Historical comparisons become available as samples accumulate.
+
+Service resource settings can alert on runtime usage, total storage usage, or
+sustained storage growth. A growth alert requires the configured daily rate in
+both halves of the preceding day. Nori sends threshold crossings to configured
+administrator channels (Telegram and SMS) and remembers alert state across
+restarts. Low-disk notifications link to the instance breakdown. Configure
+the public dashboard URL in Settings to include absolute links in notifications.
+
 ## Notifications (optional)
 
 Nori can notify external channels about four kinds of events:

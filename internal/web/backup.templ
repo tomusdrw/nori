@@ -152,6 +152,7 @@ templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 templ backupDiskSettings(disks []backup.DiskUsage, p backup.DiskPolicy, csrf string) {
 	<section class="panel form-panel" id="disk-space">
 		<h2>Disk space</h2>
+		<a class="button button-secondary button-small" href="/resources">View resource breakdown</a>
 		<ul>
 			for _, disk := range disks {
 				<li><code>{ disk.Path }</code> · { disk.Status } · { fmt.Sprintf("%.1f GiB of %.1f GiB free", float64(disk.Available)/float64(backup.GiB), float64(disk.Total)/float64(backup.GiB)) }</li>
