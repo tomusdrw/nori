@@ -67,7 +67,7 @@ func TestBrandingPagesReferenceTheMascotAndIcons(t *testing.T) {
 		name string
 		page templ.Component
 	}{
-		{"dashboard", Page(nil, "csrf")},
+		{"dashboard", Page(dashboardView{}, "csrf")},
 		{"login", LoginPage("", "", "/")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

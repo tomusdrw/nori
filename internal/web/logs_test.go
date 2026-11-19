@@ -51,7 +51,7 @@ func TestJSONLogsInDashboardAndStream(t *testing.T) {
 		t.Fatalf("preview = %q, want %q", preview, formatted)
 	}
 	page := httptest.NewRecorder()
-	if err := Page([]ServiceView{{Name: "app", RecentLogs: preview}}, "").Render(context.Background(), page); err != nil {
+	if err := Page(dashboardView{Count: 1, Groups: []dashboardGroup{{Services: []ServiceView{{Name: "app", RecentLogs: preview}}}}}, "").Render(context.Background(), page); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(page.Body.String(), html.EscapeString(formatted)) {

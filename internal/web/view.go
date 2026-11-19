@@ -10,6 +10,7 @@ import (
 type ServiceView struct {
 	ID              int64
 	Name            string
+	Group           string
 	State           string
 	RunningVersion  string
 	LatestVersion   string

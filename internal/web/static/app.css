@@ -159,6 +159,50 @@ code { color: #c9c2ff; font-size: 0.88em; }
 
 .service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 
+.dashboard-groups { display: grid; gap: 22px; }
+.dashboard-group { display: grid; gap: 10px; scroll-margin-top: 88px; }
+.dashboard-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+.dashboard-group-heading { display: flex; align-items: center; min-width: 0; flex-wrap: wrap; gap: 0 10px; }
+.dashboard-group-heading h2 { min-width: 0; margin: 0; font-size: 1rem; }
+.dashboard-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.dashboard-group-toggle:hover { color: #c9c2ff; }
+.group-chevron { flex: 0 0 auto; color: var(--primary-bright); }
+.dashboard-group-toggle[aria-expanded="true"] .group-chevron { transform: rotate(90deg); }
+.dashboard-group-handle { min-width: 34px; padding: 3px; font-size: 1.15rem; cursor: grab; touch-action: none; }
+.dashboard-group-handle:active { cursor: grabbing; }
+.dashboard-group.is-moving { opacity: 0.55; }
+.dashboard-group[data-group-drop="before"] { box-shadow: 0 -2px var(--primary-bright); }
+.dashboard-group[data-group-drop="after"] { box-shadow: 0 2px var(--primary-bright); }
+.dashboard-group-status { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-muted); font-size: 0.75rem; }
+.dashboard-group-status .status-dot { margin-right: 4px; }
+.group-screen-reader { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (pointer: coarse) {
+  .dashboard-group-handle { min-width: 44px; min-height: 44px; }
+}
+.dashboard-group-count, .dashboard-group-empty { color: var(--text-muted); font-size: 0.8rem; }
+.dashboard-group-empty { margin: 0; padding: 4px 12px; }
+
 .service-card,
 .panel,
 .stat-card {

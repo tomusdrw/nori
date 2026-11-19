@@ -51,21 +51,23 @@ func parseRoutingForm(channels Channels, form url.Values) notify.Routing {
 }
 
 type ServiceFormData struct {
-	Description     string
-	Name            string
-	WatchedImage    string
-	Policy          string
-	CronExpr        string
-	DeployScript    string
-	EnvFile         string
-	HealthURL       string
-	ConfigVersion   int64
-	ReloadURL       string
-	IsSelf          bool
-	ManualScript    bool
-	DeploymentMode  string
-	TemplateConfig  string
-	TemplatePreview string
+	Description      string
+	Group            string
+	GroupSuggestions []string
+	Name             string
+	WatchedImage     string
+	Policy           string
+	CronExpr         string
+	DeployScript     string
+	EnvFile          string
+	HealthURL        string
+	ConfigVersion    int64
+	ReloadURL        string
+	IsSelf           bool
+	ManualScript     bool
+	DeploymentMode   string
+	TemplateConfig   string
+	TemplatePreview  string
 }
 
 type ServiceDetailData struct {

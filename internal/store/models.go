@@ -22,6 +22,7 @@ const (
 type Service struct {
 	ID             int64
 	Description    string `json:"description"`
+	Group          string `json:"group"`
 	Name           string
 	WatchedImage   string
 	Policy         Policy
