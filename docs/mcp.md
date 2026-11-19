@@ -154,6 +154,23 @@ Omitting `description` on update preserves it; an empty string clears it.
 Existing services default to an empty description. Description updates use the
 same configuration version checks as other fields.
 
+## Dashboard groups
+
+`list_services` and `get_service` return the service's current `group`.
+`create_service` accepts an optional `group` string. `update_service` keeps
+the current group if the field is omitted. An empty string or `Ungrouped`
+assigns the default group. Any new name creates a named group when the service
+is saved.
+
+Use the group requested by the user. Otherwise, consult `list_services` and
+reuse an existing group for clearly related services, such as an API and
+worker in the same application. Keep ambiguous services in `Ungrouped` and
+preserve existing assignments unless a move is intended.
+
+The store commits membership alongside the service configuration. The
+`service_group` table holds dashboard order and folded state independently
+of membership. An absent `service_group_member` row means `Ungrouped`.
+
 ## Manual script services
 
 To register a script for explicit execution, call `create_service` with these arguments:
