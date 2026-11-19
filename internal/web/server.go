@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"io/fs"
 	"log"
@@ -876,7 +875,8 @@ func (s *Server) handleDeployment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	_ = DeploymentPage(d.ID, d.Status, d.Log, s.csrf(r)).Render(r.Context(), w)
+	w.Header().Set("Cache-Control", "no-store")
+	_ = DeploymentPage(s.deploymentProgress(d), s.csrf(r)).Render(r.Context(), w)
 }
 
 func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) {
@@ -891,10 +891,9 @@ func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, html.EscapeString(d.Log))
-	if d.Status == store.DeployRunning || d.Status == store.DeployPending {
-		w.Header().Set("HX-Trigger", "continue")
-	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Nori-Log-Refresh", "ok")
+	_ = deploymentLog(s.deploymentProgress(d)).Render(r.Context(), w)
 }
 
 // handleLogsStream serves the service detail page's log panel as a fragment:
@@ -903,10 +902,13 @@ func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) 
 // unknown names fall back to the first container so stale tabs from an
 // earlier page load still resolve after a redeploy.
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
 	name := chi.URLParam(r, "name")
-	cs, err := s.docker.ListByService(r.Context(), name)
+	cs, err := s.docker.ListByService(ctx, name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeDockerLogError(w)
 		return
 	}
 	names := make([]string, len(cs))
@@ -923,10 +925,21 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	var logs string
 	if selected != "" {
 		idx := slices.Index(names, selected)
-		logs = s.containerLogs(r.Context(), cs[idx:idx+1], 100)
+		lines, err := s.readContainerLog(ctx, cs[idx].ID, 100)
+		if err != nil {
+			writeDockerLogError(w)
+			return
+		}
+		logs = strings.Join(lines, "\n")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Nori-Log-Refresh", "ok")
 	_ = containerLogsFragment(name, names, selected, logs).Render(r.Context(), w)
+}
+
+func writeDockerLogError(w http.ResponseWriter) {
+	w.Header().Set("X-Nori-Log-Refresh", "docker-error")
+	http.Error(w, "Could not read container logs", http.StatusServiceUnavailable)
 }
 
 // recentLogs returns a compact, readable tail for dashboard cards. The full
@@ -949,12 +962,7 @@ func (s *Server) recentLogs(ctx context.Context, cs []docker.Container, lineLimi
 func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail int) string {
 	var b strings.Builder
 	for _, c := range cs {
-		rc, err := s.docker.Logs(ctx, c.ID, tail)
-		if err != nil {
-			continue
-		}
-		lines := readLogLines(rc)
-		rc.Close()
+		lines, _ := s.readContainerLog(ctx, c.ID, tail)
 		for _, line := range lines {
 			b.WriteString(line)
 			b.WriteByte('\n')
@@ -963,7 +971,16 @@ func (s *Server) containerLogs(ctx context.Context, cs []docker.Container, tail 
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func readLogLines(rc io.Reader) []string {
+func (s *Server) readContainerLog(ctx context.Context, id string, tail int) ([]string, error) {
+	rc, err := s.docker.Logs(ctx, id, tail)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return readLogLines(rc)
+}
+
+func readLogLines(rc io.Reader) ([]string, error) {
 	scanner := bufio.NewScanner(rc)
 	// Container log lines are user-controlled and can be substantially longer
 	// than bufio.Scanner's default token limit.
@@ -979,7 +996,7 @@ func readLogLines(rc io.Reader) []string {
 		}
 		lines = append(lines, formatLogLine(line))
 	}
-	return lines
+	return lines, scanner.Err()
 }
 
 func (s *Server) getServiceByName(w http.ResponseWriter, r *http.Request) (*store.Service, error) {
