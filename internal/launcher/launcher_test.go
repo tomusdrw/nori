@@ -113,7 +113,7 @@ func TestUpdateSwapsToDigestAndRecordsPrevious(t *testing.T) {
 	}
 	wantPrefixes := [][]string{
 		{"docker", "pull", "ghcr.io/acme/nori:latest@sha256:new"},
-		{"docker", "stop", "--timeout", "645", "nori"},
+		{"docker", "stop", "-t", "645", "nori"},
 		{"docker", "rm", "nori"},
 		{"docker", "run", "-d", "--name", "nori"},
 	}
