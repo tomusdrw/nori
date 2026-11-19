@@ -75,12 +75,16 @@ func TestDeploymentStreamTracksQuietRunAndCompletion(t *testing.T) {
 		t.Errorf("stale deployment: %s", body)
 	}
 
+	running, err := st.GetDeployment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	close(finish)
 	finish = nil
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		body := stream(id)
-		if strings.Contains(body, "badge-deploy-success") {
+		if strings.Contains(body, "badge-deploy-success") && !ex.DeploymentActive(id) {
 			if strings.Contains(body, "hx-trigger") || !strings.Contains(body, "finished &lt;script&gt;") {
 				t.Fatalf("completed deployment: %s", body)
 			}
@@ -90,5 +94,10 @@ func TestDeploymentStreamTracksQuietRunAndCompletion(t *testing.T) {
 			t.Fatalf("deployment did not finish: %s", body)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// The worker can finish between the handler's read and its activity check.
+	progress := srv.deploymentProgress(ctx, running)
+	if progress.Status != store.DeploySuccess || progress.Log != "finished <script>" || progress.Elapsed == "" || progress.Poll {
+		t.Errorf("progress from pre-completion read: %+v", progress)
 	}
 }

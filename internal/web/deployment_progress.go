@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"time"
 
 	"nori/internal/store"
@@ -15,7 +16,14 @@ type deploymentProgressView struct {
 	Poll        bool
 }
 
-func (s *Server) deploymentProgress(d *store.Deployment) deploymentProgressView {
+func (s *Server) deploymentProgress(ctx context.Context, d *store.Deployment) deploymentProgressView {
+	active := d.Status == store.DeployRunning && s.executor != nil && s.executor.DeploymentActive(d.ID)
+	if d.Status == store.DeployRunning && !active {
+		// Completion can be persisted between the initial read and the activity check.
+		if latest, err := s.store.GetDeployment(ctx, d.ID); err == nil {
+			d = latest
+		}
+	}
 	view := deploymentProgressView{ID: d.ID, Status: d.Status, Log: d.Log}
 	var end time.Time
 	switch {
@@ -24,7 +32,7 @@ func (s *Server) deploymentProgress(d *store.Deployment) deploymentProgressView 
 		view.Explanation = "Waiting for the deployment to start."
 	case d.Status == store.DeployRunning:
 		view.Poll = true
-		if s.executor != nil && s.executor.DeploymentActive(d.ID) {
+		if active {
 			end = time.Now()
 			if view.Log == "" {
 				view.Explanation = "Output will appear when the run finishes."

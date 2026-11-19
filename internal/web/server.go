@@ -876,7 +876,7 @@ func (s *Server) handleDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	_ = DeploymentPage(s.deploymentProgress(d), s.csrf(r)).Render(r.Context(), w)
+	_ = DeploymentPage(s.deploymentProgress(r.Context(), d), s.csrf(r)).Render(r.Context(), w)
 }
 
 func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) {
@@ -893,7 +893,7 @@ func (s *Server) handleDeploymentStream(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Nori-Log-Refresh", "ok")
-	_ = deploymentLog(s.deploymentProgress(d)).Render(r.Context(), w)
+	_ = deploymentLog(s.deploymentProgress(r.Context(), d)).Render(r.Context(), w)
 }
 
 // handleLogsStream serves the service detail page's log panel as a fragment:
