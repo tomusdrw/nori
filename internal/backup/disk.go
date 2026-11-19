@@ -175,6 +175,12 @@ func (m *Manager) monitorDisks(ctx context.Context) {
 	}
 }
 
+// ArchiveDir returns the configured local archive directory for this database.
+func ArchiveDir(dataPath string) (string, error) {
+	dir, _, err := backupDir(dataPath)
+	return dir, err
+}
+
 func backupDir(dataPath string) (dir, dataDir string, err error) {
 	dataDir, err = filepath.Abs(filepath.Dir(dataPath))
 	if err != nil {

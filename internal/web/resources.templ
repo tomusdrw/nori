@@ -1,0 +1,184 @@
+package web
+
+import "strconv"
+import "strings"
+import "nori/internal/store"
+
+templ resourcesPage(data resourcesOverview, csrf string) {
+	@Layout("Resources", csrf, resourcesContent(data))
+}
+
+templ resourcesContent(data resourcesOverview) {
+	<section class="page-heading">
+		<div><h1>Resources</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
+	</section>
+	@storageSummary(data.view.storageFor(-1))
+	@resourceRankings(data.services, "Each service includes its attached shared storage. The instance total counts each source once.")
+	@resourceRankings(data.sources, "Docker-reported sizes and file sizes for monitored directories, logs and local backup archives.")
+	@resourceRankings(data.runtime, "")
+	if len(data.unattributed.rows) > 0 {
+		@resourceRankings(data.unattributed, "")
+	}
+}
+
+templ storageSummary(values map[string]resourceValue) {
+	<section class="stats-grid" aria-label="Tracked storage">
+		for _, metric := range storageMetrics {
+			<div class="stat-card resource-stat"><span class="metric-label">Tracked storage · { metric.label }</span><strong>{ values[metric.key].text(metric.key) }</strong></div>
+		}
+	</section>
+}
+
+templ resourceRankings(table resourceTable, description string) {
+	<section class="panel detail-panel resource-panel">
+		<div class="panel-heading">
+			<div>
+				<h2>{ table.title }</h2>
+				if description != "" {
+					<p>{ description }</p>
+				}
+			</div>
+		</div>
+		if len(table.rows) == 0 {
+			<p class="resource-empty">No samples available.</p>
+		} else {
+			<div class="table-wrap" tabindex="0" role="region" aria-label={ table.title }>
+				<table>
+					<thead>
+						<tr>
+							<th scope="col">{ table.first }</th>
+							if table.context != "" {
+								<th scope="col">{ table.context }</th>
+							}
+							for _, col := range table.columns {
+								if table.sortable {
+									<th scope="col" aria-sort={ table.sortDirection(col.key) }>
+										<a href={ templ.SafeURL(table.sortURL(col.key)) }>
+											{ col.label }
+											if col.key == table.sortKey {
+												if table.order == "asc" {
+													<span aria-hidden="true">↑</span>
+												} else {
+													<span aria-hidden="true">↓</span>
+												}
+											}
+										</a>
+									</th>
+								} else {
+									<th scope="col">{ col.label }</th>
+								}
+							}
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range table.rows {
+							<tr>
+								<td class="table-primary">
+									if row.url != "" {
+										<a href={ templ.SafeURL(row.url) }>{ row.name }</a>
+									} else {
+										{ row.name }
+									}
+								</td>
+								if table.context != "" {
+									<td>{ row.detail }</td>
+								}
+								for _, col := range table.columns {
+									<td>{ row.values[col.key].text(col.key) }</td>
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}
+
+templ serviceResourcesPage(data serviceResourceData, csrf string) {
+	@Layout(data.svc.Name+" resources", csrf, serviceResourcesContent(data, csrf))
+}
+
+templ serviceResourcesContent(data serviceResourceData, csrf string) {
+	<div class="breadcrumb"><a href="/resources">← All resources</a></div>
+	<section class="page-heading">
+		<div><h1>{ data.svc.Name } resources</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
+		<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.svc.Name) }>Service overview</a>
+	</section>
+	@storageSummary(data.view.storageFor(data.svc.ID))
+	<section class="panel detail-panel resource-panel">
+		<div class="panel-heading">
+			<div><h2>Resource history</h2><p>{ data.period.startLabel } – { data.period.endLabel }</p></div>
+			<nav aria-label="History range" class="resource-ranges">
+				for _, key := range []string{"1h", "24h", "7d", "30d"} {
+					if data.period.key == key {
+						<a class="log-tab active" aria-current="true" href={ templ.SafeURL("?range=" + key) }>{ key }</a>
+					} else {
+						<a class="log-tab" href={ templ.SafeURL("?range=" + key) }>{ key }</a>
+					}
+				}
+			</nav>
+		</div>
+		<div class="resource-charts">
+			for _, chart := range data.charts {
+				<figure>
+					<figcaption><strong>{ chart.label }</strong><span>{ chart.current }</span></figcaption>
+					if chart.path != "" {
+						<svg class="resource-plot" viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={ chart.label + " history, peak " + chart.peak }>
+							for _, marker := range data.period.markers {
+								<line class="resource-marker" x1={ marker.x } x2={ marker.x } y1="0" y2="100"><title>{ marker.label }</title></line>
+							}
+							<path class="resource-trend" d={ chart.path }></path>
+						</svg>
+						<small>Peak { chart.peak }</small>
+					} else {
+						<p class="resource-no-history">No numeric measurements in this period</p>
+					}
+				</figure>
+			}
+		</div>
+		if len(data.period.markers) > 0 {
+			<details class="resource-deployments">
+				<summary>Deployment markers ({ strconv.Itoa(len(data.period.markers)) })</summary>
+				<ul>
+					for _, marker := range data.period.markers {
+						<li><a href={ templ.SafeURL(marker.url) }>{ marker.label }</a></li>
+					}
+				</ul>
+			</details>
+		}
+	</section>
+	@resourceRankings(data.containers, "")
+	@resourceRankings(data.sources, "")
+	if len(data.logical.rows) > 0 {
+		@resourceRankings(data.logical, "Database and largest-table sizes are shown separately from physical storage.")
+	}
+	<section class="panel detail-panel resource-panel" id="thresholds">
+		<div class="panel-heading"><div><h2>Resource settings</h2><p>Thresholds notify the configured administrator channels. Set a threshold to zero to disable it.</p></div></div>
+		if data.saved {
+			<p class="resource-saved" role="status">Resource settings saved.</p>
+		}
+		<form method="post" action={ templ.SafeURL(serviceResourcesURL(data.svc.Name)) }>
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="form-grid">
+				<div class="field"><label for="resource-usage">Usage threshold</label><input id="resource-usage" name="usage_bytes" required value={ displayByteThreshold(data.limits.UsageBytes) }/><span class="field-help">Enter a storage size, for example 512 MiB or 1.5 GiB.</span></div>
+				<div class="field"><label for="resource-growth">Growth threshold (per day)</label><input id="resource-growth" name="growth_bytes" required value={ displayByteThreshold(data.limits.GrowthBytes) }/><span class="field-help">Daily growth rate must reach the threshold in each of two consecutive 12-hour periods.</span></div>
+				<div class="field field-wide"><label for="resource-dirs">Monitored host directories</label><textarea name="directories" id="resource-dirs" rows="3">{ strings.Join(data.limits.Directories, "\n") }</textarea><span class="field-help">One absolute path per line. Directory sizes appear in storage sources.</span></div>
+				if data.svc.DeploymentMode == store.DeploymentModePostgres {
+					<label class="field-wide"><input class="resource-check" type="checkbox" name="postgres_details" value="1" checked?={ data.limits.PostgresDetails }/> Collect PostgreSQL database and largest-table sizes</label>
+				}
+			</div>
+			<details class="resource-runtime-limits">
+				<summary>Runtime usage thresholds</summary>
+				<div class="form-grid">
+					for _, metric := range runtimeMetrics {
+						if metric.key != "limit" {
+							<div class="field"><label for={ "threshold_" + metric.key }>{ metric.label } ({ runtimeUnit(metric.key) })</label><input id={ "threshold_" + metric.key } name={ "threshold_" + metric.key } type="number" min="0" step="any" value={ strconv.FormatFloat(data.limits.Runtime[metric.key], 'g', -1, 64) }/></div>
+						}
+					}
+				</div>
+			</details>
+			<div class="resource-save"><button type="submit" class="button button-primary">Save resource settings</button></div>
+		</form>
+	</section>
+}

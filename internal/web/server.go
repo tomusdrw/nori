@@ -85,6 +85,9 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		s.backupRoutes(r)
 
 		r.Get("/", s.handleDashboard)
+		r.Get("/resources", s.handleResources)
+		r.Get("/services/{name}/resources", s.handleServiceResources)
+		r.Post("/services/{name}/resources", s.handleResourceLimits)
 		r.Get("/terminal", s.handleTerminal)
 		r.Get("/terminal/ws", s.handleTerminalWebSocket)
 		r.Get("/partials/services", s.handleServicesPartial)

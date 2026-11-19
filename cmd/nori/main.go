@@ -20,6 +20,7 @@ import (
 	"nori/internal/notify"
 	"nori/internal/poller"
 	"nori/internal/registry"
+	"nori/internal/resources"
 	"nori/internal/scheduler"
 	"nori/internal/store"
 	terminalsession "nori/internal/terminal"
@@ -105,8 +106,21 @@ func main() {
 	term := terminalsession.New("nori", cfg.TerminalDir)
 	channels := web.Channels{Twilio: cfg.Twilio.Enabled(), Telegram: cfg.Telegram.Enabled()}
 	srv := web.NewServer(st, dk, ex, pl, a, channels, term)
+	sendAdmin := adminNotifier(cfg, st)
+	var resourceNotify func(context.Context, string, string) error
+	if cfg.Telegram.Enabled() || cfg.Twilio.Enabled() {
+		resourceNotify = sendAdmin
+	}
+	resourceMonitor := resources.NewMonitor(st, resources.NewCollector(st, dk, cfg.DockerHost, cfg.DBPath), resourceNotify)
+	resourcesDone := make(chan struct{})
+	go func() {
+		defer close(resourcesDone)
+		resourceMonitor.Run(ctx)
+	}()
 	var backupDone chan struct{}
-	if manager, err := backup.New(ctx, st, dk, ex, cfg.DBPath, cfg.DockerHost, backupNotifier(cfg)); err != nil {
+	if manager, err := backup.New(ctx, st, dk, ex, cfg.DBPath, cfg.DockerHost, func(ctx context.Context, message string) error {
+		return sendAdmin(ctx, message, "/resources")
+	}); err != nil {
 		log.Printf("backup: initialization failed: %v", err)
 	} else {
 		srv.SetBackups(manager)
@@ -146,6 +160,11 @@ func main() {
 		}
 	}
 	<-httpDone
+	select {
+	case <-resourcesDone:
+	case <-shutdown.Done():
+		log.Print("resources: graceful shutdown timed out")
+	}
 }
 
 // buildNotifier returns the notifier chosen by configuration. When no
@@ -199,7 +218,7 @@ func buildNotifier(cfg config.Config, st *store.Store) notify.Notifier {
 	return &notify.LogFailures{Inner: &notify.Multi{Notifiers: notifiers}}
 }
 
-func backupNotifier(cfg config.Config) func(context.Context, string) error {
+func adminNotifier(cfg config.Config, st *store.Store) func(context.Context, string, string) error {
 	var channels []func(context.Context, string) error
 	if cfg.Telegram.Enabled() {
 		channels = append(channels, notify.NewTelegram(cfg.Telegram.BotToken, cfg.Telegram.ChatID).SendAdmin)
@@ -207,11 +226,20 @@ func backupNotifier(cfg config.Config) func(context.Context, string) error {
 	if cfg.Twilio.Enabled() {
 		channels = append(channels, notify.NewTwilio(cfg.Twilio.AccountSID, cfg.Twilio.AuthToken, cfg.Twilio.From, cfg.Twilio.To).SendAdmin)
 	}
-	return func(ctx context.Context, msg string) error {
-		var err error
-		for _, send := range channels {
-			err = errors.Join(err, send(ctx, msg))
+	return func(ctx context.Context, msg, path string) error {
+		if len(channels) == 0 {
+			return nil
 		}
-		return err
+		settings, err := st.GetMCPConfig(ctx)
+		if err == nil && settings.PublicURL != "" {
+			msg += "\n" + settings.PublicURL + path
+		} else {
+			msg += "\nDashboard: " + path
+		}
+		var deliveryErr error
+		for _, send := range channels {
+			deliveryErr = errors.Join(deliveryErr, send(ctx, msg))
+		}
+		return deliveryErr
 	}
 }
