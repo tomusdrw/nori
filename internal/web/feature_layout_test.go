@@ -54,6 +54,19 @@ func layoutResources() templ.Component {
 	return resourcesPage(data, "csrf")
 }
 
+func layoutDashboard() templ.Component {
+	api := ServiceView{Name: "gateway", State: "running", RunningFor: "3 days", LastDeploy: "3 days ago", Managed: true,
+		RunningVersion: "da4f810", LatestVersion: "e83b7c1", UpdateAvailable: true, RecentLogs: "GET /health 200  2ms\nGET /api/projects 200  18ms"}
+	worker := ServiceView{Name: "website-creator-background-worker", State: "running", RunningFor: "18 hours", LastDeploy: "Yesterday",
+		RunningVersion: "918acfd", LatestVersion: "918acfd", RecentLogs: "Worker ready\nCompleted render job #1842"}
+	batch := ServiceView{Name: "nightly-export", State: "none", ManualScript: true, RunningFor: "—", LastDeploy: "4 hours ago", RecentLogs: "No container logs yet."}
+	return Page(dashboardView{Count: 4, Groups: []dashboardGroup{
+		{ServiceGroup: store.ServiceGroup{ID: 2, Name: "Production"}, Services: []ServiceView{api, worker}},
+		{ServiceGroup: store.ServiceGroup{ID: 3, Name: "Scheduled jobs"}, Services: []ServiceView{batch}},
+		{ServiceGroup: store.ServiceGroup{ID: 1, Name: "Ungrouped", Collapsed: true}, Services: []ServiceView{{Name: "preview", State: "stopped"}}},
+	}}, "csrf")
+}
+
 func TestFeatureLayouts(t *testing.T) {
 	browser := layoutTestBrowser(t)
 	static, err := fs.Sub(staticFS, "static")
@@ -65,6 +78,17 @@ func TestFeatureLayouts(t *testing.T) {
 		component templ.Component
 		probe     string
 	}{
+		{"services", layoutDashboard(), `
+			const totals = [...document.querySelectorAll('.dashboard-summary dd')].map(item => item.textContent);
+			checkLayout(totals.join('|') === '4|2|1', 'live service totals');
+			const name = document.querySelectorAll('.service-name')[1];
+			checkLayout(name.scrollWidth <= name.clientWidth + 1, 'full service name');
+			const folded = document.querySelector('[aria-expanded="false"]');
+			checkLayout(document.getElementById(folded.getAttribute('aria-controls')).hidden, 'folded group');
+			for (const row of document.querySelectorAll('.service-card')) {
+				checkLayout(row.scrollWidth <= row.clientWidth + 1, 'service row overflow');
+			}
+		`},
 		{"backups", layoutBackups(), `
 			const form = document.querySelector('form[action="/backups/import"]');
 			checkLayout([...new FormData(form).keys()].join('|') === 'csrf_token|identity|archive', 'streaming upload field order');

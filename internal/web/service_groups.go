@@ -17,6 +17,20 @@ type dashboardView struct {
 	Count  int
 }
 
+func (d dashboardView) activity() (running, updates int) {
+	for _, group := range d.Groups {
+		for _, service := range group.Services {
+			if service.State == "running" {
+				running++
+			}
+			if service.UpdateAvailable {
+				updates++
+			}
+		}
+	}
+	return running, updates
+}
+
 type dashboardGroup struct {
 	store.ServiceGroup
 	Services []ServiceView

@@ -12,15 +12,11 @@ templ Page(dashboard dashboardView, csrf string) {
 
 templ dashboardContent(dashboard dashboardView, csrf string) {
 	<script src="/static/service-groups.js" type="module"></script>
-	<section class="page-heading">
-		<div>
-			<p class="eyebrow">Overview</p>
-			<h1>Your services</h1>
-			<p class="page-subtitle">Live health, image versions, and deployments in one place.</p>
-		</div>
-		<div class="heading-meta">
-			<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
-			<span>{ serviceCountLabel(dashboard.Count) }</span>
+	<section class="page-heading dashboard-heading">
+		<h1>Services</h1>
+		<div class="help-heading">
+			<span>Service groups</span>
+			@sectionHelp("help-groups", "How do I organize services?", "In New service or Configure, choose a Dashboard group or type a new name. Clear the field to move a service to Ungrouped. Select a group name to fold it. Drag its handle to reorder, or focus the handle and press the up or down arrow. The dashboard saves the order and folded state.")
 		</div>
 	</section>
 	<span id="group-reorder-help" class="group-screen-reader">Drag to reorder, or use the up and down arrow keys.</span>
@@ -30,6 +26,14 @@ templ dashboardContent(dashboard dashboardView, csrf string) {
 
 templ ServicesTablePartial(dashboard dashboardView, csrf string) {
 	<div id="services" class="dashboard-groups" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
+		if dashboard.Count > 0 {
+			{{ running, updates := dashboard.activity() }}
+			<dl class="dashboard-summary">
+				<div><dt>Total services</dt><dd>{ strconv.Itoa(dashboard.Count) }</dd></div>
+				<div><dt>Running</dt><dd>{ strconv.Itoa(running) }</dd></div>
+				<div><dt>Updates available</dt><dd>{ strconv.Itoa(updates) }</dd></div>
+			</dl>
+		}
 		if dashboard.Count == 0 {
 			<section class="empty-state panel">
 				<div class="empty-icon">+</div>
@@ -45,15 +49,15 @@ templ ServicesTablePartial(dashboard dashboardView, csrf string) {
 }
 
 templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
-	<section id={ serviceGroupAnchor(group.ID) } class="dashboard-group" data-group-id={ strconv.FormatInt(group.ID, 10) }>
-		<header class="dashboard-group-header panel">
+	<section id={ serviceGroupAnchor(group.ID) } class="dashboard-group panel" data-group-id={ strconv.FormatInt(group.ID, 10) }>
+		<header class="dashboard-group-header">
 			<div class="dashboard-group-heading">
 				<form method="post" action={ templ.SafeURL(serviceGroupURL(group.ID) + "/fold") } hx-post={ serviceGroupURL(group.ID) + "/fold" } hx-target="#services" hx-swap="outerHTML" hx-sync="#services:replace">
 					<input type="hidden" name="csrf_token" value={ csrf }/>
 					<input type="hidden" name="collapsed" value={ strconv.FormatBool(!group.Collapsed) }/>
 					<h2>
 						<button type="submit" class="dashboard-group-toggle" id={ serviceGroupAnchor(group.ID) + "-toggle" } aria-expanded={ strconv.FormatBool(!group.Collapsed) } aria-controls={ serviceGroupAnchor(group.ID) + "-services" }>
-							<span class="group-chevron" aria-hidden="true">▸</span>
+							<span class="group-chevron" aria-hidden="true"></span>
 							<span>{ group.Name }</span>
 						</button>
 					</h2>
@@ -69,7 +73,7 @@ templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
 			</div>
 			if canMove {
 				<button type="button" class="button button-ghost button-small dashboard-group-handle" id={ serviceGroupAnchor(group.ID) + "-move" } data-group-move={ serviceGroupURL(group.ID) + "/move" } aria-label={ "Reorder " + group.Name } aria-describedby="group-reorder-help" title="Drag to reorder">
-					<span aria-hidden="true">⠿</span>
+					<span class="group-grip" aria-hidden="true"></span>
 				</button>
 			}
 		</header>
@@ -86,62 +90,68 @@ templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
 }
 
 templ serviceCards(views []ServiceView, csrf string) {
-	<div class="service-grid">
-		for _, v := range views {
-			<article class="service-card">
-				<div class="service-card-top">
-					<div class="service-identity">
-						<div class="service-avatar">{ serviceInitial(v.Name) }</div>
-						<div>
-							<a class="service-name" href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a>
-							<div class="service-state"><span class={ "status-dot status-" + v.State }></span>{ v.State }</div>
-						</div>
-					</div>
-					if v.Managed {
-						<span class="badge badge-update">managed</span>
-					}
-					if v.ManualScript {
-						<span class="badge badge-manual">Manual deployment</span>
-					}
-					if v.UpdateAvailable {
-						<span class="badge badge-update">update available</span>
-					}
-				</div>
-				<div class="service-metrics">
-					<div>
-						<span class="metric-label">Running for</span>
-						<strong>{ v.RunningFor }</strong>
-					</div>
-					<div>
-						<span class="metric-label">Last deploy</span>
-						<strong>{ v.LastDeploy }</strong>
-					</div>
-				</div>
-				if !v.ManualScript {
-					<div class="version-summary" title="Running and latest image digests">
-						<span>Image</span><code>{ v.RunningVersion }</code><span>→</span><code>{ v.LatestVersion }</code>
-					</div>
-				}
-				<div class="dashboard-log-preview">
-					<div class="log-preview-heading"><span class="metric-label">Recent logs</span><a href={ templ.SafeURL("/services/" + v.Name + "#logs") }>Open full logs</a></div>
-					<pre>{ v.RecentLogs }</pre>
-				</div>
-				<div class="service-card-actions">
-					<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
-						<input type="hidden" name="csrf_token" value={ csrf }/>
-						if v.ManualScript {
-							<button class="button button-secondary button-small" type="submit">Run script</button>
-						} else if v.UpdateAvailable {
-							<button class="button button-primary button-small" type="submit">Update</button>
+	for _, v := range views {
+		<article class="service-card">
+			<div class="service-identity">
+				<div class="service-avatar" aria-hidden="true">{ serviceInitial(v.Name) }</div>
+				<div>
+					<a class="service-name" href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a>
+					<div class="service-state">
+						<span class={ "status-dot status-" + v.State }></span>
+						if v.State == "none" {
+							No containers
 						} else {
-							<button class="button-redeploy" type="submit">Re-deploy</button>
+							{ v.State }
 						}
-					</form>
-					<a class="button button-secondary button-small" href={ templ.SafeURL("/services/" + v.Name) }>Details</a>
+						if v.Managed {
+							<span class="service-tag">Managed</span>
+						}
+						if v.ManualScript {
+							<span class="service-tag">Manual deployment</span>
+						}
+						if v.UpdateAvailable {
+							<span class="service-tag update-tag">update available</span>
+						}
+					</div>
+					if !v.ManualScript {
+						<div class="version-summary" title="Running and latest image digests">
+							<span>Image</span><code>{ v.RunningVersion }</code>
+							if v.LatestVersion != v.RunningVersion {
+								<span>→</span><code>{ v.LatestVersion }</code>
+							}
+						</div>
+					}
 				</div>
-			</article>
-		}
-	</div>
+			</div>
+			<div class="service-metrics">
+				<div>
+					<span class="metric-label">Running for</span>
+					<strong>{ v.RunningFor }</strong>
+				</div>
+				<div>
+					<span class="metric-label">Last deploy</span>
+					<strong>{ v.LastDeploy }</strong>
+				</div>
+			</div>
+			<div class="dashboard-log-preview">
+				<div class="log-preview-heading"><span class="metric-label">Recent logs</span><a href={ templ.SafeURL("/services/" + v.Name + "#logs") }>Open full logs</a></div>
+				<pre>{ v.RecentLogs }</pre>
+			</div>
+			<div class="service-card-actions">
+				<form method="post" action={ templ.SafeURL("/services/" + v.Name + "/deploy") } class="inline-form">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					if v.ManualScript {
+						<button class="button button-secondary button-small" type="submit">Run script</button>
+					} else if v.UpdateAvailable {
+						<button class="button button-primary button-small" type="submit">Update</button>
+					} else {
+						<button class="button button-secondary button-small" type="submit">Re-deploy</button>
+					}
+				</form>
+				<a class="service-detail-link" href={ templ.SafeURL("/services/" + v.Name) }>Details</a>
+			</div>
+		</article>
+	}
 }
 
 func serviceInitial(name string) string {
