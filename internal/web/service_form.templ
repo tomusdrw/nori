@@ -58,6 +58,16 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					}
 					<span class="field-help">Used for the <code>nori.service</code> container label.</span>
 				</div>
+				<div class="field">
+					<label for="service-group">Dashboard group</label>
+					<input id="service-group" name="group" list="service-group-suggestions" value={ form.Group } placeholder="Ungrouped" aria-describedby="service-group-help"/>
+					<datalist id="service-group-suggestions">
+						for _, group := range form.GroupSuggestions {
+							<option value={ group }></option>
+						}
+					</datalist>
+					<span id="service-group-help" class="field-help">Choose an existing group or type a new name. Leave blank for Ungrouped.</span>
+				</div>
 				if !form.IsSelf {
 					<div class="field">
 						<label for="deployment-mode">Deployment mode</label>

@@ -115,7 +115,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		t.Fatalf("converted service: %+v", converted)
 	}
 	call("delete_service", map[string]any{"service_id": nightly.ID}, false)
-	call("create_service", map[string]any{"name": "app", "description": "Public API; production behind Caddy", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
+	call("create_service", map[string]any{"name": "app", "description": "Public API; production behind Caddy", "group": "Publishing", "watched_image": "nginx:latest", "deploy_script": "echo ok", "env_file": "SECRET='[REDACTED]'"}, false)
 	call("create_service", map[string]any{
 		"name": "strict-template", "watched_image": "nginx:latest", "deployment_mode": "single_container",
 		"template_config": map[string]any{
@@ -154,14 +154,28 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		if !bytes.Contains(data, []byte("Public API; production behind Caddy")) {
 			t.Fatalf("%s omitted service description: %s", name, data)
 		}
+		if !bytes.Contains(data, []byte("Publishing")) {
+			t.Fatalf("%s omitted dashboard group: %s", name, data)
+		}
 		if bytes.Contains(data, []byte("unlisted")) {
 			t.Fatal("environment leaked")
 		}
 	}
 	call("update_service", map[string]any{"service_id": svc.ID, "health_url": "https://example.com/health"}, false)
 	got, _ := st.GetService(ctx, svc.ID)
-	if got.Description != "Public API; production behind Caddy" || got.DeployScript != "echo ok" || got.WatchedImage != "nginx:latest" {
+	if got.Group != "Publishing" || got.Description != "Public API; production behind Caddy" || got.DeployScript != "echo ok" || got.WatchedImage != "nginx:latest" {
 		t.Fatal("partial update lost fields")
+	}
+	for _, group := range []string{"Platform", ""} {
+		call("update_service", map[string]any{"service_id": svc.ID, "group": group}, false)
+		current, err := st.GetService(ctx, svc.ID)
+		want := group
+		if want == "" {
+			want = store.DefaultServiceGroup
+		}
+		if err != nil || current.Group != want {
+			t.Fatalf("updated group = %+v, %v, want %q", current, err, want)
+		}
 	}
 	env, _ := st.GetEnvFile(ctx, svc.ID)
 	if env != "SECRET=\"unlisted\"\n" {

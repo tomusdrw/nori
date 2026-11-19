@@ -84,6 +84,8 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 		s.backupRoutes(r)
 
 		r.Get("/", s.handleDashboard)
+		r.Post("/service-groups/{id}/move", s.handleServiceGroupMove)
+		r.Post("/service-groups/{id}/fold", s.handleServiceGroupFold)
 		r.Get("/resources", s.handleResources)
 		r.Get("/services/{name}/resources", s.handleServiceResources)
 		r.Post("/services/{name}/resources", s.handleResourceLimits)
@@ -569,6 +571,7 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 		v := ServiceView{
 			ID:             svc.ID,
 			Name:           svc.Name,
+			Group:          svc.Group,
 			State:          state,
 			RunningVersion: shortDigest(runningDigest),
 			LatestVersion:  shortDigest(latest),
@@ -585,21 +588,33 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	views, err := s.loadViews(r.Context())
+	dashboard, err := s.loadDashboard(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = Page(views, s.csrf(r)).Render(r.Context(), w)
+	_ = Page(dashboard, s.csrf(r)).Render(r.Context(), w)
 }
 
 func (s *Server) handleServicesPartial(w http.ResponseWriter, r *http.Request) {
-	views, err := s.loadViews(r.Context())
+	dashboard, err := s.loadDashboard(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = ServicesTablePartial(views, s.csrf(r)).Render(r.Context(), w)
+	_ = ServicesTablePartial(dashboard, s.csrf(r)).Render(r.Context(), w)
+}
+
+func (s *Server) renderServiceForm(w http.ResponseWriter, r *http.Request, form ServiceFormData, editing bool, action, message string) {
+	groups, err := s.store.ListServiceGroups(r.Context())
+	if err != nil {
+		serviceGroupError(w, r, err)
+		return
+	}
+	for _, group := range groups {
+		form.GroupSuggestions = append(form.GroupSuggestions, group.Name)
+	}
+	_ = ServiceFormPage(form, s.csrf(r), editing, action, message).Render(r.Context(), w)
 }
 
 func (s *Server) handleServiceNew(w http.ResponseWriter, r *http.Request) {
@@ -608,7 +623,7 @@ func (s *Server) handleServiceNew(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_ = ServiceFormPage(form, s.csrf(r), false, "/services", "").Render(r.Context(), w)
+	s.renderServiceForm(w, r, form, false, "/services", "")
 }
 
 func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
@@ -621,6 +636,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 	svc := &store.Service{
 		Name:         form.Name,
 		Description:  form.Description,
+		Group:        form.Group,
 		WatchedImage: form.WatchedImage,
 		Policy:       store.Policy(form.Policy),
 		CronExpr:     form.CronExpr,
@@ -629,21 +645,21 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	mode, config, err := normalizedTemplateConfig(form.DeploymentMode, form.TemplateConfig)
 	if err != nil {
-		_ = ServiceFormPage(form, s.csrf(r), false, "/services", err.Error()).Render(r.Context(), w)
+		s.renderServiceForm(w, r, form, false, "/services", err.Error())
 		return
 	}
 	svc.DeploymentMode, svc.TemplateConfig = mode, config
 	if _, err := s.saveOrdinaryService(r.Context(), ordinaryWrite{Service: svc, Environment: &form.EnvFile, EnvironmentMode: dashboardEnvironment}); err != nil {
 		var validationErr *ordinaryValidationError
 		if errors.As(err, &validationErr) {
-			_ = ServiceFormPage(form, s.csrf(r), false, "/services", validationErr.Error()).Render(r.Context(), w)
+			s.renderServiceForm(w, r, form, false, "/services", validationErr.Error())
 			return
 		}
 		if _, lookupErr := s.store.GetServiceByName(r.Context(), svc.Name); lookupErr == nil {
-			_ = ServiceFormPage(form, s.csrf(r), false, "/services", "A service with that name already exists.").Render(r.Context(), w)
+			s.renderServiceForm(w, r, form, false, "/services", "A service with that name already exists.")
 			return
 		}
-		_ = ServiceFormPage(form, s.csrf(r), false, "/services", "No changes were saved. Try again.").Render(r.Context(), w)
+		s.renderServiceForm(w, r, form, false, "/services", "No changes were saved. Try again.")
 		return
 	}
 	log.Printf("service: created %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
@@ -661,7 +677,7 @@ func (s *Server) handleServiceEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, "").Render(r.Context(), w)
+	s.renderServiceForm(w, r, form, true, "/services/"+svc.Name, "")
 }
 
 func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
@@ -689,6 +705,11 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := *svc
 	svc.Description = form.Description
+	if r.PostForm.Has("group") {
+		svc.Group = form.Group
+	} else {
+		form.Group = svc.Group
+	}
 	svc.WatchedImage = form.WatchedImage
 	svc.Policy = store.Policy(form.Policy)
 	svc.CronExpr = form.CronExpr
@@ -696,13 +717,13 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	svc.HealthURL = form.HealthURL
 	mode, config, err := normalizedTemplateConfig(form.DeploymentMode, form.TemplateConfig)
 	if err != nil {
-		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+		s.renderServiceForm(w, r, form, true, "/services/"+svc.Name, err.Error())
 		return
 	}
 	svc.DeploymentMode, svc.TemplateConfig = mode, config
 	if svc.IsSelf {
 		if err := validateServiceForm(r.Context(), form); err != nil {
-			_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+			s.renderServiceForm(w, r, form, true, "/services/"+svc.Name, err.Error())
 			return
 		}
 		err = s.saveSelfConfig(r.Context(), svc, &previous, form.EnvFile)
@@ -722,13 +743,13 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 				}
 				conflictForm.ReloadURL = "/services/" + current.Name + "/edit"
 				w.WriteHeader(http.StatusConflict)
-				_ = ServiceFormPage(conflictForm, s.csrf(r), true, "/services/"+current.Name, "The configuration changed. Reload it before trying again.").Render(r.Context(), w)
+				s.renderServiceForm(w, r, conflictForm, true, "/services/"+current.Name, "The configuration changed. Reload it before trying again.")
 				return
 			}
 		}
 		var validationErr *ordinaryValidationError
 		if !svc.IsSelf && errors.As(err, &validationErr) {
-			_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, validationErr.Error()).Render(r.Context(), w)
+			s.renderServiceForm(w, r, form, true, "/services/"+svc.Name, validationErr.Error())
 			return
 		}
 		if !svc.IsSelf {
@@ -741,10 +762,10 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "could not reload service configuration", http.StatusInternalServerError)
 				return
 			}
-			_ = ServiceFormPage(retryForm, s.csrf(r), true, "/services/"+svc.Name, "No changes were saved. Try again.").Render(r.Context(), w)
+			s.renderServiceForm(w, r, retryForm, true, "/services/"+svc.Name, "No changes were saved. Try again.")
 			return
 		}
-		_ = ServiceFormPage(form, s.csrf(r), true, "/services/"+svc.Name, err.Error()).Render(r.Context(), w)
+		s.renderServiceForm(w, r, form, true, "/services/"+svc.Name, err.Error())
 		return
 	}
 	log.Printf("service: updated %q (image=%s policy=%s)", svc.Name, svc.WatchedImage, svc.Policy)
@@ -1082,7 +1103,7 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 
 func serviceForm(svc *store.Service) ServiceFormData {
 	return ServiceFormData{
-		Name: svc.Name, Description: svc.Description, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
+		Name: svc.Name, Description: svc.Description, Group: svc.Group, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
 		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
 		ConfigVersion:  svc.ConfigVersion,
 		DeploymentMode: string(svc.DeploymentMode), TemplateConfig: svc.TemplateConfig,
@@ -1112,6 +1133,7 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	configVersion, _ := strconv.ParseInt(r.FormValue("expected_config_version"), 10, 64)
 	return ServiceFormData{
 		Description: executor.NormalizeNewlines(r.FormValue("description")),
+		Group:       r.PostFormValue("group"),
 		Name:        r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
 		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"), HealthURL: r.FormValue("health_url"),
 		DeployScript:   executor.NormalizeNewlines(r.FormValue("deploy_script")),

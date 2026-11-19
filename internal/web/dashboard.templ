@@ -2,14 +2,16 @@ package web
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
-templ Page(views []ServiceView, csrf string) {
-	@Layout("Services", csrf, dashboardContent(views, csrf))
+templ Page(dashboard dashboardView, csrf string) {
+	@Layout("Services", csrf, dashboardContent(dashboard, csrf))
 }
 
-templ dashboardContent(views []ServiceView, csrf string) {
+templ dashboardContent(dashboard dashboardView, csrf string) {
+	<script src="/static/service-groups.js" type="module"></script>
 	<section class="page-heading">
 		<div>
 			<p class="eyebrow">Overview</p>
@@ -18,15 +20,17 @@ templ dashboardContent(views []ServiceView, csrf string) {
 		</div>
 		<div class="heading-meta">
 			<span class="live-indicator"><span class="pulse-dot"></span> Live</span>
-			<span>{ serviceCountLabel(len(views)) }</span>
+			<span>{ serviceCountLabel(dashboard.Count) }</span>
 		</div>
 	</section>
-	@ServicesTablePartial(views, csrf)
+	<span id="group-reorder-help" class="group-screen-reader">Drag to reorder, or use the up and down arrow keys.</span>
+	<p id="group-reorder-status" class="group-screen-reader" role="status" hx-sync="#services:replace"></p>
+	@ServicesTablePartial(dashboard, csrf)
 }
 
-templ ServicesTablePartial(views []ServiceView, csrf string) {
-	<div id="services" class="service-grid" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
-		if len(views) == 0 {
+templ ServicesTablePartial(dashboard dashboardView, csrf string) {
+	<div id="services" class="dashboard-groups" hx-get="/partials/services" hx-trigger="every 5s" hx-swap="outerHTML">
+		if dashboard.Count == 0 {
 			<section class="empty-state panel">
 				<div class="empty-icon">+</div>
 				<h2>No services yet</h2>
@@ -34,6 +38,55 @@ templ ServicesTablePartial(views []ServiceView, csrf string) {
 				<a class="button button-primary" href="/services/new">Create a service</a>
 			</section>
 		}
+		for _, group := range dashboard.Groups {
+			@dashboardGroupSection(group, csrf, len(dashboard.Groups) > 1)
+		}
+	</div>
+}
+
+templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
+	<section id={ serviceGroupAnchor(group.ID) } class="dashboard-group" data-group-id={ strconv.FormatInt(group.ID, 10) }>
+		<header class="dashboard-group-header panel">
+			<div class="dashboard-group-heading">
+				<form method="post" action={ templ.SafeURL(serviceGroupURL(group.ID) + "/fold") } hx-post={ serviceGroupURL(group.ID) + "/fold" } hx-target="#services" hx-swap="outerHTML" hx-sync="#services:replace">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<input type="hidden" name="collapsed" value={ strconv.FormatBool(!group.Collapsed) }/>
+					<h2>
+						<button type="submit" class="dashboard-group-toggle" id={ serviceGroupAnchor(group.ID) + "-toggle" } aria-expanded={ strconv.FormatBool(!group.Collapsed) } aria-controls={ serviceGroupAnchor(group.ID) + "-services" }>
+							<span class="group-chevron" aria-hidden="true">▸</span>
+							<span>{ group.Name }</span>
+						</button>
+					</h2>
+				</form>
+				<span class="dashboard-group-count">{ serviceCountLabel(len(group.Services)) }</span>
+				if group.Collapsed && len(group.Services) > 0 {
+					<div class="dashboard-group-status" aria-label="Service status">
+						for _, status := range group.statuses() {
+							<span><span class={ "status-dot status-" + status.State } aria-hidden="true"></span>{ fmt.Sprintf("%d %s", status.Count, status.Label) }</span>
+						}
+					</div>
+				}
+			</div>
+			if canMove {
+				<button type="button" class="button button-ghost button-small dashboard-group-handle" id={ serviceGroupAnchor(group.ID) + "-move" } data-group-move={ serviceGroupURL(group.ID) + "/move" } aria-label={ "Reorder " + group.Name } aria-describedby="group-reorder-help" title="Drag to reorder">
+					<span aria-hidden="true">⠿</span>
+				</button>
+			}
+		</header>
+		<div id={ serviceGroupAnchor(group.ID) + "-services" } hidden?={ group.Collapsed }>
+			if !group.Collapsed {
+				if len(group.Services) == 0 {
+					<p class="dashboard-group-empty">No services in this group.</p>
+				} else {
+					@serviceCards(group.Services, csrf)
+				}
+			}
+		</div>
+	</section>
+}
+
+templ serviceCards(views []ServiceView, csrf string) {
+	<div class="service-grid">
 		for _, v := range views {
 			<article class="service-card">
 				<div class="service-card-top">

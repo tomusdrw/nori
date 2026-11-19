@@ -117,7 +117,7 @@ func (s *Store) BackupSnapshot(ctx context.Context, id int64) (*Service, string,
 		return nil, "", err
 	}
 	defer tx.Rollback()
-	service, err := scanService(tx.QueryRowContext(ctx, `SELECT id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at FROM service WHERE id=? AND is_self=0`, id))
+	service, err := scanService(tx.QueryRowContext(ctx, `SELECT `+serviceColumns+` FROM service WHERE id=? AND is_self=0`, id))
 	if err != nil {
 		return nil, "", err
 	}

@@ -336,6 +336,18 @@ docker run -d --name "$SERVICE" \
   "$TARGET_IMAGE"
 ```
 
+## Dashboard groups
+
+In **New service** or **Configure**, use **Dashboard group** to select an
+existing group or type a new name. Clear the field to move the service to
+**Ungrouped**. A service belongs to one group.
+
+Click a group name to fold or unfold it. A folded group still shows its service
+status counts. Drag the handle to reorder groups, or focus the handle and use
+the up and down arrow keys. The dashboard saves the order and folded state,
+including for **Ungrouped**. Named groups are visible while they have members,
+and their dashboard settings return when a service joins again.
+
 ## Auto-deploy policies
 
 | Policy | Behavior |

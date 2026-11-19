@@ -75,6 +75,10 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 			return ErrServiceConflict
 		}
 	}
+	group, err := setServiceGroup(ctx, tx, id, svc.Group)
+	if err != nil {
+		return err
+	}
 	if prepare != nil {
 		content, err = prepare(tx, id, content)
 		if err != nil {
@@ -92,7 +96,7 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 	if svc.ID == 0 {
 		svc.CreatedAt = now
 	}
-	svc.ID, svc.UpdatedAt = id, now
+	svc.ID, svc.UpdatedAt, svc.Group = id, now, group
 	if previous == nil {
 		svc.ConfigVersion = 1
 	} else {

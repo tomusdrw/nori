@@ -29,6 +29,7 @@ type mcpID struct {
 	ServiceID int64 `json:"service_id" jsonschema:"Service ID"`
 }
 type mcpCreate struct {
+	Group          string          `json:"group,omitempty" jsonschema:"Dashboard group. Reuse a matching group from list_services or supply a new name. Omit or leave blank for Ungrouped."`
 	Description    string          `json:"description,omitempty" jsonschema:"Describe the service purpose and deployment-specific context such as environment, domains, dependencies, persistent storage, and operational notes. Do not include secrets."`
 	Name           string          `json:"name"`
 	WatchedImage   string          `json:"watched_image,omitempty" jsonschema:"Image reference to track. Omit for manual_script. Required for all other deployment modes."`
@@ -41,6 +42,7 @@ type mcpCreate struct {
 	EnvFile        *string         `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
 }
 type mcpUpdate struct {
+	Group                 *string          `json:"group,omitempty" jsonschema:"Dashboard group. Omit to preserve the current group. Send an empty string or Ungrouped to return to the default group."`
 	Description           *string          `json:"description,omitempty" jsonschema:"Keep the service purpose and deployment-specific context up to date. Do not include secrets. Omit to preserve; send an empty string to clear."`
 	ServiceID             int64            `json:"service_id"`
 	ExpectedConfigVersion int64            `json:"expected_config_version" jsonschema:"Configuration generation returned by get_service; required for updates"`
@@ -136,9 +138,9 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 
 func (s *Server) newMCPHandler() http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "When creating or updating a service, use its optional description to explain the service's purpose and relevant deployment-specific information, such as its environment, domains, dependencies, persistent storage, and operational notes. Keep it accurate as deployments change, preserve relevant existing context, and never include secrets or credentials.",
+		Instructions: "When creating or updating a service, use its optional description to explain the service's purpose and relevant deployment-specific information, such as its environment, domains, dependencies, persistent storage, and operational notes. Keep it accurate as deployments change, preserve relevant existing context, and never include secrets or credentials. Dashboard groups are for organizing services. Honor the user's group choice. Otherwise use list_services to find established group names and match services that belong to the same application, stack, project, or environment when the relationship is clear. For example, place an application's API and worker together. A shared image or container network alone is insufficient. Reuse the exact existing name where possible. Leave unrelated or ambiguous services in Ungrouped, preserve existing assignments unless a move is intended, and never include secrets in a group name.",
 	})
-	addNoriTool(s, server, "list_services", "List service configurations without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
+	addNoriTool(s, server, "list_services", "List service configurations and their dashboard group names without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
 	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
@@ -154,7 +156,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
-		svc := &store.Service{Name: in.Name, Description: in.Description, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
+		svc := &store.Service{Name: in.Name, Description: in.Description, Group: in.Group, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
 		if err := setMCPDeploymentTemplate(svc, in.DeploymentMode, in.TemplateConfig); err != nil {
 			return nil, err
 		}
@@ -177,6 +179,9 @@ func (s *Server) newMCPHandler() http.Handler {
 		expected := &store.Service{ID: svc.ID, Name: svc.Name, ConfigVersion: in.ExpectedConfigVersion}
 		if in.Description != nil {
 			svc.Description = *in.Description
+		}
+		if in.Group != nil {
+			svc.Group = *in.Group
 		}
 		if in.WatchedImage != nil {
 			svc.WatchedImage = *in.WatchedImage
