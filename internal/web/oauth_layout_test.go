@@ -37,8 +37,10 @@ func TestOAuthRegistrationHeadingAlignsWithFirstColumn(t *testing.T) {
 	if err := SettingsPage("Nori", "csrf", "", false, store.MCPConfig{Enabled: true}, view, Channels{}, nil).Render(context.Background(), &page); err != nil {
 		t.Fatal(err)
 	}
+	// Reading the bounding rect flushes layout. Headless Chromium can dump the
+	// DOM without delivering an animation frame under virtual time.
 	probe := `<script>
-		addEventListener('load', () => requestAnimationFrame(() => {
+		addEventListener('load', () => {
 			const textLeft = (element) => {
 				const range = document.createRange();
 				range.selectNodeContents(element);
@@ -48,7 +50,7 @@ func TestOAuthRegistrationHeadingAlignsWithFirstColumn(t *testing.T) {
 			const columnLeft = textLeft(document.querySelector('.oauth-grant-table th'));
 			const delta = Math.abs(headingLeft - columnLeft);
 			document.body.dataset.oauthAlignment = delta < 1 ? 'aligned' : 'misaligned:' + delta.toFixed(2);
-		}));
+		}, { once: true });
 	</script>`
 	html := strings.Replace(page.String(), "</body>", probe+"</body>", 1)
 	css, err := staticFS.ReadFile("static/app.css")
