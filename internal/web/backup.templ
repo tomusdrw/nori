@@ -11,7 +11,11 @@ import (
 )
 
 templ backupPage(data backupPageData, csrf string) {
-	@Layout("Backups", csrf, backupContent(data, csrf))
+	@Layout("Backups", csrf, backupScreen(data, csrf))
+}
+
+templ backupScreen(data backupPageData, csrf string) {
+	<div class="backup-screen">@backupContent(data, csrf)</div>
 }
 
 templ backupContent(data backupPageData, csrf string) {
@@ -23,6 +27,7 @@ templ backupContent(data backupPageData, csrf string) {
 	</section>
 	if data.Service != nil {
 		@serviceBackupPolicy(*data.Service, data.Policy, data.Detected, csrf)
+		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 	} else {
 		<section class="panel form-panel">
 			<h2>Import a backup</h2>
@@ -42,6 +47,7 @@ templ backupContent(data backupPageData, csrf string) {
 				<a href="/backups/b2">Browse Backblaze B2 backups</a>
 			}
 		</section>
+		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 		if data.KeyAvailable {
 			<section class="panel form-panel">
 				<h2>Recovery key</h2>
@@ -55,7 +61,6 @@ templ backupContent(data backupPageData, csrf string) {
 		@backupDiskSettings(data.Disks, data.DiskPolicy, csrf)
 		@backupB2Settings(data.B2, csrf)
 	}
-	@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 }
 
 templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []store.BackupSource, csrf string) {
@@ -99,26 +104,26 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 }
 
 templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
-	<section class="panel detail-panel history-panel">
+	<section class="panel detail-panel history-panel backup-history">
 		<h2>Backup history</h2>
 		if len(jobs) == 0 {
 			<p>No backups yet.</p>
 		} else {
 			<div class="table-wrap">
-				<table>
-					<thead><tr><th>Service</th><th>Created</th><th>Local archive</th><th>Backblaze B2</th><th>Actions</th></tr></thead>
-					<tbody>
+				<table role="table">
+					<thead role="rowgroup"><tr role="row"><th>Service</th><th>Created</th><th>Local archive</th><th>Backblaze B2</th><th>Actions</th></tr></thead>
+					<tbody role="rowgroup">
 						for _, job := range jobs {
-							<tr>
-								<td>{ job.ServiceName }</td>
-								<td>{ job.Created.Format("2006-01-02 15:04 MST") }</td>
-								<td>{ job.Status }
+							<tr role="row">
+								<td role="cell" class="backup-job-service">{ job.ServiceName }</td>
+								<td role="cell" class="backup-job-date">{ job.Created.Format("2006-01-02 15:04 MST") }</td>
+								<td role="cell"><span class="backup-mobile-label">Local archive</span>{ job.Status }
 									if job.Message != "" {
 										<div>{ job.Message }</div>
 									}
 								</td>
-								<td>{ job.UploadStatus }</td>
-								<td>
+								<td role="cell"><span class="backup-mobile-label">Backblaze B2</span>{ backupUploadStatus(job.UploadStatus) }</td>
+								<td role="cell" class="backup-job-actions">
 									if job.Status == "complete" {
 										<div class="action-row">
 											<a class="button button-secondary button-small" href={ templ.SafeURL(backupJobURL(job.ID) + "/download") }>Download</a>
@@ -216,13 +221,26 @@ templ backupB2Content(objects []string, next, csrf string) {
 	</section>
 }
 
-templ backupReviewPage(manifest backup.Manifest, token, csrf string) {
-	@Layout("Review restore", csrf, backupReviewContent(manifest, token, csrf))
+templ backupReviewPage(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {
+	@Layout("Review restore", csrf, backupReviewScreen(manifest, options, token, csrf, errorMessage, errorField))
 }
 
-templ backupReviewContent(manifest backup.Manifest, token, csrf string) {
+templ backupReviewScreen(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {
+	<div class="backup-screen">@backupReviewContent(manifest, options, token, csrf, errorMessage, errorField)</div>
+}
+
+templ backupReviewContent(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {
 	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
 	<h1>Restore { manifest.Service.Name }</h1>
+	if errorMessage != "" {
+		<div class="alert alert-error" role="alert" id="restore-error" tabindex="-1" autofocus?={ errorField == "" }>
+			if errorField != "" {
+				<a href={ templ.SafeURL("#restore-" + errorField) }>{ errorMessage }</a>
+			} else {
+				{ errorMessage }
+			}
+		</div>
+	}
 	<section class="panel form-panel">
 		<p>This backup contains service configuration and its environment document.</p>
 		if _, exists := manifest.Files["postgres"]; exists {
@@ -241,18 +259,20 @@ templ backupReviewContent(manifest backup.Manifest, token, csrf string) {
 		<form method="post" action={ templ.SafeURL("/backups/restore/" + token) } class="service-form">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
 			<div class="form-grid">
-				<div class="field"><label for="restore-name">New service name</label><input id="restore-name" name="name" required value={ manifest.Service.Name }/></div>
+				<div class="field"><label for="restore-name">New service name</label><input id="restore-name" name="name" required value={ options.Name } { restoreErrorAttributes(errorField, "name")... }/></div>
 				if manifest.Service.DeploymentMode == store.DeploymentModePostgres || manifest.Service.DeploymentMode == store.DeploymentModeSingleContainer {
-					<div class="field"><label for="restore-network">Override serving network</label><input id="restore-network" name="network"/></div>
-					<div class="field"><label for="restore-domain">Override proxy domain</label><input id="restore-domain" name="domain"/></div>
+					<div class="field"><label for="restore-network">Override serving network</label><input id="restore-network" name="network" value={ options.Network } { restoreErrorAttributes(errorField, "network")... }/></div>
+					<div class="field"><label for="restore-domain">Override proxy domain</label><input id="restore-domain" name="domain" value={ options.Domain } { restoreErrorAttributes(errorField, "domain")... }/></div>
 				} else {
-					<div class="field field-wide"><label for="restore-script">Deployment script</label><textarea id="restore-script" name="deploy_script" rows="8">{ manifest.Service.DeployScript }</textarea></div>
+					<div class="field field-wide"><label for="restore-script">Deployment script</label><textarea id="restore-script" name="deploy_script" rows="8" { restoreErrorAttributes(errorField, "script")... }>if options.DeployScript != nil {
+						{ *options.DeployScript }
+					}</textarea></div>
 				}
 				for i, source := range manifest.Policy.Sources {
 					if source.Type == "managed" {
 						<p>Managed volume <code>{ source.Path }</code> will be restored into a new volume.</p>
 					} else {
-						<div class="field"><label for={ "restore-target-" + strconv.Itoa(i) }>New destination for <code>{ source.Type + " " + source.Path }</code></label><input id={ "restore-target-" + strconv.Itoa(i) } name={ "target_" + strconv.Itoa(i) } required value={ source.Path }/>
+						<div class="field"><label for={ "restore-target-" + strconv.Itoa(i) }>New destination for <code>{ source.Type + " " + source.Path }</code></label><input id={ "restore-target-" + strconv.Itoa(i) } name={ "target_" + strconv.Itoa(i) } required value={ options.Targets[i] } { restoreErrorAttributes(errorField, "target-" + strconv.Itoa(i))... }/>
 							if timestamp := manifest.Captured["source-" + strconv.Itoa(i)]; !timestamp.IsZero() {
 								<span class="field-help">Captured { timestamp.Local().Format("2006-01-02 15:04 MST") }</span>
 							}
@@ -275,14 +295,18 @@ templ backupReviewContent(manifest backup.Manifest, token, csrf string) {
 								<h3>Quiesce</h3><pre>{ manifest.Policy.Quiesce }</pre>
 							}
 						</details>
-						<label><input name="reviewed" type="checkbox"/> I reviewed these commands and authorize them on this host</label>
+						<label><input id="restore-commands" name="reviewed" type="checkbox" checked?={ options.ReviewCommands } { restoreErrorAttributes(errorField, "commands")... }/> I reviewed these commands and authorize them on this host</label>
 					</div>
 				}
 			</div>
 			<div class="form-actions">
-				<button class="button button-secondary" name="cancel" value="1" type="submit" formnovalidate>Cancel</button>
+				<button class="button button-secondary" type="submit" form="restore-cancel">Cancel</button>
 				<button class="button button-primary" type="submit">Restore as new service</button>
 			</div>
+		</form>
+		<form id="restore-cancel" method="post" action={ templ.SafeURL("/backups/restore/" + token) }>
+			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<input type="hidden" name="cancel" value="1"/>
 		</form>
 	</section>
 }

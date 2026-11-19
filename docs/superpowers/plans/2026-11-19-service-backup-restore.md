@@ -48,3 +48,18 @@
 - [x] Test S3 upload, failed upload with local copy still downloadable, retry and import with read-only credentials.
 - [x] Add optional instance B2 settings, encrypted credentials and per-service opt-out. Upload completed archives, retain durable status and allow retry. Import a selected object through the same verified archive path.
 - [x] Run `make test`, `go vet ./...` and `git diff --check`. Verify mounted disk metrics and document how B2 lifecycle and recovery keys work.
+
+## Implementation notes
+
+- `internal/backup/service.go` runs scheduled captures and local retention.
+  `internal/backup/data.go` contains source adapters and writer recovery.
+  `internal/backup/restore.go` owns fresh-resource validation and rollback.
+- `internal/web/backup.go` stages verified archives for a 30-minute review.
+  Before a service ID is allocated, the draft can return to the form after an
+  error. After allocation, restore cleanup owns the attempt and the draft is
+  consumed.
+- To exercise a real PostgreSQL and volume round trip, set
+  `NORI_BACKUP_TEST_DOCKER` to a test Docker-compatible daemon and run
+  `go test ./internal/backup -run '^TestDockerBackupRestores' -count=1`.
+  Ordinary tests cover the browser download/import flow and a signed upload to
+  a test S3 endpoint.

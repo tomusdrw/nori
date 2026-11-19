@@ -2,10 +2,12 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"nori/internal/deploytemplate"
 	"nori/internal/docker"
 	"nori/internal/executor"
 	"path/filepath"
@@ -116,5 +118,19 @@ esac
 	}
 	if _, present := dk.ManagedContainers[plan.AppCurrent.Name]; present {
 		t.Fatal("restore started the application")
+	}
+}
+
+func TestRestoreVolumeCollisionIdentifiesDestination(t *testing.T) {
+	dk := &docker.Fake{Volumes: map[string]docker.ManagedResource{"occupied": {Name: "occupied"}}}
+	m := &Manager{docker: dk}
+	policy := store.BackupPolicy{Sources: []store.BackupSource{
+		{Type: "volume", Path: "available"},
+		{Type: "volume", Path: "occupied"},
+	}}
+	err := m.preflightRestore(context.Background(), store.Service{}, "", deploytemplate.Config{}, policy)
+	var fieldError *RestoreFieldError
+	if !errors.As(err, &fieldError) || fieldError.Field != "target-1" || !strings.Contains(err.Error(), "occupied") {
+		t.Fatalf("expected error for second target, got %v", err)
 	}
 }

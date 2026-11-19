@@ -583,3 +583,65 @@ kbd { display: inline-grid; min-width: 19px; height: 19px; margin-left: 3px; pla
   .oauth-grant-confirm-actions { justify-content: stretch; padding-inline: 18px; }
   .oauth-grant-confirm-actions .button { flex: 1; }
 }
+
+/* Backup forms and history */
+.backup-screen .field-wide { grid-column: 1 / -1; }
+.backup-screen .field pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.backup-screen label:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+.backup-screen input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin: 0.2em 0 0;
+  accent-color: var(--primary);
+}
+.backup-screen [aria-invalid="true"] { border-color: var(--red); }
+.backup-screen #restore-error a { text-decoration: underline; }
+.backup-screen .form-panel > :is(h2, p, ul, a, form:not(.service-form)) {
+  margin-inline: 24px;
+}
+.backup-screen .form-panel > .service-form > .field { margin-inline: 24px; }
+.backup-screen .form-panel > a { display: inline-block; margin-bottom: 16px; }
+.backup-screen .form-panel > form:not(.service-form) { margin-bottom: 16px; }
+.backup-screen #restore-cancel { display: none; }
+.backup-history td { white-space: normal; overflow-wrap: anywhere; }
+.backup-history .backup-job-actions .action-row { flex-wrap: wrap; }
+.backup-mobile-label { display: none; }
+
+@media (max-width: 760px) {
+  .nav-links > a.nav-backups { display: inline-flex; padding-inline: 6px; }
+  .backup-history .table-wrap { overflow: visible; }
+  .backup-history :is(table, tbody) { display: block; }
+  .backup-history thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .backup-history tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px 12px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .backup-history tbody td { display: block; padding: 0; border: 0; }
+  .backup-job-service { font-weight: 600; }
+  .backup-job-date { text-align: right; }
+  .backup-job-actions { grid-column: 1 / -1; }
+  .backup-job-actions:empty { display: none; }
+  .backup-mobile-label { display: block; color: var(--text-muted); font-size: 0.75rem; }
+  .backup-screen .form-panel > :is(h2, p, ul, a, form:not(.service-form)),
+  .backup-screen .form-panel > .service-form > .field { margin-inline: 18px; }
+}
+
+@media (max-width: 370px) {
+  .nav-links > a.nav-backups { font-size: 0.75rem; }
+  .nav-links > a.nav-terminal, .nav-links > .button { padding-inline: 5px; }
+}

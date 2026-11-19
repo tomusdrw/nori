@@ -402,6 +402,10 @@ An import-only destination can use a key limited to list and read operations.
 Review an archive from the local history, an uploaded file, or the B2 browser.
 Choose a new service name and fresh destinations for unmanaged data. Review
 any imported Bash commands and update names and paths for the target host.
+If a destination check fails before Nori creates the service, correct the
+form and retry using the same staged archive. The review expires after 30
+minutes. For a recovery drill, download a copy and import it into a second
+instance using the exported key, then check the restored database and files.
 The restored service starts with manual deploy policy. Deploy it separately
 after checking the configuration and choosing the correct proxy and ports.
 

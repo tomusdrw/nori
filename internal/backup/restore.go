@@ -37,6 +37,18 @@ type RestoreOptions struct {
 	DeployScript   *string
 }
 
+// RestoreFieldError identifies a destination field that the operator can correct.
+type RestoreFieldError struct {
+	Field   string
+	Message string
+}
+
+func (e *RestoreFieldError) Error() string { return e.Message }
+
+func restoreFieldError(field, message string) error {
+	return &RestoreFieldError{Field: field, Message: message}
+}
+
 var restoredServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
 
 func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, options RestoreOptions) (store.Service, error) {
@@ -49,13 +61,13 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 	svc.ID, svc.ConfigVersion = 0, 0
 	svc.Name, svc.Policy, svc.CronExpr = options.Name, store.PolicyManual, ""
 	if !restoredServiceName.MatchString(svc.Name) || strings.EqualFold(svc.Name, store.SelfServiceName) || svc.IsSelf {
-		return svc, errors.New("enter a valid new service name")
+		return svc, restoreFieldError("name", "enter a valid new service name")
 	}
 	if _, err := m.store.GetServiceByName(ctx, svc.Name); !errors.Is(err, store.ErrNotFound) {
 		if err != nil {
 			return svc, errors.New("could not check whether the destination service exists")
 		}
-		return svc, errors.New("a service with that name already exists")
+		return svc, restoreFieldError("name", "a service with that name already exists")
 	}
 	if _, err := envfile.Parse(manifest.Env); err != nil {
 		return svc, errors.New("invalid dotenv in backup")
@@ -66,7 +78,7 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 	hasHooks := policy.Quiesce != "" || policy.Resume != "" || policy.Export != "" || policy.Import != ""
 	if hasHooks && !options.ReviewCommands {
 		if _, custom := manifest.Files["custom"]; custom {
-			return svc, errors.New("review and approve the custom import command to restore its data")
+			return svc, restoreFieldError("commands", "review and approve the custom import command to restore its data")
 		}
 		policy.Quiesce, policy.Resume, policy.Export, policy.Import = "", "", "", ""
 	}
@@ -74,7 +86,7 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 		if source.Type != "managed" {
 			value := options.Targets[i]
 			if value == "" {
-				return svc, errors.New("choose a fresh destination for each unmanaged volume and bind mount")
+				return svc, restoreFieldError(fmt.Sprintf("target-%d", i), "choose a fresh destination for this volume or directory")
 			}
 			policy.Sources[i].Path = value
 		}
@@ -101,7 +113,7 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 			config.ServingNetwork = options.Network
 		}
 		if err := m.checkProxyConflict(ctx, config); err != nil {
-			return svc, err
+			return svc, restoreFieldError("domain", err.Error())
 		}
 		if err := config.Validate(); err != nil {
 			return svc, errors.New("invalid destination template configuration")
@@ -113,7 +125,7 @@ func (m *Manager) Restore(ctx context.Context, manifest Manifest, dir string, op
 		svc.TemplateConfig = string(raw)
 	case store.DeploymentModeCustom, store.DeploymentModeManualScript:
 		if executor.ValidateScript(ctx, svc.DeployScript) != nil {
-			return svc, errors.New("invalid deployment script in backup")
+			return svc, restoreFieldError("script", "invalid deployment script in backup")
 		}
 	default:
 		return svc, errors.New("unsupported deployment mode")
@@ -230,16 +242,16 @@ func (m *Manager) preflightRestore(ctx context.Context, svc store.Service, diges
 			return errors.New("Docker is unavailable for network preflight")
 		}
 		if _, err := m.docker.InspectNetwork(ctx, network); err != nil {
-			return errors.New("destination serving network does not exist")
+			return restoreFieldError("network", "destination serving network does not exist")
 		}
 	}
-	for _, target := range policy.Sources {
+	for i, target := range policy.Sources {
 		if target.Type == "volume" {
 			if m.docker == nil {
 				return errors.New("Docker is unavailable for volume preflight")
 			}
 			if _, err := m.docker.InspectVolume(ctx, target.Path); !errors.Is(err, docker.ErrManagedNotFound) {
-				return errors.New("destination Docker volume already exists or could not be inspected")
+				return restoreFieldError(fmt.Sprintf("target-%d", i), fmt.Sprintf("destination Docker volume %q already exists or could not be inspected", target.Path))
 			}
 		}
 	}

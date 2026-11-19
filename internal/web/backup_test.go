@@ -127,6 +127,19 @@ func TestBackupDownloadAndUploadToAnotherInstance(t *testing.T) {
 	if !strings.Contains(body, "Restore original") || strings.Contains(body, "source-private-value") {
 		t.Fatal("invalid import review")
 	}
+	occupied := &store.Service{Name: "original", Policy: store.PolicyManual}
+	if err := dst.CreateService(ctx, occupied); err != nil {
+		t.Fatal(err)
+	}
+	bad := url.Values{"csrf_token": {destCSRF}, "name": {"original"}, "deploy_script": {"echo edited"}}
+	rejected := backupTestRequest(destSrv, destCookies, http.MethodPost, location, "application/x-www-form-urlencoded", strings.NewReader(bad.Encode()))
+	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "echo edited") ||
+		!strings.Contains(rejected.Body.String(), "a service with that name already exists") ||
+		!strings.Contains(rejected.Body.String(), `aria-invalid="true"`) ||
+		!strings.Contains(rejected.Body.String(), `aria-describedby="restore-error"`) ||
+		!strings.Contains(rejected.Body.String(), `form="restore-cancel"`) {
+		t.Fatalf("restore form did not retain the draft and input: status %d", rejected.Code)
+	}
 	newName := "restored-" + strconv.FormatInt(job.ID, 10)
 	postAuthed(t, destSrv, destCookies, location, url.Values{"csrf_token": {destCSRF}, "name": {newName}}.Encode())
 	restored, err := dst.GetServiceByName(ctx, newName)

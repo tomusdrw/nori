@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 
 	"nori/internal/backup"
@@ -31,6 +32,7 @@ type restoreDraft struct {
 	token     string
 	manifest  backup.Manifest
 	directory string
+	expires   time.Time
 	cleanup   func()
 }
 
@@ -387,11 +389,11 @@ func (s *Server) stageImport(w http.ResponseWriter, r *http.Request, src io.Read
 		http.Error(w, "Could not open backup. Check the recovery key, file integrity and available disk space. "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	draft := &restoreDraft{rand.Text(), manifest, directory, cleanup}
+	draft := &restoreDraft{token: rand.Text(), manifest: manifest, directory: directory, expires: time.Now().Add(30 * time.Minute), cleanup: cleanup}
 	pages.mu.Lock()
 	pages.draft = draft
 	pages.mu.Unlock()
-	time.AfterFunc(30*time.Minute, func() {
+	time.AfterFunc(time.Until(draft.expires), func() {
 		if expired := pages.takeDraft(draft.token); expired != nil {
 			expired.cleanup()
 		}
@@ -410,6 +412,16 @@ func (p *backupPages) takeDraft(token string) *restoreDraft {
 	return draft
 }
 
+func (p *backupPages) returnDraft(draft *restoreDraft) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.draft != nil || !time.Now().Before(draft.expires) {
+		return false
+	}
+	p.draft = draft
+	return true
+}
+
 func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 	if !s.requireBackups(w, r) {
 		return
@@ -422,7 +434,11 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	_ = backupReviewPage(draft.manifest, draft.token, s.csrf(r)).Render(r.Context(), w)
+	options := backup.RestoreOptions{Name: draft.manifest.Service.Name, DeployScript: &draft.manifest.Service.DeployScript, Targets: make(map[int]string)}
+	for i, source := range draft.manifest.Policy.Sources {
+		options.Targets[i] = source.Path
+	}
+	_ = backupReviewPage(draft.manifest, options, draft.token, s.csrf(r), "", "").Render(r.Context(), w)
 }
 
 func (s *Server) handleRestoreConfirm(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +450,12 @@ func (s *Server) handleRestoreConfirm(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	defer draft.cleanup()
+	keepDraft := false
+	defer func() {
+		if !keepDraft {
+			draft.cleanup()
+		}
+	}()
 	if r.PostForm.Has("cancel") {
 		http.Redirect(w, r, "/backups", http.StatusSeeOther)
 		return
@@ -453,6 +474,20 @@ func (s *Server) handleRestoreConfirm(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	svc, err := s.backups.manager.Restore(ctx, draft.manifest, draft.directory, options)
 	if err != nil {
+		// Retry only when the attempt stopped before allocating a service.
+		// Once writes have started, require a new review of the destination.
+		if svc.ID == 0 && s.backups.returnDraft(draft) {
+			keepDraft = true
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			var fieldErr *backup.RestoreFieldError
+			field := ""
+			if errors.As(err, &fieldErr) {
+				field = fieldErr.Field
+			}
+			_ = backupReviewPage(draft.manifest, options, draft.token, s.csrf(r), err.Error(), field).Render(r.Context(), w)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -465,4 +500,18 @@ func backupSources(sources []store.BackupSource) string {
 		lines = append(lines, source.Type+" "+source.Path)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func restoreErrorAttributes(errorField, field string) templ.Attributes {
+	if errorField != field {
+		return nil
+	}
+	return templ.Attributes{"aria-invalid": "true", "aria-describedby": "restore-error", "autofocus": true}
+}
+
+func backupUploadStatus(status string) string {
+	if status == "" {
+		return "—"
+	}
+	return status
 }
