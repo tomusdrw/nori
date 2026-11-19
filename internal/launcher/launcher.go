@@ -203,7 +203,8 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 			return fmt.Errorf("read current image digest: %w", err)
 		}
 	}
-	if err := l.runner().Run(ctx, "docker", "stop", "--timeout", "645", spec.ContainerName); err != nil {
+	// Docker CLI 27 uses --time and newer clients use --timeout. Both accept -t.
+	if err := l.runner().Run(ctx, "docker", "stop", "-t", "645", spec.ContainerName); err != nil {
 		return fmt.Errorf("stop %s: %w", spec.ContainerName, err)
 	}
 	if err := l.runner().Run(ctx, "docker", "rm", spec.ContainerName); err != nil {
