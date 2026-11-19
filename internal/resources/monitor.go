@@ -13,7 +13,9 @@ import (
 
 const (
 	RuntimeInterval = time.Minute
-	StorageInterval = 15 * time.Minute
+	// RuntimeFreshness bounds both displayed samples and the interval used for current rates.
+	RuntimeFreshness = 2 * RuntimeInterval
+	StorageInterval  = 15 * time.Minute
 )
 
 type collector interface {

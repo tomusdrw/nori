@@ -266,3 +266,24 @@ func TestDockerFailureKeepsArchiveInventory(t *testing.T) {
 		t.Fatal(rows)
 	}
 }
+
+func TestCollectorResumesRatesAfterLongSamplingGap(t *testing.T) {
+	c, f, _, _ := collectorFixture(t)
+	f.containers = []container.Summary{{ID: "a", State: "running"}}
+	start := time.Now().UTC()
+	f.stats = make(map[string]docker.RuntimeStats)
+	sample := func(offset time.Duration, received uint64) map[string]float64 {
+		t.Helper()
+		f.stats["a"] = docker.RuntimeStats{Started: start, At: start.Add(offset),
+			Values: map[string]float64{"memory": 128}, Counters: map[string]uint64{"rx": received}}
+		return mustCollect(t, c, "runtime")["container:a"].Values
+	}
+	sample(time.Minute, 0)
+	v := sample(10*time.Minute, 90000)
+	if _, ok := v["rx"]; ok || v["memory"] != 128 {
+		t.Fatalf("first sample after gap = %v, want memory only", v)
+	}
+	if got := sample(11*time.Minute, 90600)["rx"]; got != 10 {
+		t.Fatalf("rate after fresh baseline = %v, want 10 bytes/s", got)
+	}
+}

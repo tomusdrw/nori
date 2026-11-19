@@ -433,8 +433,11 @@ Nori reports unavailable measurements and partial totals when the daemon,
 driver, or filesystem cannot supply a size. Totals use Docker-reported sizes
 and file lengths, which can differ from allocated disk blocks for sparse or
 compressed files. They cover the tracked sources; free space for the whole
-filesystem is shown under **Backups**. The first observation after a
-container restart establishes a new baseline for rates.
+filesystem is shown under **Backups**.
+
+After a container restarts or more than two minutes pass between samples,
+Nori shows current gauges such as memory immediately. CPU and throughput
+return with the next sample, once Nori can calculate a fresh rate.
 
 Managed PostgreSQL storage has its own entry. Enable PostgreSQL details in
 the service's resource settings to measure the logical database size and its

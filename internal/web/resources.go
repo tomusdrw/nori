@@ -350,7 +350,7 @@ type resourceView struct {
 
 func newResourceView(samples resourceSamples, services []*store.Service, now time.Time) resourceView {
 	view := resourceView{
-		runtime: indexResources(samples.runtime, now, 2*resources.RuntimeInterval), storage: indexResources(samples.storage, now, 2*resources.StorageInterval),
+		runtime: indexResources(samples.runtime, now, resources.RuntimeFreshness), storage: indexResources(samples.storage, now, 2*resources.StorageInterval),
 		day:      indexResources(samples.day, now.Add(-24*time.Hour), time.Hour+resources.StorageInterval),
 		week:     indexResources(samples.week, now.Add(-7*24*time.Hour), time.Hour+resources.StorageInterval),
 		services: make(map[int64]string),

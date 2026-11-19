@@ -173,8 +173,8 @@ func runtimeValues(before, now docker.RuntimeStats) map[string]float64 {
 	if values == nil {
 		values = map[string]float64{}
 	}
-	elapsed := now.At.Sub(before.At).Seconds()
-	if before.At.IsZero() || elapsed <= 0 || !before.Started.Equal(now.Started) {
+	elapsed := now.At.Sub(before.At)
+	if before.At.IsZero() || elapsed <= 0 || elapsed > RuntimeFreshness || !before.Started.Equal(now.Started) {
 		return values
 	}
 	for key, count := range now.Counters {
@@ -182,7 +182,7 @@ func runtimeValues(before, now docker.RuntimeStats) map[string]float64 {
 		if !ok || old > count {
 			continue
 		}
-		rate := float64(count-old) / elapsed
+		rate := float64(count-old) / elapsed.Seconds()
 		if key == "cpu" {
 			rate /= 1e7
 		} // nanoseconds of CPU time per second, as a percent of one core
