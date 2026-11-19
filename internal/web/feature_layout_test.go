@@ -74,11 +74,24 @@ func TestFeatureLayouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, page := range []struct {
-		name      string
-		component templ.Component
-		probe     string
+		name, section string
+		component     templ.Component
+		probe         string
 	}{
-		{"services", layoutDashboard(), `
+		{"settings", "Settings", SettingsPage("Test", "csrf", "", false, store.MCPConfig{}, mcpSettingsView{}, Channels{}, nil), `
+			const matrix = document.querySelector('.notify-matrix-wrap');
+			checkLayout(matrix.scrollWidth <= matrix.clientWidth + 1, 'notification controls fit');
+		`},
+		{"service-detail", "Services", ServiceDetailPage(ServiceDetailData{
+			Service: ServiceFormData{Name: "website-creator-background-worker", WatchedImage: "ghcr.io/smallbeast/website-creator-background-worker:stable"},
+			State:   "running", UpdateAvail: true, Containers: []ContainerView{{Name: "website-creator-background-worker-1", Image: "ghcr.io/smallbeast/website-creator-background-worker:stable", State: "running"}},
+			Deployments: []DeploymentView{{ID: 184, Trigger: "scheduled", Status: "success", StartedAt: "2026-11-19 09:45 UTC"}},
+		}, "csrf"), `
+			for (const table of document.querySelectorAll('.table-wrap')) {
+				checkLayout(table.scrollWidth <= table.clientWidth + 1, 'service table overflow');
+			}
+		`},
+		{"services", "Services", layoutDashboard(), `
 			const totals = [...document.querySelectorAll('.dashboard-summary dd')].map(item => item.textContent);
 			checkLayout(totals.join('|') === '4|2|1', 'live service totals');
 			const name = document.querySelectorAll('.service-name')[1];
@@ -89,7 +102,7 @@ func TestFeatureLayouts(t *testing.T) {
 				checkLayout(row.scrollWidth <= row.clientWidth + 1, 'service row overflow');
 			}
 		`},
-		{"backups", layoutBackups(), `
+		{"backups", "Backups", layoutBackups(), `
 			const form = document.querySelector('form[action="/backups/import"]');
 			checkLayout([...new FormData(form).keys()].join('|') === 'csrf_token|identity|archive', 'streaming upload field order');
 			const panel = document.querySelector('.backup-history');
@@ -100,7 +113,7 @@ func TestFeatureLayouts(t *testing.T) {
 			const disk = document.querySelector('#disk-space'), b2 = document.querySelector('#backblaze');
 			checkLayout(rect(b2).top - rect(disk).bottom >= 12 || rect(b2).left - rect(disk).right >= 12, 'panel gap');
 		`},
-		{"resources", layoutResources(), `
+		{"resources", "Resources", layoutResources(), `
 			for (const wrap of document.querySelectorAll('.resource-panel .table-wrap')) {
 				checkLayout(wrap.scrollWidth <= wrap.clientWidth + 1, 'columns overflow');
 			}
@@ -117,9 +130,9 @@ func TestFeatureLayouts(t *testing.T) {
 			checkLayout(links.map(a => a.textContent.trim()).join('|') === 'Services|Resources|Terminal|Backups|Settings', 'section labels');
 			checkLayout(links.every(a => rect(a).width > 0 && rect(a).right <= document.documentElement.clientWidth), 'visible navigation');
 			const active = links.filter(a => a.hasAttribute('aria-current'));
-			checkLayout(active.length === 1 && document.title.startsWith(active[0].textContent), 'current section');
+			checkLayout(active.length === 1 && active[0].textContent === ` + fmt.Sprintf("%q", page.section) + `, 'current section');
 			const tips = [...document.querySelectorAll('button.help-trigger')];
-			checkLayout(tips.length > 0, 'section help available');
+			if (` + fmt.Sprint(page.name == "services" || page.name == "backups" || page.name == "resources") + `) checkLayout(tips.length > 0, 'section help available');
 			for (const tip of tips) {
 				tip.scrollIntoView({block:'center'});
 				tip.click();

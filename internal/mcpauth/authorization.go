@@ -83,9 +83,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, c store.MCPCo
 			params.Set(k, p.Get(k))
 		}
 		_ = consent.Execute(w, struct {
-			Name, ID, Scope, Redirect, CSRF string
-			Params                          url.Values
-		}{cl.Client.Name, cl.Client.ID, scope, p.Get("redirect_uri"), s.auth.CSRFToken(r), params})
+			Name, ID, Redirect, CSRF string
+			Scopes                   []string
+			Params                   url.Values
+		}{cl.Client.Name, cl.Client.ID, p.Get("redirect_uri"), s.auth.CSRFToken(r), strings.Fields(scope), params})
 		return
 	}
 	q := target.Query()

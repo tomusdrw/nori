@@ -19,16 +19,14 @@ templ backupScreen(data backupPageData, csrf string) {
 }
 
 templ backupContent(data backupPageData, csrf string) {
-	<section class="page-heading">
-		if data.Service != nil {
-			<div class="breadcrumb"><a href={ templ.SafeURL("/services/" + url.PathEscape(data.Service.Name)) }>← { data.Service.Name }</a></div>
-		}
-		<h1>Backups</h1>
-	</section>
 	if data.Service != nil {
+		<div class="breadcrumb"><a href="/">← All services</a></div>
+		<section class="page-heading"><h1>{ data.Service.Name }</h1></section>
+		@serviceNavigation(data.Service.Name, "Backups", data.Service.IsSelf)
 		@serviceBackupPolicy(*data.Service, data.Policy, data.Detected, csrf)
 		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 	} else {
+		<section class="page-heading"><h1>Backups</h1></section>
 		if len(data.Jobs) > 0 {
 			@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 		}
@@ -89,7 +87,7 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 	<section class="panel form-panel">
 		<div class="panel-heading">
 			<div class="help-heading">
-				<h2>{ svc.Name } backup policy</h2>
+				<h2>Backup policy</h2>
 				@sectionHelp("help-policy", "What goes into a service backup?", "Each archive includes the saved service configuration and environment. Add filesystem sources for application files. For a running database such as SQLite, use paired export and import commands to make a consistent copy. Clear the schedule for manual backups.")
 			</div>
 			<form method="post" class="inline-form" action={ templ.SafeURL(serviceBackupsURL(svc.Name) + "/create") }>
@@ -97,7 +95,7 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 				<button class="button button-primary" type="submit">Create backup now</button>
 			</form>
 		</div>
-		<form method="post" action={ templ.SafeURL(serviceBackupsURL(svc.Name)) } class="service-form">
+		<form method="post" action={ templ.SafeURL(serviceBackupsURL(svc.Name)) } class="panel-body">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
 			<div class="form-grid">
 				<div class="field"><label for="backup-schedule">Schedule</label><input id="backup-schedule" name="schedule" value={ p.Schedule } placeholder="0 3 * * *"/><span class="field-help">Cron in the server’s timezone. Leave blank for manual backups.</span></div>
@@ -123,7 +121,7 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 				<div class="field"><label for="backup-import">Import command</label><textarea id="backup-import" name="import" rows="3">{ p.Import }</textarea></div>
 			</div>
 			<p class="field-help">Commands run with the service environment. Export writes to <code>$NORI_BACKUP_WORK</code> and import reads from it. Quiesce and resume must be safe to retry. Use the service dotenv for credentials.</p>
-			<div class="form-actions"><button class="button button-primary" type="submit">Save backup policy</button></div>
+			<div class="panel-actions"><button class="button button-primary" type="submit">Save backup policy</button></div>
 		</form>
 	</section>
 }
@@ -244,27 +242,30 @@ templ backupB2Page(objects []string, next, csrf string) {
 
 templ backupB2Content(objects []string, next, csrf string) {
 	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
-	<h1>Backblaze backups</h1>
-	<section class="panel form-panel">
-		if len(objects) > 0 {
-			<form method="post" action="/backups/b2/import" class="service-form">
-				<input type="hidden" name="csrf_token" value={ csrf }/>
-				<div class="field"><label for="b2-object">Backup object</label>
-					<select id="b2-object" name="key" required>
-						for _, object := range objects {
-							<option value={ object }>{ object }</option>
-						}
-					</select>
-				</div>
-				<div class="field"><label for="b2-identity">Recovery key for a different instance</label><input id="b2-identity" type="password" name="identity" autocomplete="off"/></div>
-				<div class="form-actions"><button class="button button-primary" type="submit">Review import</button></div>
-			</form>
-		} else {
-			<p>No backup files on this page.</p>
-		}
-		if next != "" {
-			<a href={ templ.SafeURL("/backups/b2?cursor=" + url.QueryEscape(next)) }>Next page</a>
-		}
+	<section class="page-heading"><h1>Backblaze backups</h1></section>
+	<section class="panel archive-picker">
+		<div class="panel-heading"><h2>Select an archive</h2></div>
+		<div class="panel-body">
+			if len(objects) > 0 {
+				<form method="post" action="/backups/b2/import" class="service-form">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<div class="field"><label for="b2-object">Backup object</label>
+						<select id="b2-object" name="key" required>
+							for _, object := range objects {
+								<option value={ object }>{ object }</option>
+							}
+						</select>
+					</div>
+					<div class="field"><label for="b2-identity">Recovery key for a different instance</label><input id="b2-identity" type="password" name="identity" autocomplete="off"/></div>
+					<div class="panel-actions"><button class="button button-primary" type="submit">Review import</button></div>
+				</form>
+			} else {
+				<p>No backup files on this page.</p>
+			}
+			if next != "" {
+				<a href={ templ.SafeURL("/backups/b2?cursor=" + url.QueryEscape(next)) }>Next page →</a>
+			}
+		</div>
 	</section>
 }
 
@@ -278,7 +279,7 @@ templ backupReviewScreen(manifest backup.Manifest, options backup.RestoreOptions
 
 templ backupReviewContent(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {
 	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
-	<h1>Restore { manifest.Service.Name }</h1>
+	<section class="page-heading"><h1>Restore { manifest.Service.Name }</h1></section>
 	if errorMessage != "" {
 		<div class="alert alert-error" role="alert" id="restore-error" tabindex="-1" autofocus?={ errorField == "" }>
 			if errorField != "" {
@@ -288,22 +289,28 @@ templ backupReviewContent(manifest backup.Manifest, options backup.RestoreOption
 			}
 		</div>
 	}
-	<section class="panel form-panel">
-		<p>This backup contains service configuration and its environment document.</p>
-		if _, exists := manifest.Files["postgres"]; exists {
-			<p>Managed PostgreSQL dump
-				if timestamp := manifest.Captured["postgres"]; !timestamp.IsZero() {
-					<span>· { timestamp.Local().Format("2006-01-02 15:04 MST") }</span>
+	<section class="panel settings-panel">
+		<div class="panel-heading"><h2>Archive contents</h2></div>
+		<div class="panel-body restore-summary">
+			<p>This backup contains service configuration and its environment document.</p>
+			if _, exists := manifest.Files["postgres"]; exists {
+				<p>Managed PostgreSQL dump
+					if timestamp := manifest.Captured["postgres"]; !timestamp.IsZero() {
+						<span>· { timestamp.Local().Format("2006-01-02 15:04 MST") }</span>
+					}
+				</p>
+				if manifest.Postgres != nil {
+					<p>Source PostgreSQL major version { strconv.Itoa(manifest.Postgres.ServerVersion / 10000) }</p>
 				}
-			</p>
-			if manifest.Postgres != nil {
-				<p>Source PostgreSQL major version { strconv.Itoa(manifest.Postgres.ServerVersion / 10000) }</p>
 			}
-		}
-		if manifest.Service.WatchedImage != "" {
-			<p>Application image <code>{ manifest.Service.WatchedImage }</code> { manifest.Digest }</p>
-		}
-		<form method="post" action={ templ.SafeURL("/backups/restore/" + token) } class="service-form">
+			if manifest.Service.WatchedImage != "" {
+				<p>Application image <code>{ manifest.Service.WatchedImage }</code> { manifest.Digest }</p>
+			}
+		</div>
+	</section>
+	<section class="panel settings-panel">
+		<div class="panel-heading"><h2>Restore destination</h2></div>
+		<form method="post" action={ templ.SafeURL("/backups/restore/" + token) } class="panel-body">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
 			<div class="form-grid">
 				<div class="field"><label for="restore-name">New service name</label><input id="restore-name" name="name" required value={ options.Name } { restoreErrorAttributes(errorField, "name")... }/></div>
@@ -346,7 +353,7 @@ templ backupReviewContent(manifest backup.Manifest, options backup.RestoreOption
 					</div>
 				}
 			</div>
-			<div class="form-actions">
+			<div class="panel-actions">
 				<button class="button button-secondary" type="submit" form="restore-cancel">Cancel</button>
 				<button class="button button-primary" type="submit">Restore as new service</button>
 			</div>

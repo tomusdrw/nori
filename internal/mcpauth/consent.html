@@ -9,21 +9,28 @@
   <body class="login-body oauth-body">
     <main class="login-card oauth-card">
       <h1>Authorize MCP access</h1>
-      <p>The application <strong>{{.Name}}</strong> ({{.ID}}) requests access to this Nori instance.</p>
-      <p>Requested permissions: <strong>{{.Scope}}</strong></p>
-      <ul>
-        <li>nori:read: services, configuration, deployment history and logs. Known dotenv values are redacted; logs may contain other sensitive data.</li>
-        <li>nori:write: create and modify services, scripts and environment variables, trigger deployments. Deployment scripts can control the Docker host and read its secrets.</li>
-        <li>nori:secrets: set values for existing environment variables (also requires nori:write). Values are never returned.</li>
+      <p><strong>{{.Name}}</strong> requests access to this Nori instance.</p>
+      <dl class="consent-client">
+        <dt>Client ID</dt><dd><code>{{.ID}}</code></dd>
+        <dt>Redirect destination</dt><dd><code>{{.Redirect}}</code></dd>
+      </dl>
+      <h2>Requested permissions</h2>
+      <ul class="consent-scopes">
+        {{range .Scopes}}
+        <li><code>{{.}}</code>
+          {{if eq . "nori:read"}}Read services, configuration, deployment history and logs. Known dotenv values are redacted. Logs may contain other sensitive data.{{end}}
+          {{if eq . "nori:write"}}Modify services, scripts and environment variables, and trigger deployments. Deployment scripts can control the Docker host and read its secrets.{{end}}
+          {{if eq . "nori:secrets"}}Set values for existing environment variables. This also requires write access. Values are never returned.{{end}}
+        </li>
+        {{end}}
       </ul>
-      <p>Redirect destination: {{.Redirect}}</p>
-      <form class="login-form" method="post" action="/oauth/authorize">
+      <form class="consent-actions" method="post" action="/oauth/authorize">
         {{range $key,$values := .Params}}
         <input type="hidden" name="{{$key}}" value="{{index $values 0}}">
         {{end}}
         <input type="hidden" name="csrf_token" value="{{.CSRF}}">
         <button class="button button-primary" name="decision" value="allow">Authorize</button>
-        <button class="button" name="decision" value="deny">Deny</button>
+        <button class="button button-secondary" name="decision" value="deny">Deny</button>
       </form>
     </main>
   </body>

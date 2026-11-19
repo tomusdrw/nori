@@ -29,10 +29,13 @@ templ resourcesContent(data resourcesOverview) {
 }
 
 templ storageSummary(values map[string]resourceValue) {
-	<section class="stats-grid" aria-label="Tracked storage">
-		for _, metric := range storageMetrics {
-			<div class="stat-card resource-stat"><span class="metric-label">Tracked storage · { metric.label }</span><strong>{ values[metric.key].text(metric.key) }</strong></div>
-		}
+	<section class="storage-summary" aria-label="Tracked storage">
+		<h2>Tracked storage</h2>
+		<dl class="dashboard-summary">
+			for _, metric := range storageMetrics {
+				<div><dt>{ metric.label }</dt><dd>{ values[metric.key].text(metric.key) }</dd></div>
+			}
+		</dl>
 	</section>
 }
 
@@ -130,9 +133,9 @@ templ serviceResourcesPage(data serviceResourceData, csrf string) {
 templ serviceResourcesContent(data serviceResourceData, csrf string) {
 	<div class="breadcrumb"><a href="/resources">← All resources</a></div>
 	<section class="page-heading">
-		<div><h1>{ data.svc.Name } resources</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
-		<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.svc.Name) }>Service overview</a>
+		<div><h1>{ data.svc.Name }</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
 	</section>
+	@serviceNavigation(data.svc.Name, "Resources", data.svc.IsSelf)
 	@storageSummary(data.view.storageFor(data.svc.ID))
 	<section class="panel detail-panel resource-panel">
 		<div class="panel-heading">

@@ -36,9 +36,8 @@ templ ServicesTablePartial(dashboard dashboardView, csrf string) {
 		}
 		if dashboard.Count == 0 {
 			<section class="empty-state panel">
-				<div class="empty-icon">+</div>
 				<h2>No services yet</h2>
-				<p>Add your first service to start watching images and deploying from the dashboard.</p>
+				<p>Create a service to track a container image or run a deployment script.</p>
 				<a class="button button-primary" href="/services/new">Create a service</a>
 			</section>
 		}

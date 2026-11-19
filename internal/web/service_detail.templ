@@ -9,88 +9,63 @@ templ ServiceDetailPage(data ServiceDetailData, csrf string) {
 templ serviceDetailContent(data ServiceDetailData, csrf string) {
 	<div class="breadcrumb"><a href="/">← All services</a></div>
 	<section class="detail-heading">
-		<div class="detail-title">
-			<div class="service-avatar service-avatar-large">{ serviceInitial(data.Service.Name) }</div>
-			<div>
-				<div class="detail-title-row">
-					<h1>{ data.Service.Name }</h1>
-					if data.Service.IsSelf {
-						<span class="badge badge-update">managed</span>
+		<div class="service-intro">
+			<h1>{ data.Service.Name }</h1>
+			<div class="service-identifiers">
+				<span class={ "badge badge-state badge-state-" + data.State }><span class={ "status-dot status-" + data.State }></span>
+					if data.State == "none" {
+						No containers
+					} else {
+						{ data.State }
 					}
-					if data.Service.ManualScript {
-						<span class="badge badge-manual">Manual deployment</span>
-					}
-					<span class={ "badge badge-state badge-state-" + data.State }><span class={ "status-dot status-" + data.State }></span>{ data.State }</span>
-				</div>
+				</span>
+				if data.Service.IsSelf {
+					<span class="service-tag">Managed</span>
+				}
 				if data.Service.ManualScript {
-					<p class="page-subtitle">No watched image · deployment script runs only on request</p>
+					<span class="service-tag">Manual deployment</span>
 				} else {
-					<p class="page-subtitle">{ data.Service.WatchedImage }</p>
+					<code>{ data.Service.WatchedImage }</code>
 				}
 			</div>
+			if data.Service.Description != "" {
+				<p class="service-description">{ data.Service.Description }</p>
+			}
 		</div>
 		<div class="action-row">
-			<a class="button button-secondary" href={ templ.SafeURL(serviceResourcesURL(data.Service.Name)) }>Resources</a>
-			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/start") } class="inline-form">
-				<input type="hidden" name="csrf_token" value={ csrf }/>
-				<button class="button button-secondary" type="submit">Start</button>
-			</form>
-			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/stop") } class="inline-form">
-				<input type="hidden" name="csrf_token" value={ csrf }/>
-				<button class="button button-secondary" type="submit">Stop</button>
-			</form>
-			<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Configure</a>
-			if !data.Service.IsSelf {
-				<a class="button button-secondary" href={ templ.SafeURL(serviceBackupsURL(data.Service.Name)) }>Backups</a>
-			}
 			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } class="inline-form">
 				<input type="hidden" name="csrf_token" value={ csrf }/>
 				if data.UpdateAvail {
 					<button class="button button-primary" type="submit">Update</button>
 				} else if data.Service.ManualScript {
-					<button class="button button-secondary button-redeploy" type="submit">Run script</button>
+					<button class="button button-secondary" type="submit">Run script</button>
 				} else {
-					<button class="button button-secondary button-redeploy" type="submit">Re-deploy</button>
+					<button class="button button-secondary" type="submit">Re-deploy</button>
 				}
 			</form>
 		</div>
 	</section>
-
-	if data.Service.Description != "" {
-		<section class="panel detail-panel">
-			<div class="panel-heading"><div><h2>Description</h2><p class="service-description">{ data.Service.Description }</p></div></div>
-		</section>
-	}
-
-	if data.UpdateAvail {
-		<div class="update-banner">
-			<div><span class="update-icon">↗</span><strong>A newer image is ready</strong><span>The registry digest differs from the running version.</span></div>
-			<span class="badge badge-update">Update available</span>
-		</div>
-	}
-
-	<section class="stats-grid">
-		<div class="stat-card">
-			<span class="metric-label">Service state</span>
-			<strong><span class={ "status-dot status-" + data.State }></span>{ data.State }</strong>
-			<span class="stat-caption">Across all containers</span>
-		</div>
-		<div class="stat-card">
-			<span class="metric-label">Running for</span>
-			<strong>{ data.RunningFor }</strong>
-			<span class="stat-caption">Current container uptime</span>
-		</div>
-		<div class="stat-card">
-			<span class="metric-label">Last deploy</span>
-			<strong>{ data.LastDeploy }</strong>
-			<span class="stat-caption">Most recent deployment attempt</span>
-		</div>
-	</section>
-	if !data.Service.ManualScript {
-		<div class="detail-version-summary" title="Running and latest image digests"><span>Image versions</span><code>{ data.Running }</code><span>→</span><code>{ data.Latest }</code></div>
-	}
-
-	<section id="logs" class="panel detail-panel log-panel full-width-log-panel" data-log-panel hx-request='{"timeout":8000}'>
+	@serviceNavigation(data.Service.Name, "Overview", data.Service.IsSelf)
+	<dl class="dashboard-summary service-summary">
+		<div><dt>Running for</dt><dd>{ data.RunningFor }</dd></div>
+		<div><dt>Last deploy</dt><dd>{ data.LastDeploy }</dd></div>
+		if data.Service.ManualScript {
+			<div><dt>Containers</dt><dd>{ strconv.Itoa(len(data.Containers)) }</dd></div>
+		} else {
+			<div><dt>Image versions</dt><dd>
+				<code title="Running image">{ data.Running }</code>
+				if data.Running != data.Latest {
+					<span aria-label="Latest image"> → </span><code>{ data.Latest }</code>
+				}
+			</dd>
+			if data.UpdateAvail {
+				<span class="service-tag update-tag">Update available</span>
+			}
+			</div>
+		}
+	</dl>
+	<div class="service-runtime">
+		<section id="logs" class="panel detail-panel log-panel service-log-panel" data-log-panel hx-request='{"timeout":8000}'>
 			<div class="panel-heading compact-heading">
 				<div><h2>Container logs</h2><p>The latest 100 lines from the selected container.</p></div>
 				<div class="heading-side">
@@ -99,11 +74,37 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 				</div>
 			</div>
 			<div id="container-logs" data-log-refresh hx-get={ logsStreamURL(data.Service.Name, "") } hx-trigger="load, every 3s" hx-swap="outerHTML" hx-sync="#logs:drop">Loading logs…</div>
-	</section>
+		</section>
 
-	<section class="panel detail-panel history-panel">
+		<section class="panel detail-panel containers-panel">
+			<div class="panel-heading compact-heading">
+				<div><h2>Containers</h2></div>
+				<span class="count-pill">{ strconvItoa(len(data.Containers)) }</span>
+			</div>
+			if len(data.Containers) == 0 {
+				<div class="panel-body"><p>No labeled containers found.</p></div>
+			} else {
+				<ul class="container-list">
+					for _, c := range data.Containers {
+						<li><strong>{ c.Name }</strong><span class="service-state"><span class={ "status-dot status-" + c.State }></span>{ c.State }</span><code>{ c.Image }</code></li>
+					}
+				</ul>
+			}
+			<div class="container-actions">
+				<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/start") } class="inline-form">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<button class="button button-secondary button-small" type="submit">Start</button>
+				</form>
+				<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/stop") } class="inline-form">
+					<input type="hidden" name="csrf_token" value={ csrf }/>
+					<button class="button button-secondary button-small" type="submit">Stop</button>
+				</form>
+			</div>
+		</section>
+	</div>
+	<section class="panel detail-panel history-panel service-records">
 		<div class="panel-heading compact-heading">
-			<div><h2>Deployment history</h2><p>Recent deploy attempts and their results.</p></div>
+			<div><h2>Deployment history</h2></div>
 			<span class="count-pill">{ strconvItoa(len(data.Deployments)) }</span>
 		</div>
 		<div class="table-wrap">
@@ -116,31 +117,11 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 					for _, d := range data.Deployments {
 						<tr>
 							<td class="table-primary"><a href={ templ.SafeURL("/deployments/" + strconvItoa64(d.ID)) }>#{ strconvItoa64(d.ID) }</a></td>
-							<td>{ d.Trigger }</td>
-							<td><code>{ shortDigest(d.TargetDigest) }</code></td>
-							<td><span class={ "badge badge-deploy badge-deploy-" + d.Status }>{ d.Status }</span></td>
-							<td>{ d.StartedAt }</td>
+							<td data-label="Trigger">{ d.Trigger }</td>
+							<td data-label="Target"><code>{ shortDigest(d.TargetDigest) }</code></td>
+							<td data-label="Status"><span class={ "badge badge-deploy badge-deploy-" + d.Status }>{ d.Status }</span></td>
+							<td data-label="Started">{ d.StartedAt }</td>
 						</tr>
-					}
-				</tbody>
-			</table>
-		</div>
-	</section>
-
-	<section class="panel detail-panel containers-panel">
-		<div class="panel-heading compact-heading">
-			<div><h2>Containers</h2><p>Discovered through the service label.</p></div>
-			<span class="count-pill">{ strconvItoa(len(data.Containers)) }</span>
-		</div>
-		<div class="table-wrap">
-			<table>
-				<thead><tr><th>Name</th><th>Image</th><th>State</th></tr></thead>
-				<tbody>
-					if len(data.Containers) == 0 {
-						<tr><td colspan="3" class="empty-cell">No labeled containers found.</td></tr>
-					}
-					for _, c := range data.Containers {
-						<tr><td class="table-primary">{ c.Name }</td><td><code>{ c.Image }</code></td><td><span class={ "badge badge-state badge-state-" + c.State }><span class={ "status-dot status-" + c.State }></span>{ c.State }</span></td></tr>
 					}
 				</tbody>
 			</table>
@@ -177,6 +158,22 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 			}
 		}
 	</script>
+}
+
+templ serviceNavigation(name, active string, self bool) {
+	<nav class="service-nav" aria-label="Service navigation">
+		for _, item := range []struct{label, suffix string}{
+			{"Overview", ""}, {"Resources", "/resources"}, {"Backups", "/backups"}, {"Configure", "/edit"},
+		} {
+			if item.label != "Backups" || !self {
+				<a href={ templ.SafeURL("/services/" + name + item.suffix) }
+					if item.label == active {
+						aria-current="page"
+					}
+				>{ item.label }</a>
+			}
+		}
+	</nav>
 }
 
 func strconvItoa64(i int64) string {
@@ -222,7 +219,6 @@ templ deploymentContent(progress deploymentProgressView) {
 	<div class="breadcrumb"><a href="/">← Dashboard</a></div>
 	<section class="page-heading">
 		<div>
-			<p class="eyebrow">Deployment run</p>
 			<h1>Deployment #{ strconvItoa64(progress.ID) }</h1>
 			<p class="page-subtitle">Combined output from the deployment script.</p>
 		</div>
