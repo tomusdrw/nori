@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -16,8 +17,9 @@ type Poller struct {
 	executor *executor.Executor
 	interval time.Duration
 
-	mu    sync.RWMutex
-	cache map[string]string // service name -> latest digest
+	mu      sync.RWMutex
+	pending map[int64]string
+	cache   map[string]string // service name -> latest digest
 }
 
 func New(st *store.Store, latest executor.LatestDigestFunc, ex *executor.Executor, interval time.Duration) *Poller {
@@ -26,6 +28,7 @@ func New(st *store.Store, latest executor.LatestDigestFunc, ex *executor.Executo
 		latest:   latest,
 		executor: ex,
 		interval: interval,
+		pending:  make(map[int64]string),
 		cache:    make(map[string]string),
 	}
 }
@@ -60,6 +63,7 @@ func (p *Poller) Tick(ctx context.Context) {
 		if svc.DeploymentMode == store.DeploymentModeManualScript {
 			p.mu.Lock()
 			delete(p.cache, svc.Name)
+			delete(p.pending, svc.ID)
 			p.mu.Unlock()
 			continue
 		}
@@ -71,12 +75,25 @@ func (p *Poller) Tick(ctx context.Context) {
 		p.mu.Lock()
 		prev := p.cache[svc.Name]
 		p.cache[svc.Name] = digest
+		if svc.Policy != store.PolicyImmediate {
+			delete(p.pending, svc.ID)
+		} else if prev != "" && prev != digest {
+			p.pending[svc.ID] = digest
+		}
+		pending := p.pending[svc.ID]
 		p.mu.Unlock()
 
-		if svc.Policy == store.PolicyImmediate && prev != "" && prev != digest {
-			log.Printf("poller: digest changed for %s, triggering auto-deploy", svc.Name)
-			if _, err := p.executor.Deploy(ctx, svc.ID, store.TriggerAuto); err != nil {
+		if pending != "" {
+			_, err := p.executor.Deploy(ctx, svc.ID, store.TriggerAuto)
+			if err != nil {
 				log.Printf("poller: auto-deploy %s: %v", svc.Name, err)
+			}
+			if !errors.Is(err, executor.ErrServiceBusy) {
+				p.mu.Lock()
+				if p.pending[svc.ID] == pending {
+					delete(p.pending, svc.ID)
+				}
+				p.mu.Unlock()
 			}
 		}
 	}

@@ -136,8 +136,13 @@ func (r *realClient) EnsureVolume(ctx context.Context, want ManagedResource) err
 	if !errdefs.IsNotFound(err) {
 		return managedError(err)
 	}
-	_, err = r.cli.VolumeCreate(ctx, volume.CreateOptions{Name: want.Name, Labels: maps.Clone(want.Labels)})
-	return managedError(err)
+	created, err := r.cli.VolumeCreate(ctx, volume.CreateOptions{Name: want.Name, Labels: maps.Clone(want.Labels)})
+	if err != nil {
+		return managedError(err)
+	}
+	// Docker can return success and the existing volume if another request
+	// claimed the name between inspect and create.
+	return checkOwnership(ManagedResource{Name: created.Name, Labels: created.Labels}, want)
 }
 
 func (r *realClient) RunProbe(ctx context.Context, probe ManagedProbe) error {

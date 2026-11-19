@@ -39,6 +39,9 @@ templ serviceDetailContent(data ServiceDetailData, csrf string) {
 				<button class="button button-secondary" type="submit">Stop</button>
 			</form>
 			<a class="button button-secondary" href={ templ.SafeURL("/services/" + data.Service.Name + "/edit") }>Configure</a>
+			if !data.Service.IsSelf {
+				<a class="button button-secondary" href={ templ.SafeURL(serviceBackupsURL(data.Service.Name)) }>Backups</a>
+			}
 			<form method="post" action={ templ.SafeURL("/services/" + data.Service.Name + "/deploy") } class="inline-form">
 				<input type="hidden" name="csrf_token" value={ csrf }/>
 				if data.UpdateAvail {

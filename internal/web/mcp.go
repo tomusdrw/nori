@@ -259,6 +259,13 @@ func (s *Server) newMCPHandler() http.Handler {
 			if err != nil {
 				return nil, err
 			}
+			if s.backups != nil && (action == "start" || action == "stop") {
+				release, err := s.executor.BeginServiceOperation(ctx, svc.ID)
+				if err != nil {
+					return nil, err
+				}
+				defer release()
+			}
 			switch action {
 			case "delete":
 				err = s.store.DeleteService(ctx, svc.ID)

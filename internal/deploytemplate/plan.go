@@ -292,13 +292,23 @@ func validMountTarget(target string) bool {
 }
 
 func BuildPlan(in Input) (Plan, error) {
+	return buildPlan(in, true)
+}
+
+// BuildDataPlan resolves Docker ownership and data resources without an
+// application image. It is suitable for backup, before any app is deployed.
+func BuildDataPlan(serviceID int64, serviceName string, config Config) (Plan, error) {
+	return buildPlan(Input{ServiceID: serviceID, ServiceName: serviceName, Config: config}, false)
+}
+
+func buildPlan(in Input, requireImage bool) (Plan, error) {
 	if in.ServiceID <= 0 {
 		return Plan{}, errors.New("service ID must be positive")
 	}
 	if !validResourceName(in.ServiceName) {
 		return Plan{}, fmt.Errorf("invalid service name %q", in.ServiceName)
 	}
-	if !strings.Contains(in.TargetImage, "@sha256:") {
+	if requireImage && !strings.Contains(in.TargetImage, "@sha256:") {
 		return Plan{}, errors.New("target image must be digest-pinned")
 	}
 	if err := in.Config.Validate(); err != nil {

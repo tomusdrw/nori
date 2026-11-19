@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -14,16 +15,16 @@ var ErrServiceConflict = errors.New("service configuration changed; read it agai
 // its encrypted environment. Existing names and managed status are immutable;
 // updates require the previous configuration to detect concurrent edits.
 func (s *Store) SaveServiceConfig(ctx context.Context, svc *Service, env *string, previous *Service) error {
-	return s.saveServiceConfig(ctx, svc, env, previous, false)
+	return s.saveServiceConfig(ctx, svc, env, previous, false, nil)
 }
 
 // SaveServiceConfigTemplate resolves placeholders inside the same transaction
 // as the service save, so a stale template cannot restore older secret values.
 func (s *Store) SaveServiceConfigTemplate(ctx context.Context, svc *Service, env *string, previous *Service) error {
-	return s.saveServiceConfig(ctx, svc, env, previous, true)
+	return s.saveServiceConfig(ctx, svc, env, previous, true, nil)
 }
 
-func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string, previous *Service, template bool) error {
+func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string, previous *Service, template bool, prepare func(*sql.Tx, int64, string) (string, error)) error {
 	normalizeDeploymentConfig(svc)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -62,7 +63,7 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 		}
 		expected := *previous
 		normalizeDeploymentConfig(&expected)
-		res, err := tx.ExecContext(ctx, `UPDATE service SET description=?,watched_image=?,policy=?,cron_expr=?,deploy_script=?,health_url=?,deployment_mode=?,template_config=?,updated_at=?,config_version=config_version+1 WHERE id=? AND name=? AND is_self=0 AND config_version=?`, svc.Description, svc.WatchedImage, svc.Policy, svc.CronExpr, svc.DeployScript, svc.HealthURL, svc.DeploymentMode, svc.TemplateConfig, now.Unix(), id, svc.Name, expected.ConfigVersion)
+		res, err := tx.ExecContext(ctx, `UPDATE service SET description=?,watched_image=?,policy=?,cron_expr=?,deploy_script=?,health_url=?,deployment_mode=?,template_config=?,updated_at=?,config_version=config_version+1 WHERE id=? AND name=? AND is_self=0 AND config_version=? AND NOT EXISTS(SELECT 1 FROM backup_restore WHERE service_id=service.id)`, svc.Description, svc.WatchedImage, svc.Policy, svc.CronExpr, svc.DeployScript, svc.HealthURL, svc.DeploymentMode, svc.TemplateConfig, now.Unix(), id, svc.Name, expected.ConfigVersion)
 		if err != nil {
 			return err
 		}
@@ -72,6 +73,12 @@ func (s *Store) saveServiceConfig(ctx context.Context, svc *Service, env *string
 		}
 		if n != 1 {
 			return ErrServiceConflict
+		}
+	}
+	if prepare != nil {
+		content, err = prepare(tx, id, content)
+		if err != nil {
+			return err
 		}
 	}
 	if env != nil {

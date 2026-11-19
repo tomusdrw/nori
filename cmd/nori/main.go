@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"nori/internal/auth"
+	"nori/internal/backup"
 	"nori/internal/config"
 	"nori/internal/docker"
 	"nori/internal/executor"
@@ -103,6 +105,17 @@ func main() {
 	term := terminalsession.New("nori", cfg.TerminalDir)
 	channels := web.Channels{Twilio: cfg.Twilio.Enabled(), Telegram: cfg.Telegram.Enabled()}
 	srv := web.NewServer(st, dk, ex, pl, a, channels, term)
+	var backupDone chan struct{}
+	if manager, err := backup.New(ctx, st, dk, ex, cfg.DBPath, cfg.DockerHost, backupNotifier(cfg)); err != nil {
+		log.Printf("backup: initialization failed: %v", err)
+	} else {
+		srv.SetBackups(manager)
+		backupDone = make(chan struct{})
+		go func() {
+			defer close(backupDone)
+			manager.Run(ctx)
+		}()
+	}
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
 
 	go func() {
@@ -116,7 +129,23 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	cancel()
-	_ = httpSrv.Shutdown(context.Background())
+	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
+	defer stop()
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		_ = httpSrv.Shutdown(shutdown)
+	}()
+	if backupDone != nil {
+		recovery, stopRecovery := context.WithTimeout(context.Background(), backup.WriterRecoveryTimeout+30*time.Second)
+		defer stopRecovery()
+		select {
+		case <-backupDone:
+		case <-recovery.Done():
+			log.Print("backup: graceful shutdown timed out")
+		}
+	}
+	<-httpDone
 }
 
 // buildNotifier returns the notifier chosen by configuration. When no
@@ -168,4 +197,21 @@ func buildNotifier(cfg config.Config, st *store.Store) notify.Notifier {
 		return notify.Noop{}
 	}
 	return &notify.LogFailures{Inner: &notify.Multi{Notifiers: notifiers}}
+}
+
+func backupNotifier(cfg config.Config) func(context.Context, string) error {
+	var channels []func(context.Context, string) error
+	if cfg.Telegram.Enabled() {
+		channels = append(channels, notify.NewTelegram(cfg.Telegram.BotToken, cfg.Telegram.ChatID).SendAdmin)
+	}
+	if cfg.Twilio.Enabled() {
+		channels = append(channels, notify.NewTwilio(cfg.Twilio.AccountSID, cfg.Twilio.AuthToken, cfg.Twilio.From, cfg.Twilio.To).SendAdmin)
+	}
+	return func(ctx context.Context, msg string) error {
+		var err error
+		for _, send := range channels {
+			err = errors.Join(err, send(ctx, msg))
+		}
+		return err
+	}
 }
