@@ -1,6 +1,6 @@
 package web
 
-templ Layout(title string, csrf string, content templ.Component) {
+templ Layout(title, section, csrf string, content templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -10,7 +10,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 			<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"/>
 			<link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180"/>
 			<title>{ title } · { BotName(ctx) }</title>
-			<link rel="stylesheet" href="/static/app.css"/>
+			<link rel="stylesheet" href={ appStylesheet }/>
 			<script src="/static/htmx.min.js" defer></script>
 			<script src="/static/log-updates.js" defer></script>
 			<script src="/static/editor.js" type="module"></script>
@@ -41,11 +41,18 @@ templ Layout(title string, csrf string, content templ.Component) {
 						<span>{ BotName(ctx) }</span>
 					</a>
 					<nav class="nav-links" aria-label="Main navigation">
-						<a href="/">Services</a>
-						<a class="nav-resources" href="/resources" aria-label="Resources"><span class="nav-resources-icon" aria-hidden="true">▥</span><span>Resources</span></a>
-						<a class="nav-terminal" href="/terminal"><span class="nav-terminal-icon" aria-hidden="true">&gt;_</span><span>Terminal</span></a>
-						<a class="nav-backups" href="/backups">Backups</a>
-						<a href="/settings">Settings</a>
+						for _, link := range []struct{ label, path string }{
+							{"Services", "/"}, {"Resources", "/resources"}, {"Terminal", "/terminal"},
+							{"Backups", "/backups"}, {"Settings", "/settings"},
+						} {
+							<a href={ templ.SafeURL(link.path) }
+								if link.label == section {
+									aria-current="location"
+								}
+							>{ link.label }</a>
+						}
+					</nav>
+					<div class="topbar-actions">
 						<a class="button button-primary button-small" href="/services/new">
 							<span aria-hidden="true">+</span> New service
 						</a>
@@ -53,7 +60,7 @@ templ Layout(title string, csrf string, content templ.Component) {
 							<input type="hidden" name="csrf_token" value={ csrf }/>
 							<button class="button button-ghost button-small" type="submit">Sign out</button>
 						</form>
-					</nav>
+					</div>
 				</header>
 				<main class="page-wrap">
 					@content
@@ -73,7 +80,7 @@ templ LoginPage(csrf string, errMsg string, next string) {
 			<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"/>
 			<link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180"/>
 			<title>Sign in · { BotName(ctx) }</title>
-			<link rel="stylesheet" href="/static/app.css"/>
+			<link rel="stylesheet" href={ appStylesheet }/>
 		</head>
 		<body class="login-body">
 			<div class="login-glow login-glow-one"></div>

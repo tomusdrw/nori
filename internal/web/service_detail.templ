@@ -3,7 +3,7 @@ package web
 import "strconv"
 
 templ ServiceDetailPage(data ServiceDetailData, csrf string) {
-	@Layout(data.Service.Name, csrf, serviceDetailContent(data, csrf))
+	@Layout(data.Service.Name, "Services", csrf, serviceDetailContent(data, csrf))
 }
 
 templ serviceDetailContent(data ServiceDetailData, csrf string) {
@@ -215,7 +215,7 @@ templ logConnection() {
 }
 
 templ DeploymentPage(progress deploymentProgressView, csrf string) {
-	@Layout("Deployment", csrf, deploymentContent(progress))
+	@Layout("Deployment", "Services", csrf, deploymentContent(progress))
 }
 
 templ deploymentContent(progress deploymentProgressView) {

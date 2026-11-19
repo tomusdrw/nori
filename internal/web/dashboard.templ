@@ -7,7 +7,7 @@ import (
 )
 
 templ Page(dashboard dashboardView, csrf string) {
-	@Layout("Services", csrf, dashboardContent(dashboard, csrf))
+	@Layout("Services", "Services", csrf, dashboardContent(dashboard, csrf))
 }
 
 templ dashboardContent(dashboard dashboardView, csrf string) {

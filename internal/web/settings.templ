@@ -6,7 +6,7 @@ import (
 )
 
 templ SettingsPage(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, mcpView mcpSettingsView, channels Channels, routing notify.Routing) {
-	@Layout("Settings", csrf, settingsContent(botName, csrf, errMsg, saved, mcpConfig, mcpView, channels, routing))
+	@Layout("Settings", "Settings", csrf, settingsContent(botName, csrf, errMsg, saved, mcpConfig, mcpView, channels, routing))
 }
 
 templ settingsContent(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, mcpView mcpSettingsView, channels Channels, routing notify.Routing) {
@@ -212,7 +212,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 }
 
 templ MCPGrantRevokeConfirmPage(botName string, csrf string, grant store.OAuthGrant) {
-	@Layout("Revoke OAuth connection", csrf, mcpGrantRevokeConfirmContent(botName, csrf, grant))
+	@Layout("Revoke OAuth connection", "Settings", csrf, mcpGrantRevokeConfirmContent(botName, csrf, grant))
 }
 
 templ mcpGrantRevokeConfirmContent(botName string, csrf string, grant store.OAuthGrant) {

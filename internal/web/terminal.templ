@@ -1,7 +1,7 @@
 package web
 
 templ TerminalPage(csrf string, unavailable string) {
-	@Layout("Terminal", csrf, TerminalContent(unavailable))
+	@Layout("Terminal", "Terminal", csrf, TerminalContent(unavailable))
 }
 
 templ TerminalContent(unavailable string) {

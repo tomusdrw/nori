@@ -11,7 +11,7 @@ import (
 )
 
 templ backupPage(data backupPageData, csrf string) {
-	@Layout("Backups", csrf, backupScreen(data, csrf))
+	@Layout("Backups", "Backups", csrf, backupScreen(data, csrf))
 }
 
 templ backupScreen(data backupPageData, csrf string) {
@@ -29,44 +29,69 @@ templ backupContent(data backupPageData, csrf string) {
 		@serviceBackupPolicy(*data.Service, data.Policy, data.Detected, csrf)
 		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
 	} else {
-		<section class="panel form-panel">
-			<h2>Import a backup</h2>
-			<form method="post" action="/backups/import" enctype="multipart/form-data" class="service-form">
-				<input type="hidden" name="csrf_token" value={ csrf }/>
-				<div class="field">
-					<label for="backup-identity">Recovery key for a different instance</label>
-					<input id="backup-identity" type="password" name="identity" autocomplete="off"/>
+		if len(data.Jobs) > 0 {
+			@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+		}
+		<div class="backup-tools">
+			<section class="panel settings-panel">
+				<div class="panel-heading">
+					<div class="help-heading">
+						<h2>Import a backup</h2>
+						@sectionHelp("help-import", "How do I restore an archive?", "Choose an encrypted .nori file. Paste the private recovery key from the instance that created it if Nori doesn’t hold that key here. Review import lets you check the contents and choose a new service name before restoring.")
+					</div>
 				</div>
-				<div class="field">
-					<label for="backup-file">Backup file</label>
-					<input id="backup-file" type="file" name="archive" accept=".nori" required/>
-				</div>
-				<div class="form-actions"><button class="button button-primary" type="submit">Review import</button></div>
-			</form>
-			if data.B2.Enabled() {
-				<a href="/backups/b2">Browse Backblaze B2 backups</a>
-			}
-		</section>
-		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
-		if data.KeyAvailable {
-			<section class="panel form-panel">
-				<h2>Recovery key</h2>
-				<p>Store an exported key outside this server. You’ll need it to restore on another instance.</p>
-				<form method="post" action="/backups/key">
+				<form method="post" action="/backups/import" enctype="multipart/form-data" class="panel-body">
 					<input type="hidden" name="csrf_token" value={ csrf }/>
-					<button class="button button-secondary" type="submit">Download recovery key</button>
+					<div class="field">
+						<label for="backup-identity">Recovery key <span class="field-hint">· If the key is stored elsewhere</span></label>
+						<input id="backup-identity" type="password" name="identity" autocomplete="off"/>
+					</div>
+					<div class="field">
+						<label for="backup-file">Backup file</label>
+						<input id="backup-file" type="file" name="archive" accept=".nori" required/>
+					</div>
+					<div class="panel-actions">
+						<button class="button button-primary" type="submit">Review import</button>
+						if data.B2.Enabled() {
+							<a class="button button-secondary" href="/backups/b2">Browse Backblaze B2 backups</a>
+						}
+					</div>
 				</form>
 			</section>
-		}
-		@backupDiskSettings(data.Disks, data.DiskPolicy, csrf)
-		@backupB2Settings(data.B2, csrf)
+			if len(data.Jobs) == 0 || data.KeyAvailable {
+				<div class="backup-side">
+					if len(data.Jobs) == 0 {
+						@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+					}
+					if data.KeyAvailable {
+						<section class="panel settings-panel">
+							<div class="panel-heading"><h2>Recovery key</h2></div>
+							<div class="panel-body">
+								<p>Store an exported key outside this server. You’ll need it to restore on another instance.</p>
+								<form method="post" action="/backups/key">
+									<input type="hidden" name="csrf_token" value={ csrf }/>
+									<button class="button button-secondary" type="submit">Download recovery key</button>
+								</form>
+							</div>
+						</section>
+					}
+				</div>
+			}
+		</div>
+		<div class="backup-settings">
+			@backupDiskSettings(data.Disks, data.DiskPolicy, csrf)
+			@backupB2Settings(data.B2, csrf)
+		</div>
 	}
 }
 
 templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []store.BackupSource, csrf string) {
 	<section class="panel form-panel">
 		<div class="panel-heading">
-			<h2>{ svc.Name } backup policy</h2>
+			<div class="help-heading">
+				<h2>{ svc.Name } backup policy</h2>
+				@sectionHelp("help-policy", "What goes into a service backup?", "Each archive includes the saved service configuration and environment. Add filesystem sources for application files. For a running database such as SQLite, use paired export and import commands to make a consistent copy. Clear the schedule for manual backups.")
+			</div>
 			<form method="post" class="inline-form" action={ templ.SafeURL(serviceBackupsURL(svc.Name) + "/create") }>
 				<input type="hidden" name="csrf_token" value={ csrf }/>
 				<button class="button button-primary" type="submit">Create backup now</button>
@@ -105,9 +130,14 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 
 templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 	<section class="panel detail-panel history-panel backup-history">
-		<h2>Backup history</h2>
+		<div class="panel-heading">
+			<div class="help-heading">
+				<h2>Backup history</h2>
+				@sectionHelp("help-history", "How do I create a backup?", "Open Services, choose the service you want to protect, then open Backups. Choose Create backup now or save a schedule. Completed archives appear here for download or restore.")
+			</div>
+		</div>
 		if len(jobs) == 0 {
-			<p>No backups yet.</p>
+			<div class="panel-body"><p>No backups yet.</p></div>
 		} else {
 			<div class="table-wrap">
 				<table role="table">
@@ -150,16 +180,25 @@ templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 }
 
 templ backupDiskSettings(disks []backup.DiskUsage, p backup.DiskPolicy, csrf string) {
-	<section class="panel form-panel" id="disk-space">
-		<h2>Disk space</h2>
-		<a class="button button-secondary button-small" href="/resources">View resource breakdown</a>
-		<ul>
-			for _, disk := range disks {
-				<li><code>{ disk.Path }</code> · { disk.Status } · { fmt.Sprintf("%.1f GiB of %.1f GiB free", float64(disk.Available)/float64(backup.GiB), float64(disk.Total)/float64(backup.GiB)) }</li>
-			}
-		</ul>
-		<form method="post" action="/backups/disks" class="service-form">
+	<section class="panel settings-panel" id="disk-space">
+		<div class="panel-heading">
+			<div class="help-heading">
+				<h2>Disk space</h2>
+				@sectionHelp("help-disk", "When do backups stop writing?", "Set the minimum free space to keep on each monitored filesystem. With warning levels of 15% and 5 GiB, falling below either value sends an alert. A critical reading on any monitored filesystem defers backup writes.")
+			</div>
+			<a class="panel-link" href="/resources">View resources →</a>
+		</div>
+		<form method="post" action="/backups/disks" class="panel-body">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
+			for _, disk := range disks {
+				<div class="disk-usage">
+					<div><code>{ disk.Path }</code><span>{ disk.Status }</span></div>
+					if disk.Total > 0 {
+						<meter aria-label={ "Used space on " + disk.Path } min="0" max={ strconv.FormatInt(disk.Total, 10) } value={ strconv.FormatInt(disk.Total - disk.Available, 10) }></meter>
+					}
+					<small>{ fmt.Sprintf("%.1f GiB of %.1f GiB free", float64(disk.Available)/float64(backup.GiB), float64(disk.Total)/float64(backup.GiB)) }</small>
+				</div>
+			}
 			<div class="form-grid">
 				<div class="field"><label for="backup-wp">Warning threshold (%)</label><input id="backup-wp" name="warning_percent" type="number" min="0" max="95" required value={ strconv.FormatInt(p.WarningPercent, 10) }/></div>
 				<div class="field"><label for="backup-wb">Warning threshold (GiB)</label><input id="backup-wb" name="warning_gib" type="number" min="0" required value={ strconv.FormatInt(p.WarningBytes / backup.GiB, 10) }/></div>
@@ -168,32 +207,39 @@ templ backupDiskSettings(disks []backup.DiskUsage, p backup.DiskPolicy, csrf str
 				<div class="field field-wide"><label for="backup-paths">Additional paths to monitor</label><textarea id="backup-paths" name="paths" rows="3">{ strings.Join(p.Paths, "\n") }</textarea><span class="field-help">One absolute path per line, visible from Nori.</span></div>
 			</div>
 			<p class="field-help">Either threshold can trigger an alert through configured administrator notification channels.</p>
-			<div class="form-actions"><button class="button button-primary" type="submit">Save disk thresholds</button></div>
+			<div class="panel-actions"><button class="button button-primary" type="submit">Save disk thresholds</button></div>
 		</form>
 	</section>
 }
 
 templ backupB2Settings(c backup.B2Config, csrf string) {
-	<section class="panel form-panel" id="backblaze">
-		<h2>Backblaze B2</h2>
-		<form method="post" action="/backups/b2" class="service-form">
+	<section class="panel settings-panel" id="backblaze">
+		<div class="panel-heading">
+			<div class="help-heading">
+				<h2>Backblaze B2</h2>
+				@sectionHelp("help-b2", "How do I connect a bucket?", "Enter your private bucket’s name, S3 region and a bucket-scoped application key ID and key. The object prefix groups these archives inside the bucket. For imports only, use a key with list and read access and select the imports-only option. Set remote retention in the bucket’s lifecycle rules.")
+			</div>
+		</div>
+		<form method="post" action="/backups/b2" class="panel-body">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
 			<div class="form-grid">
 				<div class="field"><label for="b2-bucket">Private bucket</label><input id="b2-bucket" name="bucket" value={ c.Bucket }/></div>
 				<div class="field"><label for="b2-region">S3 region</label><input id="b2-region" name="region" value={ c.Region } placeholder="eu-central-003"/></div>
 				<div class="field"><label for="b2-prefix">Object prefix</label><input id="b2-prefix" name="prefix" value={ c.Prefix }/></div>
 				<div class="field"><label for="b2-key-id">Application key ID</label><input id="b2-key-id" name="key_id" value={ c.KeyID } autocomplete="off"/></div>
-				<div class="field"><label for="b2-app-key">Application key</label><input id="b2-app-key" type="password" name="app_key" autocomplete="new-password"/><span class="field-help">Leave blank to keep the saved key.</span></div>
+				<div class="field field-wide"><label for="b2-app-key">Application key</label><input id="b2-app-key" type="password" name="app_key" autocomplete="new-password"/><span class="field-help">Leave blank to keep the saved key.</span></div>
+			</div>
+			<div class="check-options">
 				<label><input name="disabled" type="checkbox" checked?={ c.Disabled }/> Pause Backblaze B2 access</label>
 				<label><input name="read_only" type="checkbox" checked?={ c.ReadOnly }/> Use Backblaze B2 for imports only</label>
 			</div>
-			<div class="form-actions"><button class="button button-primary" type="submit">Save Backblaze settings</button></div>
+			<div class="panel-actions"><button class="button button-primary" type="submit">Save Backblaze settings</button></div>
 		</form>
 	</section>
 }
 
 templ backupB2Page(objects []string, next, csrf string) {
-	@Layout("Backblaze backups", csrf, backupB2Content(objects, next, csrf))
+	@Layout("Backblaze backups", "Backups", csrf, backupB2Content(objects, next, csrf))
 }
 
 templ backupB2Content(objects []string, next, csrf string) {
@@ -223,7 +269,7 @@ templ backupB2Content(objects []string, next, csrf string) {
 }
 
 templ backupReviewPage(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {
-	@Layout("Review restore", csrf, backupReviewScreen(manifest, options, token, csrf, errorMessage, errorField))
+	@Layout("Review restore", "Backups", csrf, backupReviewScreen(manifest, options, token, csrf, errorMessage, errorField))
 }
 
 templ backupReviewScreen(manifest backup.Manifest, options backup.RestoreOptions, token, csrf, errorMessage, errorField string) {

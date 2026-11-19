@@ -5,7 +5,7 @@ import "strings"
 import "nori/internal/store"
 
 templ resourcesPage(data resourcesOverview, csrf string) {
-	@Layout("Resources", csrf, resourcesContent(data))
+	@Layout("Resources", "Resources", csrf, resourcesContent(data))
 }
 
 templ resourcesContent(data resourcesOverview) {
@@ -13,11 +13,18 @@ templ resourcesContent(data resourcesOverview) {
 		<div><h1>Resources</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
 	</section>
 	@storageSummary(data.view.storageFor(-1))
-	@resourceRankings(data.services, "Each service includes its attached shared storage. The instance total counts each source once.")
-	@resourceRankings(data.sources, "Docker-reported sizes and file sizes for monitored directories, logs and local backup archives.")
-	@resourceRankings(data.runtime, "")
+	<nav class="resource-index" aria-label="Resource tables">
+		for _, table := range []resourceTable{data.services, data.sources, data.runtime, data.unattributed} {
+			if table.title != "" {
+				<a href={ templ.SafeURL("#" + table.anchor()) }>{ table.title }</a>
+			}
+		}
+	</nav>
+	@resourceRankings(data.services, "Each service includes its attached shared storage. The instance total counts each source once.", "Select a service name to see its volumes, containers and history. Sort by 24h or 7d growth to find which service is growing fastest. A dash means Nori lacks a comparable measurement for that period.")
+	@resourceRankings(data.sources, "Docker-reported sizes and file sizes for monitored directories, logs and local backup archives.", "Use Current use to find the largest source, or compare growth to investigate a change. To include application files outside Docker storage, open the service’s Resource settings and add a directory visible to Nori.")
+	@resourceRankings(data.runtime, "", "CPU uses 100% for one fully used core. Network and disk rates measure traffic per second. A partial total includes only containers with a reading. After a restart, rates need two fresh samples.")
 	if len(data.unattributed.rows) > 0 {
-		@resourceRankings(data.unattributed, "")
+		@resourceRankings(data.unattributed, "", "")
 	}
 }
 
@@ -29,30 +36,45 @@ templ storageSummary(values map[string]resourceValue) {
 	</section>
 }
 
-templ resourceRankings(table resourceTable, description string) {
-	<section class="panel detail-panel resource-panel">
+templ resourceRankings(table resourceTable, description, help string) {
+	<section class="panel detail-panel resource-panel" id={ table.anchor() }>
 		<div class="panel-heading">
 			<div>
-				<h2>{ table.title }</h2>
+				<div class="help-heading">
+					<h2>{ table.title }</h2>
+					if help != "" {
+						@sectionHelp("help-" + table.anchor(), "How to read " + strings.ToLower(table.title), help)
+					}
+				</div>
 				if description != "" {
 					<p>{ description }</p>
 				}
 			</div>
+			if table.sortable && len(table.rows) > 0 {
+				<details class="resource-sort">
+					<summary>Sort by { table.sortLabel() }</summary>
+					<div>
+						for _, col := range table.columns {
+							<a href={ templ.SafeURL(table.sortURL(col.key)) }>{ col.label }</a>
+						}
+					</div>
+				</details>
+			}
 		</div>
 		if len(table.rows) == 0 {
 			<p class="resource-empty">No samples available.</p>
 		} else {
-			<div class="table-wrap" tabindex="0" role="region" aria-label={ table.title }>
-				<table>
-					<thead>
-						<tr>
-							<th scope="col">{ table.first }</th>
+			<div class="table-wrap" role="region" aria-label={ table.title }>
+				<table role="table">
+					<thead role="rowgroup">
+						<tr role="row">
+							<th role="columnheader" scope="col">{ table.first }</th>
 							if table.context != "" {
-								<th scope="col">{ table.context }</th>
+								<th role="columnheader" scope="col">{ table.context }</th>
 							}
 							for _, col := range table.columns {
 								if table.sortable {
-									<th scope="col" aria-sort={ table.sortDirection(col.key) }>
+									<th role="columnheader" scope="col" aria-sort={ table.sortDirection(col.key) }>
 										<a href={ templ.SafeURL(table.sortURL(col.key)) }>
 											{ col.label }
 											if col.key == table.sortKey {
@@ -65,15 +87,15 @@ templ resourceRankings(table resourceTable, description string) {
 										</a>
 									</th>
 								} else {
-									<th scope="col">{ col.label }</th>
+									<th role="columnheader" scope="col">{ col.label }</th>
 								}
 							}
 						</tr>
 					</thead>
-					<tbody>
+					<tbody role="rowgroup">
 						for _, row := range table.rows {
-							<tr>
-								<td class="table-primary">
+							<tr role="row">
+								<td role="cell" class="table-primary">
 									if row.url != "" {
 										<a href={ templ.SafeURL(row.url) }>{ row.name }</a>
 									} else {
@@ -81,10 +103,16 @@ templ resourceRankings(table resourceTable, description string) {
 									}
 								</td>
 								if table.context != "" {
-									<td>{ row.detail }</td>
+									<td role="cell" class="resource-context">{ row.detail }</td>
 								}
 								for _, col := range table.columns {
-									<td>{ row.values[col.key].text(col.key) }</td>
+									<td role="cell" class="resource-number" data-label={ col.label }>
+										if value := row.values[col.key]; value.known || value.unlimited {
+											{ value.text(col.key) }
+										} else {
+											<span class="missing-value" title="Unavailable"><span aria-hidden="true">—</span><span class="sr-only">Unavailable</span></span>
+										}
+									</td>
 								}
 							</tr>
 						}
@@ -96,7 +124,7 @@ templ resourceRankings(table resourceTable, description string) {
 }
 
 templ serviceResourcesPage(data serviceResourceData, csrf string) {
-	@Layout(data.svc.Name+" resources", csrf, serviceResourcesContent(data, csrf))
+	@Layout(data.svc.Name+" resources", "Resources", csrf, serviceResourcesContent(data, csrf))
 }
 
 templ serviceResourcesContent(data serviceResourceData, csrf string) {
@@ -148,13 +176,21 @@ templ serviceResourcesContent(data serviceResourceData, csrf string) {
 			</details>
 		}
 	</section>
-	@resourceRankings(data.containers, "")
-	@resourceRankings(data.sources, "")
+	@resourceRankings(data.containers, "", "")
+	@resourceRankings(data.sources, "", "Use Current use to find the largest source, or compare growth to investigate a change. To include application files outside Docker storage, open the service’s Resource settings and add a directory visible to Nori.")
 	if len(data.logical.rows) > 0 {
-		@resourceRankings(data.logical, "Database and largest-table sizes are shown separately from physical storage.")
+		@resourceRankings(data.logical, "Database and largest-table sizes are shown separately from physical storage.", "")
 	}
 	<section class="panel detail-panel resource-panel" id="thresholds">
-		<div class="panel-heading"><div><h2>Resource settings</h2><p>Thresholds notify the configured administrator channels. Set a threshold to zero to disable it.</p></div></div>
+		<div class="panel-heading">
+			<div>
+				<div class="help-heading">
+					<h2>Resource settings</h2>
+					@sectionHelp("help-resource-settings", "How do I set a storage alert?", "Enter a usage limit such as 10 GiB to monitor the service’s tracked storage. For growth, enter the increase per day that should trigger an alert. Configure an administrator notification channel in Settings, then save the thresholds here.")
+				</div>
+				<p>Thresholds notify the configured administrator channels. Set a threshold to zero to disable it.</p>
+			</div>
+		</div>
 		if data.saved {
 			<p class="resource-saved" role="status">Resource settings saved.</p>
 		}

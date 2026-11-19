@@ -275,12 +275,28 @@ func (t *resourceTable) rank(key, order string) {
 	})
 }
 
+func (t resourceTable) anchor() string {
+	return strings.ToLower(strings.ReplaceAll(t.title, " ", "-"))
+}
+
+func (t resourceTable) sortLabel() string {
+	for _, col := range t.columns {
+		if col.key == t.sortKey {
+			if t.order == "asc" {
+				return col.label + " ↑"
+			}
+			return col.label + " ↓"
+		}
+	}
+	return ""
+}
+
 func (t resourceTable) sortURL(key string) string {
 	order := "desc"
 	if key == t.sortKey && t.order == "desc" {
 		order = "asc"
 	}
-	return "?sort=" + key + "&order=" + order
+	return "?sort=" + key + "&order=" + order + "#" + t.anchor()
 }
 
 func (t resourceTable) sortDirection(key string) string {
