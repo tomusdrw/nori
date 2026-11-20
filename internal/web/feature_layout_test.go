@@ -93,6 +93,10 @@ func TestFeatureLayouts(t *testing.T) {
 		`},
 		{"services", "Services", layoutDashboard(), `
 			const updateCard = document.querySelector('.service-card');
+			const version = rect(updateCard.querySelector('.version-summary'));
+			const avatar = rect(updateCard.querySelector('.service-avatar'));
+			const card = rect(updateCard);
+			checkLayout(version.left >= avatar.right && version.top === avatar.top && card.right - version.right < 20, 'image digests at top right');
 			checkLayout(updateCard.querySelector('button').innerText === 'update', 'lowercase update action');
 			checkLayout(updateCard.querySelector('.service-detail-link').innerText === 'details', 'lowercase details link');
 			checkLayout(updateCard.querySelector('.log-preview-heading a').innerText === 'open full logs', 'lowercase logs link');
@@ -121,10 +125,26 @@ func TestFeatureLayouts(t *testing.T) {
 			checkLayout(rect(s3).top - rect(disk).bottom >= 12 || rect(s3).left - rect(disk).right >= 12, 'panel gap');
 		`},
 		{"resources", "Resources", layoutResources(), `
-			for (const wrap of document.querySelectorAll('.resource-panel .table-wrap')) {
-				checkLayout(wrap.scrollWidth <= wrap.clientWidth + 1, 'columns overflow');
+			const tabs = [...document.querySelectorAll('[role=tab]')];
+			checkLayout(tabs.length === 3, 'resource categories are tabs');
+			if (tabs.length === 3) {
+				checkLayout(tabs[0].getAttribute('aria-selected') === 'true', 'default tab selected');
+				tabs[0].focus();
+				tabs[0].dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}));
+				checkLayout(document.activeElement === tabs[1] && tabs[1].getAttribute('aria-selected') === 'true', 'keyboard switches tabs');
+				for (const tab of tabs) {
+					tab.click();
+					const panels = [...document.querySelectorAll('[role=tabpanel]:not([hidden])')];
+					checkLayout(panels.length === 1 && panels[0].id === tab.getAttribute('aria-controls'), 'one active resource category');
+					const panel = panels[0];
+					if (!panel) continue;
+					const wrap = panel.querySelector('.table-wrap');
+					checkLayout(wrap.scrollWidth <= wrap.clientWidth + 1, 'columns overflow');
+					checkLayout([...panel.querySelectorAll('tbody td')].every(td => rect(td).width > 0 && rect(td).right <= document.documentElement.clientWidth), 'metrics visible');
+					checkLayout(panel.querySelector('th[aria-sort] a').hash === tab.hash, 'sort link keeps selected category');
+				}
+				tabs[0].click();
 			}
-			checkLayout(Array.from(document.querySelectorAll('.resource-panel tbody td')).every(td => rect(td).width > 0 && rect(td).right <= document.documentElement.clientWidth), 'metrics visible');
 		`},
 	} {
 		var buf bytes.Buffer
@@ -138,7 +158,7 @@ func TestFeatureLayouts(t *testing.T) {
 			checkLayout(links.every(a => rect(a).width > 0 && rect(a).right <= document.documentElement.clientWidth), 'visible navigation');
 			const active = links.filter(a => a.hasAttribute('aria-current'));
 			checkLayout(active.length === 1 && active[0].textContent === ` + fmt.Sprintf("%q", page.section) + `, 'current section');
-			const tips = [...document.querySelectorAll('button.help-trigger')];
+			const tips = [...document.querySelectorAll('button.help-trigger')].filter(tip => !tip.closest('[hidden]'));
 			if (` + fmt.Sprint(page.name == "services" || page.name == "backups" || page.name == "resources") + `) checkLayout(tips.length > 0, 'section help available');
 			for (const tip of tips) {
 				tip.scrollIntoView({block:'center'});

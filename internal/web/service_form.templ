@@ -68,6 +68,11 @@ templ serviceFormContent(form ServiceFormData, csrf string, isEdit bool, action 
 					</datalist>
 					<span id="service-group-help" class="field-help">Choose an existing group or type a new name. Leave blank for Ungrouped.</span>
 				</div>
+				<div class="field">
+					<label for="service-icon">Icon URL <span class="field-help">(optional)</span></label>
+					<input id="service-icon" name="icon_url" type="url" value={ form.IconURL } maxlength="2048" placeholder="https://example.com/icon.png" aria-describedby="service-icon-help"/>
+					<span id="service-icon-help" class="field-help">Use an HTTPS image URL. Leave blank to show the service’s initial.</span>
+				</div>
 				<div class="field form-notes">
 					<label for="description">Description <span class="field-help">(optional)</span></label>
 					<textarea id="description" name="description" rows="3" aria-describedby="description-help">{ form.Description }</textarea>

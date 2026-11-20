@@ -220,6 +220,9 @@ func TestOpenMigratesLegacyServiceToCustomDeployment(t *testing.T) {
 	if got.Description != "" {
 		t.Fatalf("legacy description = %q, want empty", got.Description)
 	}
+	if got.IconURL != "" {
+		t.Fatalf("legacy icon URL = %q, want empty", got.IconURL)
+	}
 	if got.DeploymentMode != DeploymentModeCustom {
 		t.Fatalf("deployment mode = %q, want %q", got.DeploymentMode, DeploymentModeCustom)
 	}

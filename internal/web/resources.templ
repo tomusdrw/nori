@@ -9,11 +9,12 @@ templ resourcesPage(data resourcesOverview, csrf string) {
 }
 
 templ resourcesContent(data resourcesOverview) {
+	<script src="/static/resource-tabs.js" type="module"></script>
 	<section class="page-heading">
 		<div><h1>Resources</h1><p class="page-subtitle resource-times"><span>Runtime · { data.view.runtime.timestamp() }</span><span>Storage · { data.view.storage.timestamp() }</span></p></div>
 	</section>
 	@storageSummary(data.view.storageFor(-1))
-	<nav class="resource-index" aria-label="Resource tables">
+	<nav class="service-nav resource-tabs" aria-label="Resource categories">
 		for _, table := range []resourceTable{data.services, data.sources, data.runtime, data.unattributed} {
 			if table.title != "" {
 				<a href={ templ.SafeURL("#" + table.anchor()) }>{ table.title }</a>

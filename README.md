@@ -348,6 +348,12 @@ the up and down arrow keys. The dashboard saves the order and folded state,
 including for **Ungrouped**. Named groups are visible while they have members,
 and their dashboard settings return when a service joins again.
 
+## Service icons
+
+In **New service** or **Configure**, set **Icon URL** to an HTTPS image URL
+to customize the service tile. The dashboard shows the service’s initial when
+the field is blank or the image is unavailable. The browser loads the image.
+
 ## Auto-deploy policies
 
 | Policy | Behavior |
@@ -430,8 +436,9 @@ after checking the configuration and choosing the correct proxy and ports.
 
 ## Service resources
 
-Open **Resources** to rank services and individual storage sources by size or
-growth over 24 hours and seven days. Open a service to see the containers,
+Open **Resources** and choose a tab to rank services and storage sources by
+size or growth over 24 hours and seven days, or compare runtime use.
+Open a service to see the containers,
 volumes, and directories behind its totals and compare its history with
 deployment times. A shared volume appears under each attached service and
 counts once in the instance total. Unlabelled resources appear under

@@ -572,6 +572,7 @@ func (s *Server) loadViews(ctx context.Context) ([]ServiceView, error) {
 		v := ServiceView{
 			ID:             svc.ID,
 			Name:           svc.Name,
+			IconURL:        svc.IconURL,
 			Group:          svc.Group,
 			State:          state,
 			RunningVersion: shortDigest(runningDigest),
@@ -637,6 +638,7 @@ func (s *Server) handleServiceCreate(w http.ResponseWriter, r *http.Request) {
 	svc := &store.Service{
 		Name:         form.Name,
 		Description:  form.Description,
+		IconURL:      form.IconURL,
 		Group:        form.Group,
 		WatchedImage: form.WatchedImage,
 		Policy:       store.Policy(form.Policy),
@@ -706,6 +708,11 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	previous := *svc
 	svc.Description = form.Description
+	if r.PostForm.Has("icon_url") {
+		svc.IconURL = form.IconURL
+	} else {
+		form.IconURL = svc.IconURL
+	}
 	if r.PostForm.Has("group") {
 		svc.Group = form.Group
 	} else {
@@ -1104,7 +1111,7 @@ func (s *Server) serviceToEditForm(ctx context.Context, svc *store.Service) (Ser
 
 func serviceForm(svc *store.Service) ServiceFormData {
 	return ServiceFormData{
-		Name: svc.Name, Description: svc.Description, Group: svc.Group, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
+		Name: svc.Name, Description: svc.Description, IconURL: svc.IconURL, Group: svc.Group, WatchedImage: svc.WatchedImage, Policy: string(svc.Policy),
 		CronExpr: svc.CronExpr, DeployScript: svc.DeployScript, HealthURL: svc.HealthURL, IsSelf: svc.IsSelf,
 		ConfigVersion:  svc.ConfigVersion,
 		DeploymentMode: string(svc.DeploymentMode), TemplateConfig: svc.TemplateConfig,
@@ -1134,6 +1141,7 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	configVersion, _ := strconv.ParseInt(r.FormValue("expected_config_version"), 10, 64)
 	return ServiceFormData{
 		Description: executor.NormalizeNewlines(r.FormValue("description")),
+		IconURL:     r.PostFormValue("icon_url"),
 		Group:       r.PostFormValue("group"),
 		Name:        r.FormValue("name"), WatchedImage: r.FormValue("watched_image"),
 		Policy: r.FormValue("policy"), CronExpr: r.FormValue("cron_expr"), HealthURL: r.FormValue("health_url"),
@@ -1145,7 +1153,20 @@ func parseServiceForm(r *http.Request) ServiceFormData {
 	}
 }
 
+var errServiceIconURL = errors.New("icon_url must be a valid HTTPS URL of at most 2048 bytes without credentials")
+
+func validServiceIconURL(value string) bool {
+	if len(value) > 2048 {
+		return false
+	}
+	u, err := url.Parse(value)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
+}
+
 func validateServiceForm(ctx context.Context, form ServiceFormData) error {
+	if form.IconURL != "" && !validServiceIconURL(form.IconURL) {
+		return errServiceIconURL
+	}
 	if form.HealthURL != "" {
 		// basic URL validation: must have scheme http/https and non-empty host
 		u, err := url.Parse(form.HealthURL)
