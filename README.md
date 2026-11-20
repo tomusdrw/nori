@@ -611,9 +611,10 @@ authorization, code exchange, and refresh.
 
 | Scope | Access |
 |-------|--------|
-| `nori:read` | Service configuration and status, deployment history, explicitly requested logs |
-| `nori:write` | Create/update/delete services, replace environment configuration, start/stop containers, deploy |
-| `nori:secrets` | Set a value for an existing environment variable; also requires `nori:write`. Never permits reading values. |
+| `nori:read` | Service configuration, resource measurements, backup policies and history, deployment history, configuration revision metadata, explicitly requested logs |
+| `nori:write` | Create/update/delete services, configure resource alerts, configure and run backups, retry backup uploads, replace environment configuration, start/stop containers, deploy |
+| `nori:secrets` | Set a value for an existing environment variable or apply an environment revision. Also requires `nori:write`. Values are never returned. |
+| `nori:backup_admin` | Read S3 settings and the private backup recovery key with `nori:read`. Configure S3 storage with `nori:write`. |
 
 The default connection requests read and write access. Clients can explicitly
 request only `nori:read` for inspection, or additionally request `nori:secrets`
@@ -637,10 +638,16 @@ encoded, or previously removed/rotated credentials; avoid logging credentials.
 Write access can execute scripts with Nori's permissions, including control of
 the Docker host. These tools do not sandbox a client granted write access.
 
-Available tools: `list_services`, `get_service`, `create_service`,
+Service tools include `list_services`, `get_service`, `create_service`,
 `update_service`, `delete_service`, `start_service`, `stop_service`,
 `deploy_service`, `list_deployments`, `get_deployment`, `get_container_logs`,
-`get_service_environment`, `set_service_environment`, and `set_service_secret`. Tools use numeric
+`get_service_environment`, `set_service_environment`, `set_service_secret`,
+`preview_service_template`, `convert_service_to_custom`, `get_service_backup_policy`,
+`update_service_backup_policy`, `create_service_backup`, `list_service_backups`,
+`retry_service_backup_upload`, `get_service_resources`, `update_service_resource_settings`,
+and `list_service_config_revisions`. MCP also provides instance resource
+totals, historical measurements and revision contents, and backup storage,
+encrypted archive transfer, and restore tools. Tools use numeric
 service IDs, validate configuration, and save service/environment changes
 atomically. The default mode is `custom` with the `manual` policy. To run scripts without
 a watched image, select `manual_script`. See the [MCP example](docs/mcp.md#manual-script-services).
@@ -649,6 +656,14 @@ configuration; read the service again before retrying. Scheduled-service
 changes are picked up within one second without restarting Nori. Deleting a
 service removes its configuration/history but does not remove its containers.
 The launcher-managed Nori self-service cannot be modified through MCP.
+
+MCP guides agents to review backups when creating or updating services with
+persistent data. Agents can inspect the current policy, detected mounts, and
+S3 upload status, then update the schedule, retention, and selected data
+sources. See the [backup policy tools](docs/mcp.md#service-backup-policies).
+Agents can also read the latest service measurements, configure alert
+thresholds, and inspect revision timestamps. See the
+[service diagnostics tools](docs/mcp.md#service-diagnostics).
 
 Authorization codes expire after five minutes and can be exchanged only once.
 Access tokens expire after at most ten minutes, or when the grant expires if
@@ -682,7 +697,7 @@ If connection fails, check the response:
 
 | Response | What to check |
 |----------|---------------|
-| `404` on `/mcp` or OAuth endpoints | MCP is enabled and the proxy routes the path to Nori. |
+| `404` on `/mcp`, `/mcp/backup-archives`, or OAuth endpoints | MCP is enabled and the proxy routes the path to Nori. |
 | `403 invalid_host` | The request's `Host`, as preserved by the proxy, must match the configured public URL. |
 | `403 invalid_origin` | Consent approval/denial POSTs must originate from Nori's configured public URL. MCP requests with an `Origin` header must also use that origin. Opening the consent page with GET from another app is allowed. If a consent form sends `Origin: null`, check that a proxy has not replaced its `Referrer-Policy: same-origin` header with `no-referrer`. |
 | `400 invalid_grant` | Exact resource URL, redirect URI and PKCE verifier; expired/replayed credentials require fresh authorization. |

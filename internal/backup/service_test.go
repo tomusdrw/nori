@@ -172,6 +172,30 @@ func TestDiskAlertsPersistAndReportRecovery(t *testing.T) {
 	}
 }
 
+func TestUpdatePolicyRejectsConcurrentEdit(t *testing.T) {
+	ctx := context.Background()
+	m, st := newTestManager(t, nil)
+	svc := &store.Service{Name: "app", Policy: store.PolicyManual}
+	if err := st.SaveServiceConfig(ctx, svc, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.UpdatePolicy(ctx, *svc, func(policy *store.BackupPolicy) {
+		concurrent := store.DefaultBackupPolicy(svc.ID)
+		concurrent.Keep = 12
+		if err := m.SavePolicy(ctx, *svc, concurrent); err != nil {
+			t.Fatal(err)
+		}
+		policy.LocalOnly = true
+	})
+	if err == nil || !strings.Contains(err.Error(), "backup policy changed") {
+		t.Fatalf("expected a policy conflict, got %v", err)
+	}
+	saved, _, err := st.BackupPolicy(ctx, svc.ID)
+	if err != nil || saved.Keep != 12 || saved.LocalOnly {
+		t.Fatalf("concurrent policy edit was lost: %+v, %v", saved, err)
+	}
+}
+
 func TestScheduleCoalescesMissedRuns(t *testing.T) {
 	ctx := context.Background()
 	m, st := newTestManager(t, nil)

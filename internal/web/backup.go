@@ -31,6 +31,7 @@ type backupPages struct {
 
 type restoreDraft struct {
 	token     string
+	owner     string
 	manifest  backup.Manifest
 	directory string
 	expires   time.Time
@@ -211,6 +212,10 @@ func (s *Server) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.serveBackupArchive(w, r, job)
+}
+
+func (s *Server) serveBackupArchive(w http.ResponseWriter, r *http.Request, job store.BackupJob) {
 	f, err := s.backups.manager.Open(job)
 	if err != nil {
 		http.NotFound(w, r)
@@ -443,28 +448,35 @@ func shortImportField(reader *multipart.Reader, name string) (string, error) {
 }
 
 func (s *Server) stageImport(w http.ResponseWriter, r *http.Request, src io.Reader, key string) {
-	pages := s.backups
-	manifest, directory, cleanup, err := pages.manager.DecodeImport(r.Context(), src, key)
+	draft, err := s.backups.stageDraft(r.Context(), src, key, "")
 	if err != nil {
 		http.Error(w, "Could not open backup. Check the recovery key, file integrity and available disk space. "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	draft := &restoreDraft{token: rand.Text(), manifest: manifest, directory: directory, expires: time.Now().Add(30 * time.Minute), cleanup: cleanup}
-	pages.mu.Lock()
-	pages.draft = draft
-	pages.mu.Unlock()
-	time.AfterFunc(time.Until(draft.expires), func() {
-		if expired := pages.takeDraft(draft.token); expired != nil {
-			expired.cleanup()
-		}
-	})
 	http.Redirect(w, r, "/backups/restore/"+draft.token, http.StatusSeeOther)
 }
 
-func (p *backupPages) takeDraft(token string) *restoreDraft {
+func (p *backupPages) stageDraft(ctx context.Context, src io.Reader, key, owner string) (*restoreDraft, error) {
+	manifest, directory, cleanup, err := p.manager.DecodeImport(ctx, src, key)
+	if err != nil {
+		return nil, err
+	}
+	draft := &restoreDraft{token: rand.Text(), owner: owner, manifest: manifest, directory: directory, expires: time.Now().Add(30 * time.Minute), cleanup: cleanup}
+	p.mu.Lock()
+	p.draft = draft
+	p.mu.Unlock()
+	time.AfterFunc(time.Until(draft.expires), func() {
+		if expired := p.takeDraft(draft.token, owner); expired != nil {
+			expired.cleanup()
+		}
+	})
+	return draft, nil
+}
+
+func (p *backupPages) takeDraft(token, owner string) *restoreDraft {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.draft == nil || p.draft.token != token {
+	if p.draft == nil || p.draft.token != token || p.draft.owner != owner {
 		return nil
 	}
 	draft := p.draft
@@ -490,7 +502,7 @@ func (s *Server) handleRestoreReview(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	draft := p.draft
 	p.mu.Unlock()
-	if draft == nil || draft.token != chi.URLParam(r, "token") {
+	if draft == nil || draft.token != chi.URLParam(r, "token") || draft.owner != "" || !time.Now().Before(draft.expires) {
 		http.NotFound(w, r)
 		return
 	}
@@ -505,7 +517,7 @@ func (s *Server) handleRestoreConfirm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireBackups(w, r) || !backupForm(w, r) {
 		return
 	}
-	draft := s.backups.takeDraft(chi.URLParam(r, "token"))
+	draft := s.backups.takeDraft(chi.URLParam(r, "token"), "")
 	if draft == nil {
 		http.NotFound(w, r)
 		return

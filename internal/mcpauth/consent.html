@@ -18,9 +18,10 @@
       <ul class="consent-scopes">
         {{range .Scopes}}
         <li><code>{{.}}</code>
-          {{if eq . "nori:read"}}Read services, configuration, deployment history and logs. Known dotenv values are redacted. Logs may contain other sensitive data.{{end}}
-          {{if eq . "nori:write"}}Modify services, scripts and environment variables, and trigger deployments. Deployment scripts can control the Docker host and read its secrets.{{end}}
-          {{if eq . "nori:secrets"}}Set values for existing environment variables. This also requires write access. Values are never returned.{{end}}
+          {{if eq . "nori:read"}}Read service configuration, revision metadata, resources, backups, deployment history and logs. Known dotenv values are redacted. Logs may contain other sensitive data.{{end}}
+          {{if eq . "nori:write"}}Modify service configuration, resource alert settings and backup policies. Run deployments, create backups and retry uploads. Deployment scripts can control the Docker host and read its secrets.{{end}}
+          {{if eq . "nori:backup_admin"}}Manage S3 backup storage settings with write access and retrieve the recovery key with read access. The recovery key can decrypt backups.{{end}}
+          {{if eq . "nori:secrets"}}Set values for existing environment variables or apply saved environment revisions. This also requires write access. Values are never returned.{{end}}
         </li>
         {{end}}
       </ul>

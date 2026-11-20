@@ -113,6 +113,18 @@ func TestS3UploadFailureCanBeRetriedWithoutRecreatingArchive(t *testing.T) {
 	if err != nil || job.UploadStatus != "retry" || job.Status != "complete" {
 		t.Fatalf("failed upload incorrectly changed local availability: %v %v", job, err)
 	}
+	policy := store.DefaultBackupPolicy(svc.ID)
+	policy.LocalOnly = true
+	if err := m.SavePolicy(ctx, *svc, policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RetryUpload(ctx, job); err == nil {
+		t.Fatal("local-only policy accepted an upload retry")
+	}
+	policy.LocalOnly = false
+	if err := m.SavePolicy(ctx, *svc, policy); err != nil {
+		t.Fatal(err)
+	}
 	fail.Store(false)
 	if err := m.RetryUpload(ctx, job); err != nil {
 		t.Fatal(err)

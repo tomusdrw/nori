@@ -386,11 +386,29 @@ func TestMCPOAuthEndToEnd(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("default grant cannot read environment structure: %+v %v", result, err)
 	}
+	archiveEndpoint := func(accessToken string) int {
+		req := httptest.NewRequest(http.MethodGet, httpServer.URL+mcpArchivePath+"?backup_id=1", nil)
+		if accessToken != "" {
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+		}
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	if status := archiveEndpoint(""); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated archive endpoint: %d", status)
+	}
+	if status := archiveEndpoint(credentials.AccessToken); status != http.StatusServiceUnavailable {
+		t.Fatalf("bearer authentication failed before checking for backup availability: %d", status)
+	}
 	if rr := settingsRequest(t, srv, cookies, http.MethodPost, httpServer.URL+"/settings/mcp/revoke", url.Values{"csrf_token": {csrfFromBody(page.Body.String())}}.Encode(), httpServer.URL); rr.Code != http.StatusSeeOther {
 		t.Fatalf("origin-bound global revoke = %d: %s", rr.Code, rr.Body)
 	}
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_services", Arguments: map[string]any{}}); err == nil {
 		t.Fatal("existing MCP connection survived grant revocation")
+	}
+	if status := archiveEndpoint(credentials.AccessToken); status != http.StatusUnauthorized {
+		t.Fatalf("revoked token reached archive endpoint: %d", status)
 	}
 }
 

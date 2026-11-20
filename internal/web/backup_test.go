@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"nori/internal/auth"
 	"nori/internal/backup"
+	"nori/internal/mcpauth"
 	"nori/internal/store"
 )
 
@@ -201,6 +203,17 @@ func TestBackupDownloadAndUploadToAnotherInstance(t *testing.T) {
 	if err := src.SaveServiceConfig(ctx, service, &env, nil); err != nil {
 		t.Fatal(err)
 	}
+	page := getAuthed(t, srv, cookies, "/services/original/backups")
+	_, commands, found := strings.Cut(page, `<details class="backup-commands"><summary>Advanced backup commands</summary>`)
+	commands, _, closed := strings.Cut(commands, "</details>")
+	if !found || !closed {
+		t.Fatal("advanced backup commands should be collapsed by default")
+	}
+	for _, name := range []string{"quiesce", "resume", "export", "import"} {
+		if !strings.Contains(commands, `name="`+name+`"`) {
+			t.Errorf("missing %s field in advanced backup commands", name)
+		}
+	}
 	stopCtx, stop := context.WithCancel(ctx)
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); manager.Run(stopCtx) }()
@@ -289,6 +302,105 @@ func TestBackupDownloadAndUploadToAnotherInstance(t *testing.T) {
 	got, err := dst.GetEnvFile(ctx, restored.ID)
 	if err != nil || got != env || restored.Policy != store.PolicyManual {
 		t.Fatalf("restored configuration invalid: %v", err)
+	}
+
+	// File transfer and MCP tools use the same grant family, even when calls
+	// arrive on separate connections.
+	owner := mcpauth.Identity{ClientID: "integration", GrantFamily: "writer", Scope: "nori:read nori:write"}
+	rangeRequest := httptest.NewRequest(http.MethodGet, mcpArchivePath+"?backup_id="+strconv.FormatInt(job.ID, 10), nil)
+	rangeRequest.Header.Set("Range", "bytes=0-15")
+	ranged := httptest.NewRecorder()
+	srv.handleMCPBackupArchive(ranged, rangeRequest.WithContext(mcpauth.WithIdentity(ctx, owner)))
+	if ranged.Code != http.StatusPartialContent || !bytes.Equal(ranged.Body.Bytes(), archive.Body.Bytes()[:16]) {
+		t.Fatal("MCP download did not honor a range request")
+	}
+	uploadRequest := httptest.NewRequest(http.MethodPost, mcpArchivePath, bytes.NewReader(archive.Body.Bytes()))
+	uploadRequest.Header.Set("Content-Type", "application/octet-stream")
+	uploadRequest.Header.Set("Nori-Recovery-Key", manager.RecoveryKey())
+	recorder := httptest.NewRecorder()
+	destSrv.handleMCPBackupArchive(recorder, uploadRequest.WithContext(mcpauth.WithIdentity(ctx, owner)))
+	var ticket struct {
+		DraftID string `json:"draft_id"`
+	}
+	if recorder.Code != http.StatusCreated || json.Unmarshal(recorder.Body.Bytes(), &ticket) != nil || ticket.DraftID == "" {
+		t.Fatalf("archive upload failed: %d: %s", recorder.Code, recorder.Body)
+	}
+	handler := destSrv.newMCPHandler()
+	connect := func(handler http.Handler, identity mcpauth.Identity) *mcp.ClientSession {
+		t.Helper()
+		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler.ServeHTTP(w, r.WithContext(mcpauth.WithIdentity(r.Context(), identity)))
+		}))
+		t.Cleanup(httpServer.Close)
+		client := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil)
+		session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { session.Close() })
+		return session
+	}
+	callTool := func(session *mcp.ClientSession, name string, args map[string]any, wantError bool) string {
+		t.Helper()
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil || result.IsError != wantError {
+			t.Fatalf("%s: expected tool error %t, got %+v, %v", name, wantError, result, err)
+		}
+		content, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(content)
+	}
+	client := connect(handler, owner)
+	sourceClient := connect(srv.newMCPHandler(), owner)
+	localArgs := map[string]any{"backup_id": job.ID}
+	downloadJSON := callTool(sourceClient, "get_backup_archive_download", localArgs, false)
+	if !strings.Contains(downloadJSON, mcpArchivePath) {
+		t.Fatal("download tool did not return the archive path")
+	}
+	prepared, err := sourceClient.CallTool(ctx, &mcp.CallToolParams{Name: "prepare_backup_restore", Arguments: localArgs})
+	if err != nil || prepared.IsError {
+		t.Fatalf("prepare local backup: %+v %v", prepared, err)
+	}
+	draftID, _ := prepared.StructuredContent.(map[string]any)["draft_id"].(string)
+	callTool(sourceClient, "cancel_backup_restore", map[string]any{"draft_id": draftID}, false)
+	other := owner
+	other.GrantFamily = "another-grant-for-the-same-client"
+	args := map[string]any{"draft_id": ticket.DraftID}
+	callTool(connect(handler, other), "get_backup_restore_review", args, true)
+	reviewJSON := callTool(client, "get_backup_restore_review", args, false)
+	if strings.Contains(reviewJSON, "source-private-value") || !strings.Contains(reviewJSON, "original") {
+		t.Fatal("MCP review must show service metadata without its archived environment values")
+	}
+	args = map[string]any{"draft_id": ticket.DraftID, "name": "restored-via-mcp", "review_commands": false}
+	callTool(client, "confirm_backup_restore", args, true)
+	args["review_commands"] = true
+	callTool(client, "confirm_backup_restore", args, false)
+	callTool(client, "confirm_backup_restore", args, true)
+	mcpRestored, err := dst.GetServiceByName(ctx, "restored-via-mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = dst.GetEnvFile(ctx, mcpRestored.ID)
+	if err != nil || got != env {
+		t.Fatal("MCP restore did not preserve the archived environment")
+	}
+	callTool(client, "get_backup_recovery_key", map[string]any{}, true)
+	privileged := owner
+	privileged.Scope += " " + mcpauth.ScopeBackupAdmin
+	admin := connect(handler, privileged)
+	keyJSON := callTool(admin, "get_backup_recovery_key", map[string]any{}, false)
+	if !strings.Contains(keyJSON, destSrv.backups.manager.RecoveryKey()) {
+		t.Fatal("authorized recovery key response must contain the exact key")
+	}
+	storage := map[string]any{"endpoint": "https://s3.example.test", "region": "us-east-1",
+		"prefix": "nori", "bucket": "backups", "access_key_id": "example", "secret_access_key": "private-s3-value"}
+	callTool(client, "set_backup_storage", storage, true)
+	callTool(admin, "set_backup_storage", storage, false)
+	storageJSON := callTool(admin, "get_backup_storage", map[string]any{}, false)
+	if strings.Contains(storageJSON, "private-s3-value") || !strings.Contains(storageJSON, `"secret_configured":true`) {
+		t.Fatal("backup storage settings should indicate the presence of the secret without returning it")
 	}
 }
 
