@@ -92,14 +92,21 @@ func TestFeatureLayouts(t *testing.T) {
 			}
 		`},
 		{"services", "Services", layoutDashboard(), `
+			const updateCard = document.querySelector('.service-card');
+			checkLayout(updateCard.querySelector('button').innerText === 'update', 'lowercase update action');
+			checkLayout(updateCard.querySelector('.service-detail-link').innerText === 'details', 'lowercase details link');
+			checkLayout(updateCard.querySelector('.log-preview-heading a').innerText === 'open full logs', 'lowercase logs link');
 			const totals = [...document.querySelectorAll('.dashboard-summary dd')].map(item => item.textContent);
 			checkLayout(totals.join('|') === '4|2|1', 'live service totals');
 			const name = document.querySelectorAll('.service-name')[1];
 			checkLayout(name.scrollWidth <= name.clientWidth + 1, 'full service name');
 			const folded = document.querySelector('[aria-expanded="false"]');
 			checkLayout(document.getElementById(folded.getAttribute('aria-controls')).hidden, 'folded group');
-			for (const row of document.querySelectorAll('.service-card')) {
-				checkLayout(row.scrollWidth <= row.clientWidth + 1, 'service row overflow');
+			const cards = document.querySelectorAll('.service-card');
+			const first = rect(cards[0]), second = rect(cards[1]);
+			checkLayout(innerWidth >= 960 ? second.left >= first.right && second.top === first.top : second.top >= first.bottom, 'responsive service tiles');
+			for (const card of cards) {
+				checkLayout(card.scrollWidth <= card.clientWidth + 1, 'service tile overflow');
 			}
 		`},
 		{"backups", "Backups", layoutBackups(), `
@@ -127,7 +134,7 @@ func TestFeatureLayouts(t *testing.T) {
 		probe := `<script>window.addEventListener('load',()=>{const rect=e=>e.getBoundingClientRect();const errors=[];const checkLayout=(ok,msg)=>{if(!ok)errors.push(msg)};` + page.probe + `
 			checkLayout(document.documentElement.scrollWidth <= document.documentElement.clientWidth, 'page overflow');
 			const links = [...document.querySelectorAll('nav[aria-label="Main navigation"] a')];
-			checkLayout(links.map(a => a.textContent.trim()).join('|') === 'Services|Resources|Terminal|Backups|Settings', 'section labels');
+			checkLayout(links.map(a => a.innerText.trim()).join('|') === 'services|resources|terminal|backups|settings', 'section labels');
 			checkLayout(links.every(a => rect(a).width > 0 && rect(a).right <= document.documentElement.clientWidth), 'visible navigation');
 			const active = links.filter(a => a.hasAttribute('aria-current'));
 			checkLayout(active.length === 1 && active[0].textContent === ` + fmt.Sprintf("%q", page.section) + `, 'current section');
