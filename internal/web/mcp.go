@@ -31,6 +31,7 @@ type mcpID struct {
 	ServiceID int64 `json:"service_id" jsonschema:"Service ID"`
 }
 type mcpCreate struct {
+	IconURL        string          `json:"icon_url,omitempty" jsonschema:"Optional HTTPS image URL for the dashboard service icon. Do not include credentials or secrets."`
 	Group          string          `json:"group,omitempty" jsonschema:"Dashboard group. Reuse a matching group from list_services or supply a new name. Omit or leave blank for Ungrouped."`
 	Description    string          `json:"description,omitempty" jsonschema:"Describe the service purpose and deployment-specific context such as environment, domains, dependencies, persistent storage, and operational notes. Do not include secrets."`
 	Name           string          `json:"name"`
@@ -44,6 +45,7 @@ type mcpCreate struct {
 	EnvFile        *string         `json:"env_file,omitempty" jsonschema:"Dotenv template: every value must be [REDACTED]; insert values with set_service_secret"`
 }
 type mcpUpdate struct {
+	IconURL               *string          `json:"icon_url,omitempty" jsonschema:"HTTPS image URL for the dashboard service icon. Omit to preserve it or send an empty string to restore the default initial. Do not include credentials or secrets."`
 	Group                 *string          `json:"group,omitempty" jsonschema:"Dashboard group. Omit to preserve the current group. Send an empty string or Ungrouped to return to the default group."`
 	Description           *string          `json:"description,omitempty" jsonschema:"Keep the service purpose and deployment-specific context up to date. Do not include secrets. Omit to preserve; send an empty string to clear."`
 	ServiceID             int64            `json:"service_id"`
@@ -179,8 +181,8 @@ func (s *Server) newMCPHandler() http.Handler {
 	s.addMCPBackupAdministration(server)
 	s.addMCPBackupRecovery(server)
 	s.addMCPServiceDiagnostics(server)
-	addNoriTool(s, server, "list_services", "List service configurations and their dashboard group names without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
-	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
+	addNoriTool(s, server, "list_services", "List service configurations, dashboard group names, and icon URLs without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
+	addNoriTool(s, server, "get_service", "Get a service configuration, including its dashboard icon URL, and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
 		if err != nil {
 			return nil, err
@@ -195,7 +197,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
-		svc := &store.Service{Name: in.Name, Description: in.Description, Group: in.Group, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
+		svc := &store.Service{Name: in.Name, Description: in.Description, IconURL: in.IconURL, Group: in.Group, WatchedImage: in.WatchedImage, DeployScript: in.DeployScript, Policy: store.Policy(in.Policy), CronExpr: in.CronExpr, HealthURL: in.HealthURL}
 		if err := setMCPDeploymentTemplate(svc, in.DeploymentMode, in.TemplateConfig); err != nil {
 			return nil, err
 		}
@@ -218,6 +220,9 @@ func (s *Server) newMCPHandler() http.Handler {
 		expected := &store.Service{ID: svc.ID, Name: svc.Name, ConfigVersion: in.ExpectedConfigVersion}
 		if in.Description != nil {
 			svc.Description = *in.Description
+		}
+		if in.IconURL != nil {
+			svc.IconURL = *in.IconURL
 		}
 		if in.Group != nil {
 			svc.Group = *in.Group
@@ -256,6 +261,9 @@ func (s *Server) newMCPHandler() http.Handler {
 			}
 			if errors.Is(err, errManualScriptPolicy) {
 				return nil, errManualScriptPolicy
+			}
+			if errors.Is(err, errServiceIconURL) {
+				return nil, errServiceIconURL
 			}
 			var validationErr *ordinaryValidationError
 			if errors.As(err, &validationErr) {

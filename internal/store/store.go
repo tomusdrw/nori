@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS service (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL UNIQUE,
 	description TEXT NOT NULL DEFAULT '',
+	icon_url TEXT NOT NULL DEFAULT '',
 	watched_image TEXT NOT NULL,
 	policy TEXT NOT NULL,
 	cron_expr TEXT NOT NULL DEFAULT '',
@@ -118,6 +119,7 @@ func migrate(db *sql.DB) error {
 	}
 	defer rows.Close()
 	hasDescription := false
+	hasIconURL := false
 	hasSelf := false
 	hasHealth := false
 	hasDeploymentMode := false
@@ -133,6 +135,9 @@ func migrate(db *sql.DB) error {
 		}
 		if name == "description" {
 			hasDescription = true
+		}
+		if name == "icon_url" {
+			hasIconURL = true
 		}
 		if name == "is_self" {
 			hasSelf = true
@@ -155,6 +160,11 @@ func migrate(db *sql.DB) error {
 	}
 	if !hasDescription {
 		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN description TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !hasIconURL {
+		if _, err := db.Exec(`ALTER TABLE service ADD COLUMN icon_url TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}

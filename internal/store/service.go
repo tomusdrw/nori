@@ -21,7 +21,7 @@ const (
   update --target-digest "$TARGET_DIGEST"`
 )
 
-const serviceColumns = `id,name,description,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at,
+const serviceColumns = `id,name,description,icon_url,watched_image,policy,cron_expr,deploy_script,health_url,is_self,deployment_mode,template_config,config_version,created_at,updated_at,
 	COALESCE((SELECT g.name FROM service_group_member m JOIN service_group g ON g.id = m.group_id WHERE m.service_id = service.id), '` + DefaultServiceGroup + `')`
 
 func (s *Store) CreateService(ctx context.Context, svc *Service) error {
@@ -33,9 +33,9 @@ func (s *Store) CreateService(ctx context.Context, svc *Service) error {
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO service (name, description, watched_image, policy, cron_expr, deploy_script, health_url, is_self, deployment_mode, template_config, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		svc.Name, svc.Description, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
+		`INSERT INTO service (name, description, icon_url, watched_image, policy, cron_expr, deploy_script, health_url, is_self, deployment_mode, template_config, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		svc.Name, svc.Description, svc.IconURL, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
 		boolToInt(svc.IsSelf), svc.DeploymentMode, svc.TemplateConfig, now.Unix(), now.Unix())
 	if err != nil {
 		return err
@@ -79,9 +79,9 @@ func (s *Store) UpdateService(ctx context.Context, svc *Service) error {
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx,
-		`UPDATE service SET name=?, description=?, watched_image=?, policy=?, cron_expr=?, deploy_script=?, health_url=?, is_self=?, deployment_mode=?, template_config=?, updated_at=?
+		`UPDATE service SET name=?, description=?, icon_url=?, watched_image=?, policy=?, cron_expr=?, deploy_script=?, health_url=?, is_self=?, deployment_mode=?, template_config=?, updated_at=?
 		 WHERE id=?`,
-		svc.Name, svc.Description, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
+		svc.Name, svc.Description, svc.IconURL, svc.WatchedImage, string(svc.Policy), svc.CronExpr, svc.DeployScript, svc.HealthURL,
 		boolToInt(svc.IsSelf), svc.DeploymentMode, svc.TemplateConfig, now.Unix(), svc.ID)
 	if err != nil {
 		return err
@@ -203,7 +203,7 @@ func scanService(sc rowScanner) (*Service, error) {
 	var deploymentMode string
 	var templateConfig string
 	var configVersion int64
-	err := sc.Scan(&svc.ID, &svc.Name, &svc.Description, &svc.WatchedImage, &policy,
+	err := sc.Scan(&svc.ID, &svc.Name, &svc.Description, &svc.IconURL, &svc.WatchedImage, &policy,
 		&svc.CronExpr, &svc.DeployScript, &healthURL, &isSelf, &deploymentMode, &templateConfig, &configVersion, &created, &updated, &svc.Group)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

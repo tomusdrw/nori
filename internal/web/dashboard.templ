@@ -12,6 +12,7 @@ templ Page(dashboard dashboardView, csrf string) {
 
 templ dashboardContent(dashboard dashboardView, csrf string) {
 	<script src="/static/service-groups.js" type="module"></script>
+	<script src="/static/service-icons.js" type="module"></script>
 	<section class="page-heading dashboard-heading">
 		<h1>Services</h1>
 		<div class="help-heading">
@@ -92,9 +93,14 @@ templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
 
 templ serviceCards(views []ServiceView, csrf string) {
 	for _, v := range views {
-		<article class="service-card">
-			<div class="service-identity">
-				<div class="service-avatar" aria-hidden="true">{ serviceInitial(v.Name) }</div>
+		<article class="service-card" data-state={ v.State }>
+			<header class="service-card-heading">
+				<div class="service-avatar" aria-hidden="true">
+					<span>{ serviceInitial(v.Name) }</span>
+					if validServiceIconURL(v.IconURL) {
+						<img src={ v.IconURL } alt="" width="32" height="32" referrerpolicy="no-referrer"/>
+					}
+				</div>
 				<div>
 					<a class="service-name" href={ templ.SafeURL("/services/" + v.Name) }>{ v.Name }</a>
 					<div class="service-state">
@@ -114,16 +120,16 @@ templ serviceCards(views []ServiceView, csrf string) {
 							<span class="service-tag update-tag">update available</span>
 						}
 					</div>
-					if !v.ManualScript {
-						<div class="version-summary" title="Running and latest image digests">
-							<span>Image</span><code>{ v.RunningVersion }</code>
-							if v.LatestVersion != v.RunningVersion {
-								<span>→</span><code>{ v.LatestVersion }</code>
-							}
-						</div>
-					}
 				</div>
-			</div>
+				if !v.ManualScript {
+					<div class="version-summary" title="Running and latest image digests">
+						<code><span class="sr-only">Running image </span>{ v.RunningVersion }</code>
+						if v.LatestVersion != v.RunningVersion {
+							<code><span class="sr-only">Latest image </span><span aria-hidden="true">→ </span>{ v.LatestVersion }</code>
+						}
+					</div>
+				}
+			</header>
 			<div class="service-metrics">
 				<div>
 					<span class="metric-label">Running for</span>

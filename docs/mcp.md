@@ -159,6 +159,16 @@ Omitting `description` on update preserves it; an empty string clears it.
 Existing services default to an empty description. Description updates use the
 same configuration version checks as other fields.
 
+## Service icons
+
+`list_services` and `get_service` return `icon_url` with `nori:read`.
+Set `icon_url` through `create_service` or `update_service` with `nori:write`.
+Use an absolute HTTPS image URL up to 2048 bytes, without credentials or
+secrets. The dashboard browser loads the image and shows the service’s initial
+if it is unavailable. Omit the field on update to keep the current icon, or
+send an empty string to restore the initial. Icon updates require the current
+`expected_config_version`.
+
 ## Dashboard groups
 
 `list_services` and `get_service` return the service's current `group`.

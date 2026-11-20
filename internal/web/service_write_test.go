@@ -289,6 +289,35 @@ func TestDashboardServiceDescription(t *testing.T) {
 	}
 }
 
+func TestDashboardConfiguresServiceIcon(t *testing.T) {
+	st, _, srv, cookies, _ := newSelfServiceServer(t)
+	ctx := context.Background()
+	const iconURL = "https://assets.example.org/app.png"
+	form := url.Values{
+		"csrf_token": {csrfFromBody(getAuthed(t, srv, cookies, "/services/new"))}, "name": {"app"},
+		"watched_image": {"nginx:latest"}, "policy": {"manual"}, "deploy_script": {"true"},
+		"icon_url": {iconURL},
+	}
+	postAuthed(t, srv, cookies, "/services", form.Encode())
+	edit := getAuthed(t, srv, cookies, "/services/app/edit")
+	if !strings.Contains(edit, `value="`+iconURL+`"`) {
+		t.Fatal("Configure did not show the saved icon URL")
+	}
+	if body := getAuthed(t, srv, cookies, "/partials/services"); !strings.Contains(body, `src="`+iconURL+`"`) {
+		t.Fatal("Dashboard partial did not render the saved icon")
+	}
+	svc, err := st.GetServiceByName(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form.Set("expected_config_version", strconv.FormatInt(svc.ConfigVersion, 10))
+	form.Set("icon_url", "")
+	postAuthed(t, srv, cookies, "/services/app", form.Encode())
+	if body := getAuthed(t, srv, cookies, "/partials/services"); strings.Contains(body, iconURL) || !strings.Contains(body, `<span>A</span>`) {
+		t.Fatal("Dashboard partial did not return to the default initial after clearing the icon")
+	}
+}
+
 func TestDashboardConvertsServiceToManualScript(t *testing.T) {
 	st, _, srv, cookies, _ := newSelfServiceServer(t)
 	ctx := context.Background()

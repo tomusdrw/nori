@@ -76,6 +76,9 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		if err := json.Unmarshal(schema, &input); err != nil {
 			t.Fatal(err)
 		}
+		if icon := input.Properties["icon_url"]; !bytes.Contains(icon, []byte("HTTPS")) {
+			t.Errorf("%s does not advertise an HTTPS icon URL: %s", tool.Name, icon)
+		}
 		if config := input.Properties["template_config"]; !bytes.Contains(config, []byte(`"object"`)) || bytes.Contains(config, []byte(`"array"`)) {
 			t.Errorf("%s advertises an invalid template_config schema: %s", tool.Name, config)
 		}
@@ -107,7 +110,10 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		}
 		return res
 	}
-	call("create_service", map[string]any{"name": "inventory", "deployment_mode": "manual_script", "deploy_script": "docker ps"}, false)
+	iconArgs := map[string]any{"name": "inventory", "deployment_mode": "manual_script", "deploy_script": "docker ps", "icon_url": "javascript:alert(1)"}
+	call("create_service", iconArgs, true)
+	iconArgs["icon_url"] = "https://assets.example.org/inventory.png"
+	call("create_service", iconArgs, false)
 	inventory, err := st.GetServiceByName(ctx, "inventory")
 	if err != nil {
 		t.Fatal(err)
@@ -405,6 +411,26 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	scopes.Store("nori:read nori:write")
+	const updatedIcon = "https://assets.example.org/new.png"
+	inventoryArgs := map[string]any{"service_id": inventory.ID}
+	call("update_service", map[string]any{"service_id": inventory.ID, "icon_url": updatedIcon}, false)
+	call("update_service", map[string]any{"service_id": inventory.ID, "description": "Inventory"}, false)
+	call("update_service", map[string]any{"service_id": inventory.ID, "icon_url": "http://assets.example.org/new.png"}, true)
+	scopes.Store("nori:read")
+	call("update_service", map[string]any{"service_id": inventory.ID, "icon_url": ""}, true)
+	for name, args := range map[string]map[string]any{"get_service": inventoryArgs, "list_services": {}} {
+		data, _ := json.Marshal(call(name, args, false).StructuredContent)
+		if !bytes.Contains(data, []byte(updatedIcon)) {
+			t.Fatalf("%s omitted updated service icon: %s", name, data)
+		}
+	}
+	scopes.Store("nori:read nori:write")
+	call("update_service", map[string]any{"service_id": inventory.ID, "icon_url": ""}, false)
+	data, _ := json.Marshal(call("get_service", inventoryArgs, false).StructuredContent)
+	if !bytes.Contains(data, []byte(`"icon_url":""`)) {
+		t.Fatalf("get_service did not return cleared icon: %s", data)
+	}
 	scopes.Store("nori:read")
 	call("get_service_environment", args, false)
 	call("get_service_resources", args, false)
@@ -413,7 +439,7 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	call("delete_service", args, true)
 	scopes.Store("nori:read nori:secrets")
 	res = call("get_service_environment", args, false)
-	data, _ := json.Marshal(res)
+	data, _ = json.Marshal(res)
 	if bytes.Contains(data, []byte("unlisted")) || !bytes.Contains(data, []byte("[REDACTED]")) {
 		t.Fatal("environment must only expose placeholders")
 	}
