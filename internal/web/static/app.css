@@ -687,6 +687,9 @@ input[type="checkbox"], input[type="radio"] {
   accent-color: var(--primary);
 }
 .backup-screen [aria-invalid="true"] { border-color: var(--red); }
+.s3-feedback { margin: 0; flex-wrap: wrap; }
+.s3-feedback[hidden] { display: none; }
+#s3-storage .field-help code { overflow-wrap: anywhere; }
 .backup-screen #restore-error a { text-decoration: underline; }
 .backup-screen #restore-cancel { display: none; }
 .backup-history td { white-space: normal; overflow-wrap: anywhere; }

@@ -256,7 +256,7 @@ func (m *Manager) recoverCaptures(ctx context.Context) {
 		if err == nil {
 			upload := ""
 			policy, _, policyErr := m.store.BackupPolicy(ctx, job.ServiceID)
-			target, targetErr := m.B2(ctx)
+			target, targetErr := m.S3(ctx)
 			if policyErr != nil || targetErr != nil {
 				continue
 			}
@@ -385,7 +385,7 @@ func (m *Manager) write(ctx context.Context, job store.BackupJob, check func() e
 	}
 	upload := ""
 	if !policy.LocalOnly {
-		if target, err := m.B2(ctx); err == nil && target.UploadEnabled() {
+		if target, err := m.S3(ctx); err == nil && target.UploadEnabled() {
 			upload = "pending"
 		}
 	}

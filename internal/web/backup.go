@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +44,8 @@ type backupPageData struct {
 	Jobs         []store.BackupJob
 	Disks        []backup.DiskUsage
 	DiskPolicy   backup.DiskPolicy
-	B2           backup.B2Config
+	S3           backup.S3Config
+	S3Saved      bool
 	KeyAvailable bool
 }
 
@@ -54,15 +56,15 @@ func (s *Server) SetBackups(m *backup.Manager) {
 func (s *Server) backupRoutes(r chi.Router) {
 	r.Get("/backups", s.handleBackups)
 	r.Get("/backups/{id}/download", s.handleBackupDownload)
-	r.Get("/backups/b2", s.handleB2Objects)
+	r.Get("/backups/s3", s.handleS3Objects)
 	r.Get("/backups/restore/{token}", s.handleRestoreReview)
 	r.Get("/services/{name}/backups", s.handleBackups)
 	r.Post("/services/{name}/backups", s.handleBackupPolicy)
 	r.Post("/services/{name}/backups/create", s.handleBackupCreate)
 	r.Post("/backups/{id}/retry", s.handleBackupRetry)
 	r.Post("/backups/{id}/import", s.handleLocalImport)
-	r.Post("/backups/b2/import", s.handleB2Import)
-	r.Post("/backups/b2", s.handleB2Config)
+	r.Post("/backups/s3/import", s.handleS3Import)
+	r.Post("/backups/s3", s.handleS3Config)
 	r.Post("/backups/disks", s.handleBackupDiskPolicy)
 	r.Post("/backups/key", s.handleBackupKey)
 	r.Post("/backups/restore/{token}", s.handleRestoreConfirm)
@@ -134,10 +136,11 @@ func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
 			data.DiskPolicy, err = m.DiskPolicy(ctx)
 		}
 		data.KeyAvailable = m.RecoveryKey() != ""
+		data.S3Saved = r.URL.Query().Get("s3_saved") == "1"
 	}
 	if err == nil {
-		data.B2, err = m.B2(ctx)
-		data.B2.AppKey = ""
+		data.S3, err = m.S3(ctx)
+		data.S3.SecretAccessKey = ""
 	}
 	if err != nil {
 		http.Error(w, "Could not read backup settings", http.StatusInternalServerError)
@@ -249,19 +252,70 @@ func (s *Server) handleBackupRetry(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/backups", http.StatusSeeOther)
 }
 
-func (s *Server) handleB2Config(w http.ResponseWriter, r *http.Request) {
-	if !s.requireBackups(w, r) || !backupForm(w, r) {
+func (s *Server) handleS3Config(w http.ResponseWriter, r *http.Request) {
+	if !s.requireBackups(w, r) {
+		return
+	}
+	w.Header().Add("Vary", "Accept")
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		s.renderS3SaveError(w, r, http.StatusBadRequest, backup.S3Config{}, "Could not read the S3 settings form. Try again.", "")
 		return
 	}
 	f := r.PostForm
-	c := backup.B2Config{Bucket: strings.TrimSpace(f.Get("bucket")), Region: strings.TrimSpace(f.Get("region")),
-		Prefix: strings.TrimSpace(f.Get("prefix")), KeyID: strings.TrimSpace(f.Get("key_id")), AppKey: strings.TrimSpace(f.Get("app_key")),
+	c := backup.S3Config{Bucket: strings.TrimSpace(f.Get("bucket")), Region: strings.TrimSpace(f.Get("region")),
+		Endpoint: strings.TrimSpace(f.Get("endpoint")), VirtualHosted: f.Has("virtual_hosted"),
+		Prefix: strings.TrimSpace(f.Get("prefix")), AccessKeyID: strings.TrimSpace(f.Get("access_key_id")), SecretAccessKey: strings.TrimSpace(f.Get("secret_access_key")),
 		Disabled: f.Has("disabled"), ReadOnly: f.Has("read_only")}
-	if err := s.backups.manager.SaveB2(r.Context(), c); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := s.backups.manager.SaveS3(r.Context(), c); err != nil {
+		var fieldErr *backup.S3FieldError
+		if errors.As(err, &fieldErr) {
+			s.renderS3SaveError(w, r, http.StatusBadRequest, c, fieldErr.Message, fieldErr.Field)
+		} else {
+			s.renderS3SaveError(w, r, http.StatusInternalServerError, c, "Could not save S3 settings. Try again.", "")
+		}
 		return
 	}
-	http.Redirect(w, r, "/backups#backblaze", http.StatusSeeOther)
+	const location = "/backups?s3_saved=1#s3-storage"
+	if r.Header.Get("Accept") == "application/json" {
+		writeS3SaveResponse(w, http.StatusOK, s3SaveResponse{Location: location})
+		return
+	}
+	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+type s3SaveResponse struct {
+	Message  string `json:"message,omitempty"`
+	Field    string `json:"field,omitempty"`
+	Location string `json:"location,omitempty"`
+}
+
+func writeS3SaveResponse(w http.ResponseWriter, status int, response s3SaveResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) renderS3SaveError(w http.ResponseWriter, r *http.Request, status int, c backup.S3Config, message, field string) {
+	if r.Header.Get("Accept") == "application/json" {
+		writeS3SaveResponse(w, status, s3SaveResponse{Message: message, Field: field})
+		return
+	}
+	if c.SecretAccessKey != "" {
+		message += " Re-enter the secret access key before trying again."
+		c.SecretAccessKey = ""
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = backupS3SettingsErrorPage(c, s.csrf(r), message, field).Render(r.Context(), w)
+}
+
+func s3FieldAttributes(field, errorField string) templ.Attributes {
+	help := "s3-help-" + field
+	if field == errorField {
+		return templ.Attributes{"aria-describedby": help + " s3-save-error", "aria-invalid": "true", "autofocus": true}
+	}
+	return templ.Attributes{"aria-describedby": help}
 }
 
 func (s *Server) handleBackupDiskPolicy(w http.ResponseWriter, r *http.Request) {
@@ -291,27 +345,29 @@ func (s *Server) handleBackupDiskPolicy(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/backups#disk-space", http.StatusSeeOther)
 }
 
-func (s *Server) handleB2Objects(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleS3Objects(w http.ResponseWriter, r *http.Request) {
 	if !s.requireBackups(w, r) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	objects, next, err := s.backups.manager.B2Objects(ctx, r.URL.Query().Get("cursor"))
+	objects, next, err := s.backups.manager.S3Objects(ctx, r.URL.Query().Get("cursor"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = backupS3Page(nil, "", s.csrf(r), "Could not browse remote backups. Check that S3 access is enabled and verify the endpoint, region, bucket and credentials. The key needs permission to list objects under the backup prefix.").Render(r.Context(), w)
 		return
 	}
-	_ = backupB2Page(objects, next, s.csrf(r)).Render(r.Context(), w)
+	_ = backupS3Page(objects, next, s.csrf(r), "").Render(r.Context(), w)
 }
 
-func (s *Server) handleB2Import(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleS3Import(w http.ResponseWriter, r *http.Request) {
 	if !s.requireBackups(w, r) || !backupForm(w, r) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Hour)
 	defer cancel()
-	file, err := s.backups.manager.OpenB2(ctx, r.PostForm.Get("key"))
+	file, err := s.backups.manager.OpenS3(ctx, r.PostForm.Get("key"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

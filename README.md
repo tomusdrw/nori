@@ -407,13 +407,18 @@ filesystems. Mount those paths read-only inside containerized Nori. For a
 remote Docker daemon, these measurements cover the filesystems visible to
 Nori.
 
-To enable **Backblaze B2**, enter the region, private bucket, object prefix and
-a bucket-scoped B2 application key in **Backups**. Local download remains
-available if upload fails, and uploads can be retried from backup history.
-Configure remote retention in Backblaze lifecycle rules for the chosen prefix.
-An import-only destination can use a key limited to list and read operations.
+To enable **S3 backup storage**, enter your provider’s S3 service endpoint,
+signing region, bucket, backup prefix, access key ID and secret access key in
+**Backups**. For example, AWS S3 in Oregon uses
+`https://s3.us-west-2.amazonaws.com` and region `us-west-2`. If your provider
+uses virtual-hosted-style URLs, enable **Prefer bucket name in hostname**.
 
-Review an archive from the local history, an uploaded file, or the B2 browser.
+Configure remote retention in your provider’s bucket lifecycle rules. An
+import-only destination can use a key limited to list and read operations.
+Local download remains available if upload fails, and uploads can be retried
+from backup history.
+
+Review an archive from the local history, an uploaded file, or **Browse remote backups**.
 Choose a new service name and fresh destinations for unmanaged data. Review
 any imported Bash commands and update names and paths for the target host.
 If a destination check fails before Nori creates the service, correct the

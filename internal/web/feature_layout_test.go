@@ -19,7 +19,7 @@ import (
 )
 
 func layoutBackups() templ.Component {
-	return backupPage(backupPageData{KeyAvailable: true, B2: backup.B2Config{Prefix: "nori"},
+	return backupPage(backupPageData{KeyAvailable: true, S3: backup.S3Config{Prefix: "nori"},
 		Disks:      []backup.DiskUsage{{Path: "/data/backups", Status: "healthy", Available: 328 * backup.GiB, Total: 462 * backup.GiB}},
 		DiskPolicy: backup.DiskPolicy{WarningPercent: 15, CriticalPercent: 5, WarningBytes: 5 * backup.GiB, CriticalBytes: backup.GiB},
 	}, "csrf")
@@ -110,8 +110,8 @@ func TestFeatureLayouts(t *testing.T) {
 			const check = document.querySelector('[name=read_only]');
 			checkLayout(rect(heading).left - rect(panel).left >= 16, 'heading inset');
 			checkLayout(rect(check).width <= 24 && rect(check).height <= 24, 'checkbox size');
-			const disk = document.querySelector('#disk-space'), b2 = document.querySelector('#backblaze');
-			checkLayout(rect(b2).top - rect(disk).bottom >= 12 || rect(b2).left - rect(disk).right >= 12, 'panel gap');
+			const disk = document.querySelector('#disk-space'), s3 = document.querySelector('#s3-storage');
+			checkLayout(rect(s3).top - rect(disk).bottom >= 12 || rect(s3).left - rect(disk).right >= 12, 'panel gap');
 		`},
 		{"resources", "Resources", layoutResources(), `
 			for (const wrap of document.querySelectorAll('.resource-panel .table-wrap')) {
