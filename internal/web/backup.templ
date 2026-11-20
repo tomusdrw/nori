@@ -318,7 +318,7 @@ templ backupS3Content(objects []string, next, csrf, message string) {
 				<p>No backup archives on this page under the configured object prefix.</p>
 			}
 			if next != "" {
-				<a href={ templ.SafeURL("/backups/s3?cursor=" + url.QueryEscape(next)) }>Next page →</a>
+				<a href={ templ.SafeURL("/backups/s3?cursor=" + url.QueryEscape(next)) }>next page →</a>
 			}
 		</div>
 	</section>

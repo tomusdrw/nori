@@ -81,7 +81,9 @@ templ dashboardGroupSection(group dashboardGroup, csrf string, canMove bool) {
 				if len(group.Services) == 0 {
 					<p class="dashboard-group-empty">No services in this group.</p>
 				} else {
-					@serviceCards(group.Services, csrf)
+					<div class="service-grid">
+						@serviceCards(group.Services, csrf)
+					</div>
 				}
 			}
 		</div>

@@ -31,7 +31,7 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 	if mcpView.GrantRevoked {
 		<div class="alert alert-success" role="status" tabindex="-1">
 			<strong>Connection revoked</strong>
-			<span>The selected OAuth connection can no longer access MCP. <a href="#connected-oauth-clients">Return to connections</a>.</span>
+			<span>The selected OAuth connection can no longer access MCP. <a href="#connected-oauth-clients">return to connections</a>.</span>
 		</div>
 	}
 	if mcpView.GrantError != "" {
