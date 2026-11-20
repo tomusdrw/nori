@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	ScopeRead     = "nori:read"
-	ScopeWrite    = "nori:write"
-	ScopeSecrets  = "nori:secrets"
-	defaultScopes = ScopeRead + " " + ScopeWrite
+	ScopeRead        = "nori:read"
+	ScopeWrite       = "nori:write"
+	ScopeSecrets     = "nori:secrets"
+	ScopeBackupAdmin = "nori:backup_admin"
+	defaultScopes    = ScopeRead + " " + ScopeWrite
 
 	authorizationCodeLifetime = 5 * time.Minute
 	accessTokenLifetime       = 10 * time.Minute
@@ -29,7 +30,7 @@ const (
 	approvedClientLifetime    = 365 * 24 * time.Hour
 )
 
-var scopes = []string{ScopeRead, ScopeWrite, ScopeSecrets}
+var scopes = []string{ScopeRead, ScopeWrite, ScopeSecrets, ScopeBackupAdmin}
 
 type Server struct {
 	st      *store.Store

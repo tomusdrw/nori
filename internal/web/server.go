@@ -73,6 +73,7 @@ func NewServer(st *store.Store, dk docker.Client, ex *executor.Executor, pl *pol
 	r.Get("/healthz", s.handleHealthz)
 	s.oauth = mcpauth.New(st, a)
 	r.Handle("/mcp", s.oauth.Protect(s.newMCPHandler()))
+	r.Handle(mcpArchivePath, s.oauth.Protect(http.HandlerFunc(s.handleMCPBackupArchive)))
 	r.Handle("/oauth/*", s.oauth)
 	r.Handle("/.well-known/oauth-authorization-server", s.oauth)
 	r.Handle("/.well-known/oauth-protected-resource", s.oauth)

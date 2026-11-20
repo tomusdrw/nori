@@ -163,7 +163,19 @@ func (m *Manager) RetryUpload(ctx context.Context, job store.BackupJob) error {
 	if err != nil || !c.UploadEnabled() || job.Status != "complete" || job.UploadStatus == "uploading" {
 		return errors.New("a complete local backup and enabled S3 storage are required")
 	}
-	return m.store.SetBackupUpload(ctx, job.ID, "pending", 0, 0)
+	policy, _, err := m.store.BackupPolicy(ctx, job.ServiceID)
+	if err != nil {
+		return err
+	}
+	if policy.LocalOnly {
+		return errors.New("service only uses local backups")
+	}
+	m.archiveMu.Lock()
+	defer m.archiveMu.Unlock()
+	if _, err := os.Stat(m.archivePath(job.ID)); err != nil {
+		return errors.New("local backup archive is unavailable")
+	}
+	return m.store.RequeueBackupUpload(ctx, job.ID)
 }
 
 func (m *Manager) runUploads(ctx context.Context) {

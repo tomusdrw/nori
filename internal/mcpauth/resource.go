@@ -11,7 +11,7 @@ import (
 )
 
 type identityKey struct{}
-type Identity struct{ ClientID, Scope string }
+type Identity struct{ ClientID, Scope, GrantFamily string }
 
 func FromContext(ctx context.Context) (Identity, bool) {
 	i, ok := ctx.Value(identityKey{}).(Identity)
@@ -60,6 +60,6 @@ func (s *Server) Protect(next http.Handler) http.Handler {
 			failure(w, http.StatusServiceUnavailable, "temporarily_unavailable")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, Identity{ClientID: g.ClientID, Scope: g.Scope})))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, Identity{ClientID: g.ClientID, Scope: g.Scope, GrantFamily: g.Family})))
 	})
 }

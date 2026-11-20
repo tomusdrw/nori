@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/robfig/cron/v3"
 	"nori/internal/deploytemplate"
@@ -85,7 +87,21 @@ type mcpEnv struct {
 // addNoriTool puts authorization before all tool side effects. The OAuth HTTP
 // middleware supplies the authenticated principal on every stateless request.
 func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope string, run func(context.Context, I) (any, error)) {
-	mcp.AddTool(server, &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: scope == mcpauth.ScopeRead}}, func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, any, error) {
+	tool := &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: scope == mcpauth.ScopeRead}}
+	if name == "create_service" || name == "update_service" {
+		// The template parser consumes the original JSON object. The default
+		// schema inference treats RawMessage as a slice of bytes.
+		schema, err := jsonschema.For[I](&jsonschema.ForOptions{
+			TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+				reflect.TypeFor[json.RawMessage](): {Types: []string{"object", "null"}},
+			},
+		})
+		if err != nil {
+			panic(err)
+		}
+		tool.InputSchema = schema
+	}
+	mcp.AddTool(server, tool, func(ctx context.Context, _ *mcp.CallToolRequest, in I) (*mcp.CallToolResult, any, error) {
 		if err := mcpauth.RequireScope(ctx, scope); err != nil {
 			return nil, nil, err
 		}
@@ -107,6 +123,14 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 				serviceID = v.ServiceID
 			case mcpSecret:
 				serviceID = v.ServiceID
+			case mcpBackupUpdate:
+				serviceID = v.ServiceID
+			case mcpBackupJob:
+				serviceID = v.ServiceID
+			case mcpResourceUpdate:
+				serviceID = v.ServiceID
+			case mcpApplyConfigRevision:
+				serviceID = v.ServiceID
 			}
 			log.Printf("mcp: client=%q tool=%s service_id=%d success=%t", identity.ClientID, name, serviceID, err == nil)
 		}
@@ -116,8 +140,14 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 		if err != nil {
 			return nil, nil, errors.New(redactor.Redact(err.Error()))
 		}
-		// This tool constructs its response solely from names and fixed markers.
-		if name == "get_service_environment" {
+		// Dotenv templates contain fixed placeholders. Recovery keys are explicitly
+		// retrieved with a dedicated OAuth scope and must remain byte-exact.
+		revision, isRevision := any(in).(mcpConfigRevision)
+		switch name {
+		case "get_service_environment", "get_backup_recovery_key", "get_backup_archive_download", "get_backup_archive_upload", "prepare_backup_restore":
+			return nil, out, nil
+		}
+		if isRevision && revision.Kind == "env" {
 			return nil, out, nil
 		}
 		// Redact decoded strings, not serialized JSON: quotes/newlines in secrets
@@ -132,14 +162,23 @@ func addNoriTool[I any](s *Server, server *mcp.Server, name, description, scope 
 		if err := decoder.Decode(&safe); err != nil {
 			return nil, nil, errors.New("could not encode tool result")
 		}
+		if name == "list_remote_backups" {
+			result := safe.(map[string]any)
+			result["keys"] = redactMCPResult(result["keys"], redactor, false)
+			return nil, result, nil
+		}
 		return nil, redactMCPResult(safe, redactor, name == "get_deployment" || name == "get_container_logs"), nil
 	})
 }
 
 func (s *Server) newMCPHandler() http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "nori", Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "When creating or updating a service, use its optional description to explain the service's purpose and relevant deployment-specific information, such as its environment, domains, dependencies, persistent storage, and operational notes. Keep it accurate as deployments change, preserve relevant existing context, and never include secrets or credentials. Dashboard groups are for organizing services. Honor the user's group choice. Otherwise use list_services to find established group names and match services that belong to the same application, stack, project, or environment when the relationship is clear. For example, place an application's API and worker together. A shared image or container network alone is insufficient. Reuse the exact existing name where possible. Leave unrelated or ambiguous services in Ungrouped, preserve existing assignments unless a move is intended, and never include secrets in a group name.",
+		Instructions: "When creating or updating a service, use its optional description to explain the service's purpose and relevant deployment-specific information, such as its environment, domains, dependencies, persistent storage, and operational notes. Keep it accurate as deployments change, preserve relevant existing context, and never include secrets or credentials. Dashboard groups are for organizing services. Honor the user's group choice. Otherwise use list_services to find established group names and match services that belong to the same application, stack, project, or environment when the relationship is clear. For example, place an application's API and worker together. A shared image or container network alone is insufficient. Reuse the exact existing name where possible. Leave unrelated or ambiguous services in Ungrouped, preserve existing assignments unless a move is intended, and never include secrets in a group name. " + mcpBackupInstructions,
 	})
+	s.addMCPBackupTools(server)
+	s.addMCPBackupAdministration(server)
+	s.addMCPBackupRecovery(server)
+	s.addMCPServiceDiagnostics(server)
 	addNoriTool(s, server, "list_services", "List service configurations and their dashboard group names without environment values.", mcpauth.ScopeRead, func(ctx context.Context, _ struct{}) (any, error) { return s.store.ListServices(ctx) })
 	addNoriTool(s, server, "get_service", "Get a service configuration and its containers; environment values are redacted except when they are substrings of container IDs, names or digests.", mcpauth.ScopeRead, func(ctx context.Context, in mcpID) (any, error) {
 		svc, err := s.mcpService(ctx, in.ServiceID, false)
@@ -152,7 +191,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return map[string]any{"service": svc, "containers": containers}, nil
 	})
-	addNoriTool(s, server, "create_service", "Create a Custom-script, manual_script, or structured template service. manual_script runs only when explicitly requested and does not require a watched image. Template configuration never includes environment values.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
+	addNoriTool(s, server, "create_service", "Create a Custom-script, manual_script, or structured template service. manual_script runs only when explicitly requested and does not require a watched image. Template configuration never includes environment values. Review backups with get_service_backup_policy after creating a service with persistent data.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpCreate) (any, error) {
 		if in.Policy == "" {
 			in.Policy = string(store.PolicyManual)
 		}
@@ -168,7 +207,7 @@ func (s *Server) newMCPHandler() http.Handler {
 		}
 		return svc, nil
 	})
-	addNoriTool(s, server, "update_service", "Update supplied service fields. Names are immutable and omitted fields are preserved. Selecting manual_script sets the policy to manual and clears the watched image and schedule.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
+	addNoriTool(s, server, "update_service", "Update supplied service fields. Names are immutable and omitted fields are preserved. Selecting manual_script sets the policy to manual and clears the watched image and schedule. Review the backup policy when persistent storage changes.", mcpauth.ScopeWrite, func(ctx context.Context, in mcpUpdate) (any, error) {
 		if in.ExpectedConfigVersion <= 0 {
 			return nil, errors.New("expected_config_version is required")
 		}

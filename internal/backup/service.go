@@ -110,11 +110,16 @@ func (m *Manager) signal() {
 }
 
 func (m *Manager) Queue(ctx context.Context, svc store.Service) (bool, error) {
-	queued, err := m.store.QueueBackup(ctx, svc.ID)
-	if queued {
+	id, err := m.QueueID(ctx, svc)
+	return id != 0, err
+}
+
+func (m *Manager) QueueID(ctx context.Context, svc store.Service) (int64, error) {
+	id, err := m.store.QueueBackupID(ctx, svc.ID)
+	if err == nil && id != 0 {
 		m.signal()
 	}
-	return queued, err
+	return id, err
 }
 
 func (m *Manager) SavePolicy(ctx context.Context, svc store.Service, policy store.BackupPolicy) error {
@@ -127,6 +132,25 @@ func (m *Manager) SavePolicy(ctx context.Context, svc store.Service, policy stor
 	m.prune(ctx, svc.ID)
 	m.signal()
 	return nil
+}
+
+func (m *Manager) UpdatePolicy(ctx context.Context, svc store.Service, apply func(*store.BackupPolicy)) (store.BackupPolicy, error) {
+	previous, _, err := m.store.BackupPolicy(ctx, svc.ID)
+	if err != nil {
+		return store.BackupPolicy{}, err
+	}
+	policy := previous
+	policy.Sources = slices.Clone(previous.Sources)
+	apply(&policy)
+	if err := ValidatePolicy(ctx, svc, policy); err != nil {
+		return store.BackupPolicy{}, err
+	}
+	if err := m.store.SaveBackupPolicyIfUnchanged(ctx, svc, previous, policy); err != nil {
+		return store.BackupPolicy{}, err
+	}
+	m.prune(ctx, svc.ID)
+	m.signal()
+	return policy, nil
 }
 
 func (m *Manager) Run(ctx context.Context) {

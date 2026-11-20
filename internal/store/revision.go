@@ -42,7 +42,11 @@ type ConfigRevision struct {
 
 // ListConfigRevisions returns metadata only, newest first.
 func (s *Store) ListConfigRevisions(ctx context.Context, serviceID int64, kind string) ([]ConfigRevision, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT version,created_at FROM config_revision WHERE service_id=? AND kind=? ORDER BY version DESC`, serviceID, kind)
+	return s.ListRecentConfigRevisions(ctx, serviceID, kind, -1)
+}
+
+func (s *Store) ListRecentConfigRevisions(ctx context.Context, serviceID int64, kind string, limit int) ([]ConfigRevision, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT version,created_at FROM config_revision WHERE service_id=? AND kind=? ORDER BY version DESC LIMIT ?`, serviceID, kind, limit)
 	if err != nil {
 		return nil, err
 	}

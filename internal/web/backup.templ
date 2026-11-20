@@ -115,12 +115,17 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 						<details><summary>Detected mounts</summary><pre>{ backupSources(detected) }</pre></details>
 					}
 				</div>
-				<div class="field"><label for="backup-quiesce">Quiesce command</label><textarea id="backup-quiesce" name="quiesce" rows="3">{ p.Quiesce }</textarea></div>
-				<div class="field"><label for="backup-resume">Resume command</label><textarea id="backup-resume" name="resume" rows="3">{ p.Resume }</textarea></div>
-				<div class="field"><label for="backup-export">Export command</label><textarea id="backup-export" name="export" rows="3">{ p.Export }</textarea></div>
-				<div class="field"><label for="backup-import">Import command</label><textarea id="backup-import" name="import" rows="3">{ p.Import }</textarea></div>
 			</div>
-			<p class="field-help">Commands run with the service environment. Export writes to <code>$NORI_BACKUP_WORK</code> and import reads from it. Quiesce and resume must be safe to retry. Use the service dotenv for credentials.</p>
+			<details class="backup-commands">
+				<summary>Advanced backup commands</summary>
+				<div class="form-grid">
+					<div class="field"><label for="backup-quiesce">Quiesce command</label><textarea id="backup-quiesce" name="quiesce" rows="3">{ p.Quiesce }</textarea></div>
+					<div class="field"><label for="backup-resume">Resume command</label><textarea id="backup-resume" name="resume" rows="3">{ p.Resume }</textarea></div>
+					<div class="field"><label for="backup-export">Export command</label><textarea id="backup-export" name="export" rows="3">{ p.Export }</textarea></div>
+					<div class="field"><label for="backup-import">Import command</label><textarea id="backup-import" name="import" rows="3">{ p.Import }</textarea></div>
+				</div>
+				<p class="field-help">Commands run with the service environment. Export writes to <code>$NORI_BACKUP_WORK</code> and import reads from it. Quiesce and resume must be safe to retry. Use the service dotenv for credentials.</p>
+			</details>
 			<div class="panel-actions"><button class="button button-primary" type="submit">Save backup policy</button></div>
 		</form>
 	</section>

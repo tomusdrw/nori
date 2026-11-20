@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"nori/internal/docker"
@@ -58,8 +59,26 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 16 {
+	if len(listed.Tools) != 40 {
 		t.Fatalf("tools=%d", len(listed.Tools))
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name != "create_service" && tool.Name != "update_service" {
+			continue
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(schema, &input); err != nil {
+			t.Fatal(err)
+		}
+		if config := input.Properties["template_config"]; !bytes.Contains(config, []byte(`"object"`)) || bytes.Contains(config, []byte(`"array"`)) {
+			t.Errorf("%s advertises an invalid template_config schema: %s", tool.Name, config)
+		}
 	}
 	call := func(name string, args map[string]any, wantError bool) *mcp.CallToolResult {
 		t.Helper()
@@ -124,6 +143,24 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		},
 		"env_file": "PORT='[REDACTED]'",
 	}, true)
+	templateConfig := map[string]any{
+		"version": 1, "internal_port": 8080, "restart_policy": "always",
+		"health": map[string]any{"command": "true", "timeout_seconds": 5},
+	}
+	call("create_service", map[string]any{
+		"name": "template-app", "watched_image": "nginx:latest",
+		"deployment_mode": "single_container", "template_config": templateConfig,
+	}, false)
+	templateService, err := st.GetServiceByName(ctx, "template-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateConfig["internal_port"] = 8081
+	call("update_service", map[string]any{"service_id": templateService.ID, "template_config": templateConfig}, false)
+	templateService, err = st.GetService(ctx, templateService.ID)
+	if err != nil || !strings.Contains(templateService.TemplateConfig, `"internal_port":8081`) {
+		t.Fatalf("updated template configuration was not persisted: %+v, %v", templateService, err)
+	}
 	svc, err := st.GetServiceByName(ctx, "app")
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +171,43 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 		t.Fatalf("invalid update error = %s", invalidData)
 	}
 	args := map[string]any{"service_id": svc.ID}
+	if err := st.SaveResourceSnapshot(ctx, "runtime", store.ResourceSnapshot{
+		At: time.Now(), Readings: []store.ResourceReading{
+			{Key: "app-container", Services: []int64{svc.ID}, Values: map[string]float64{"cpu": 42}},
+			{Key: "outside-container", Services: []int64{svc.ID + 1}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call("update_service_resource_settings", map[string]any{"service_id": svc.ID, "usage_bytes": 1024}, false)
+	call("update_service_resource_settings", map[string]any{"service_id": svc.ID, "runtime": map[string]float64{"cpu": 75}}, false)
+	call("update_service_resource_settings", map[string]any{"service_id": svc.ID, "usage_bytes": -1}, true)
+	resources := call("get_service_resources", args, false)
+	resourceData, _ := json.Marshal(resources.StructuredContent)
+	for _, expected := range []string{`"usage_bytes":1024`, `"cpu":75`, `"cpu":42`} {
+		if !bytes.Contains(resourceData, []byte(expected)) {
+			t.Errorf("resource response is missing %s: %s", expected, resourceData)
+		}
+	}
+	if bytes.Contains(resourceData, []byte("outside-container")) {
+		t.Fatal("resource response contains another service's reading")
+	}
+	revisions := call("list_service_config_revisions", map[string]any{"service_id": svc.ID, "kind": "script"}, false)
+	revisionData, _ := json.Marshal(revisions.StructuredContent)
+	if !bytes.Contains(revisionData, []byte(`"version":1`)) || bytes.Contains(revisionData, []byte("echo ok")) {
+		t.Fatalf("expected revision metadata only: %s", revisionData)
+	}
+	revision := call("get_service_config_revision", map[string]any{"service_id": svc.ID, "kind": "script", "version": 1}, false)
+	revisionData, _ = json.Marshal(revision.StructuredContent)
+	if !bytes.Contains(revisionData, []byte("echo ok")) {
+		t.Fatalf("expected saved deployment script: %s", revisionData)
+	}
+	historicalResources := call("get_service_resource_history", map[string]any{"service_id": svc.ID, "range": "1h"}, false)
+	resourceData, _ = json.Marshal(historicalResources.StructuredContent)
+	if !bytes.Contains(resourceData, []byte(`"cpu":42`)) || bytes.Contains(resourceData, []byte("outside-container")) {
+		t.Fatalf("expected saved service-specific measurement: %s", resourceData)
+	}
+	call("get_instance_resources", map[string]any{}, false)
 	staleVersion := svc.ConfigVersion
 	call("set_service_secret", map[string]any{"service_id": svc.ID, "expected_config_version": staleVersion, "key": "SECRET", "value": "unlisted"}, false)
 	stale := call("set_service_secret", map[string]any{"service_id": svc.ID, "expected_config_version": staleVersion, "key": "SECRET", "value": "must-not-appear"}, true)
@@ -180,6 +254,31 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 	env, _ := st.GetEnvFile(ctx, svc.ID)
 	if env != "SECRET=\"unlisted\"\n" {
 		t.Fatal("partial update lost environment")
+	}
+	versions, err := st.ListConfigRevisions(ctx, svc.ID, "env")
+	if err != nil || len(versions) == 0 {
+		t.Fatalf("missing saved environment revision: %v", err)
+	}
+	archiveVersion := versions[0].Version
+	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "SECRET", "value": "rotated-secret"}, false)
+	oldEnv := call("get_service_config_revision", map[string]any{"service_id": svc.ID, "kind": "env", "version": archiveVersion}, false)
+	oldEnvJSON, _ := json.Marshal(oldEnv.StructuredContent)
+	if bytes.Contains(oldEnvJSON, []byte("unlisted")) || !bytes.Contains(oldEnvJSON, []byte("[REDACTED]")) {
+		t.Fatal("environment revision returned historical plaintext")
+	}
+	current, err := st.GetService(ctx, svc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreEnv := map[string]any{"service_id": svc.ID, "kind": "env", "version": archiveVersion, "expected_config_version": current.ConfigVersion}
+	scopes.Store("nori:read nori:write")
+	call("apply_service_config_revision", restoreEnv, true)
+	scopes.Store("nori:read nori:write nori:secrets")
+	call("apply_service_config_revision", restoreEnv, false)
+	call("apply_service_config_revision", restoreEnv, true)
+	env, err = st.GetEnvFile(ctx, svc.ID)
+	if err != nil || env != "SECRET=\"unlisted\"\n" {
+		t.Fatal("applying an environment revision did not restore its archived value")
 	}
 	for _, description := range []string{"Internal API; staging on port 8080", ""} {
 		call("update_service", map[string]any{"service_id": svc.ID, "description": description}, false)
@@ -308,6 +407,8 @@ func TestMCPServiceLifecycleAndScopes(t *testing.T) {
 
 	scopes.Store("nori:read")
 	call("get_service_environment", args, false)
+	call("get_service_resources", args, false)
+	call("update_service_resource_settings", map[string]any{"service_id": svc.ID, "usage_bytes": 10}, true)
 	call("set_service_secret", map[string]any{"service_id": svc.ID, "key": "SECRET", "value": "forbidden"}, true)
 	call("delete_service", args, true)
 	scopes.Store("nori:read nori:secrets")

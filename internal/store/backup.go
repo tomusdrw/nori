@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"nori/internal/crypto"
@@ -76,9 +77,13 @@ type BackupJob struct {
 }
 
 func (s *Store) BackupPolicy(ctx context.Context, id int64) (BackupPolicy, time.Time, error) {
+	return readBackupPolicy(ctx, s.db.QueryRowContext, id)
+}
+
+func readBackupPolicy(ctx context.Context, query func(context.Context, string, ...any) *sql.Row, id int64) (BackupPolicy, time.Time, error) {
 	var raw string
 	var last int64
-	err := s.db.QueryRowContext(ctx, `SELECT config,last_scheduled FROM backup_policy WHERE service_id=?`, id).Scan(&raw, &last)
+	err := query(ctx, `SELECT config,last_scheduled FROM backup_policy WHERE service_id=?`, id).Scan(&raw, &last)
 	p := DefaultBackupPolicy(id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, time.Time{}, nil
@@ -93,11 +98,50 @@ func (s *Store) BackupPolicy(ctx context.Context, id int64) (BackupPolicy, time.
 }
 
 func (s *Store) SaveBackupPolicy(ctx context.Context, id int64, policy BackupPolicy) error {
+	return saveBackupPolicy(ctx, s.db.ExecContext, id, policy)
+}
+
+// SaveBackupPolicyIfUnchanged guards a partial update against concurrent
+// policy edits and service changes that can invalidate selected sources.
+func (s *Store) SaveBackupPolicyIfUnchanged(ctx context.Context, svc Service, previous, policy BackupPolicy) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int64
+	err = tx.QueryRowContext(ctx, `SELECT config_version FROM service WHERE id=?`, svc.ID).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrServiceConflict
+	}
+	if err != nil {
+		return err
+	}
+	if version != svc.ConfigVersion {
+		return ErrServiceConflict
+	}
+	current, _, err := readBackupPolicy(ctx, tx.QueryRowContext, svc.ID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, previous) {
+		return errors.New("backup policy changed; read it again and retry")
+	}
+	if reflect.DeepEqual(current, policy) {
+		return nil
+	}
+	if err := saveBackupPolicy(ctx, tx.ExecContext, svc.ID, policy); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func saveBackupPolicy(ctx context.Context, exec func(context.Context, string, ...any) (sql.Result, error), id int64, policy BackupPolicy) error {
 	raw, err := json.Marshal(policy)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO backup_policy(service_id,config,last_scheduled)
+	result, err := exec(ctx, `INSERT INTO backup_policy(service_id,config,last_scheduled)
 	SELECT id,?,? FROM service WHERE id=? AND is_self=0 AND
 		NOT EXISTS(SELECT 1 FROM backup_restore WHERE service_id=service.id)
 	ON CONFLICT(service_id) DO UPDATE SET config=excluded.config,last_scheduled=excluded.last_scheduled`, string(raw), time.Now().Unix(), id)
@@ -130,12 +174,19 @@ const queueBackup = `INSERT INTO service_backup(service_id,service_name,created)
 	NOT EXISTS (SELECT 1 FROM backup_restore WHERE service_id=service.id) ON CONFLICT DO NOTHING`
 
 func (s *Store) QueueBackup(ctx context.Context, id int64) (bool, error) {
-	result, err := s.db.ExecContext(ctx, queueBackup, time.Now().Unix(), id)
-	if err != nil {
-		return false, err
+	jobID, err := s.QueueBackupID(ctx, id)
+	return jobID != 0, err
+}
+
+// QueueBackupID returns zero when an active backup or incomplete restore
+// prevents the insert.
+func (s *Store) QueueBackupID(ctx context.Context, id int64) (int64, error) {
+	var jobID int64
+	err := s.db.QueryRowContext(ctx, queueBackup+` RETURNING id`, time.Now().Unix(), id).Scan(&jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
 	}
-	count, err := result.RowsAffected()
-	return count == 1, err
+	return jobID, err
 }
 
 func (s *Store) QueueScheduledBackup(ctx context.Context, id int64, policy BackupPolicy, last, now time.Time) (bool, error) {
@@ -236,6 +287,19 @@ func (s *Store) SetBackupResume(ctx context.Context, id int64, resume string) er
 
 func (s *Store) SetBackupUpload(ctx context.Context, id int64, status string, attempts int, next int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE service_backup SET upload_status=?,upload_attempts=?,next_upload=? WHERE id=? AND status='complete'`, status, attempts, next, id)
+	return err
+}
+
+func (s *Store) RequeueBackupUpload(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE service_backup SET upload_status='pending', upload_attempts=0, next_upload=0
+		WHERE id=? AND status='complete' AND upload_status<>'uploading'`, id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err == nil && count == 0 {
+		return errors.New("backup is no longer available for upload")
+	}
 	return err
 }
 

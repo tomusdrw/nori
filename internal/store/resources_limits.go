@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"path"
 	"slices"
@@ -124,6 +125,38 @@ func (s *Store) ActiveResourceLimits(ctx context.Context) (map[int64]ResourceLim
 // SetResourceLimits rearms each alert when its threshold changes. Settings and
 // latches update atomically, including when another administrator saves changes.
 func (s *Store) SetResourceLimits(ctx context.Context, id int64, limits ResourceLimits) error {
+	_, err := s.UpdateResourceLimits(ctx, id, func(current *ResourceLimits) {
+		*current = limits
+	})
+	return err
+}
+
+// UpdateResourceLimits reads and applies an edit in the same write transaction.
+func (s *Store) UpdateResourceLimits(ctx context.Context, id int64, apply func(*ResourceLimits)) (ResourceLimits, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ResourceLimits{}, err
+	}
+	defer tx.Rollback()
+	old, err := scanResourceLimits(tx.QueryRowContext(ctx, resourceLimitsQuery, id))
+	if err != nil {
+		return ResourceLimits{}, err
+	}
+	limits := old
+	limits.Runtime = maps.Clone(old.Runtime)
+	limits.Directories = slices.Clone(old.Directories)
+	apply(&limits)
+	if err := saveResourceLimits(ctx, tx, id, old, limits); err != nil {
+		return ResourceLimits{}, err
+	}
+	limits, err = scanResourceLimits(tx.QueryRowContext(ctx, resourceLimitsQuery, id))
+	if err != nil {
+		return ResourceLimits{}, err
+	}
+	return limits, tx.Commit()
+}
+
+func saveResourceLimits(ctx context.Context, tx *sql.Tx, id int64, old, limits ResourceLimits) error {
 	if limits.UsageBytes < 0 || limits.GrowthBytes < 0 {
 		return errors.New("resource thresholds must be non-negative")
 	}
@@ -132,15 +165,6 @@ func (s *Store) SetResourceLimits(ctx context.Context, id int64, limits Resource
 		return err
 	}
 	dirs, err := encodeResourceDirectories(limits.Directories)
-	if err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	old, err := scanResourceLimits(tx.QueryRowContext(ctx, resourceLimitsQuery, id))
 	if err != nil {
 		return err
 	}
@@ -168,7 +192,7 @@ func (s *Store) SetResourceLimits(ctx context.Context, id int64, limits Resource
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func validResourceAlert(kind string) bool {
