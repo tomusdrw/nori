@@ -17,15 +17,57 @@ import (
 	"nori/internal/store"
 )
 
-func TestB2UploadFailureCanBeRetriedWithoutRecreatingArchive(t *testing.T) {
+func TestCustomS3EndpointListAndRead(t *testing.T) {
+	ctx := context.Background()
+	m, _ := newTestManager(t, nil)
+	archive := "testing/instance/app/backup.nori"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Authorization"), "Credential=example/") {
+			t.Errorf("unexpected S3 request %s %s", r.Method, r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/dev.backups":
+			if r.URL.Query().Get("list-type") != "2" || r.URL.Query().Get("prefix") != "testing/" {
+				t.Errorf("unexpected list query: %s", r.URL.RawQuery)
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = fmt.Fprintf(w, "<ListBucketResult><Contents><Key>%s</Key></Contents></ListBucketResult>", archive)
+		case "/dev.backups/" + archive:
+			_, _ = io.WriteString(w, "encrypted archive")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	c := S3Config{Endpoint: server.URL, Region: "us-east-1", Bucket: "dev.backups", Prefix: "testing", AccessKeyID: "example", SecretAccessKey: "secret"}
+	if err := m.SaveS3(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	objects, _, err := m.S3Objects(ctx, "")
+	if err != nil || len(objects) != 1 || objects[0] != archive {
+		t.Fatalf("list from configured endpoint: %v %v", objects, err)
+	}
+	reader, err := m.OpenS3(ctx, archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil || string(data) != "encrypted archive" {
+		t.Fatalf("read from configured endpoint: %v", err)
+	}
+}
+
+func TestS3UploadFailureCanBeRetriedWithoutRecreatingArchive(t *testing.T) {
 	ctx := context.Background()
 	m, st := newTestManager(t, nil)
 	svc := &store.Service{Name: "app", Policy: store.PolicyManual, DeploymentMode: store.DeploymentModeManualScript, DeployScript: "true"}
 	if err := st.SaveServiceConfig(ctx, svc, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	c := B2Config{Region: "us-west-004", Bucket: "private-backups", Prefix: "testing", KeyID: "example", AppKey: "secret"}
-	if err := m.SaveB2(ctx, c); err != nil {
+	c := S3Config{Endpoint: "https://s3.example.test", Region: "us-west-2", Bucket: "private-backups", Prefix: "testing", AccessKeyID: "example", SecretAccessKey: "secret"}
+	if err := m.SaveS3(ctx, c); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Queue(ctx, *svc); err != nil {
@@ -62,8 +104,8 @@ func TestB2UploadFailureCanBeRetriedWithoutRecreatingArchive(t *testing.T) {
 		w.Header().Set("ETag", `"etag"`)
 	}))
 	defer server.Close()
+	c.Endpoint = server.URL
 	client := c.client(func(options *s3.Options) {
-		options.BaseEndpoint = &server.URL
 		options.Retryer = aws.NopRetryer{}
 	})
 	m.uploadJob(ctx, client, c, job)

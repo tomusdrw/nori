@@ -24,11 +24,11 @@ templ backupContent(data backupPageData, csrf string) {
 		<section class="page-heading"><h1>{ data.Service.Name }</h1></section>
 		@serviceNavigation(data.Service.Name, "Backups", data.Service.IsSelf)
 		@serviceBackupPolicy(*data.Service, data.Policy, data.Detected, csrf)
-		@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+		@backupHistory(data.Jobs, data.S3.UploadEnabled(), csrf)
 	} else {
 		<section class="page-heading"><h1>Backups</h1></section>
 		if len(data.Jobs) > 0 {
-			@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+			@backupHistory(data.Jobs, data.S3.UploadEnabled(), csrf)
 		}
 		<div class="backup-tools">
 			<section class="panel settings-panel">
@@ -50,8 +50,8 @@ templ backupContent(data backupPageData, csrf string) {
 					</div>
 					<div class="panel-actions">
 						<button class="button button-primary" type="submit">Review import</button>
-						if data.B2.Enabled() {
-							<a class="button button-secondary" href="/backups/b2">Browse Backblaze B2 backups</a>
+						if data.S3.Enabled() {
+							<a class="button button-secondary" href="/backups/s3">Browse remote backups</a>
 						}
 					</div>
 				</form>
@@ -59,7 +59,7 @@ templ backupContent(data backupPageData, csrf string) {
 			if len(data.Jobs) == 0 || data.KeyAvailable {
 				<div class="backup-side">
 					if len(data.Jobs) == 0 {
-						@backupHistory(data.Jobs, data.B2.UploadEnabled(), csrf)
+						@backupHistory(data.Jobs, data.S3.UploadEnabled(), csrf)
 					}
 					if data.KeyAvailable {
 						<section class="panel settings-panel">
@@ -78,7 +78,7 @@ templ backupContent(data backupPageData, csrf string) {
 		</div>
 		<div class="backup-settings">
 			@backupDiskSettings(data.Disks, data.DiskPolicy, csrf)
-			@backupB2Settings(data.B2, csrf)
+			@backupS3Settings(data.S3, csrf, data.S3Saved, "", "")
 		</div>
 	}
 }
@@ -126,7 +126,7 @@ templ serviceBackupPolicy(svc store.Service, p store.BackupPolicy, detected []st
 	</section>
 }
 
-templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
+templ backupHistory(jobs []store.BackupJob, s3 bool, csrf string) {
 	<section class="panel detail-panel history-panel backup-history">
 		<div class="panel-heading">
 			<div class="help-heading">
@@ -139,7 +139,7 @@ templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 		} else {
 			<div class="table-wrap">
 				<table role="table">
-					<thead role="rowgroup"><tr role="row"><th>Service</th><th>Created</th><th>Local archive</th><th>Backblaze B2</th><th>Actions</th></tr></thead>
+					<thead role="rowgroup"><tr role="row"><th>Service</th><th>Created</th><th>Local archive</th><th>Remote storage</th><th>Actions</th></tr></thead>
 					<tbody role="rowgroup">
 						for _, job := range jobs {
 							<tr role="row">
@@ -150,7 +150,7 @@ templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 										<div>{ job.Message }</div>
 									}
 								</td>
-								<td role="cell"><span class="backup-mobile-label">Backblaze B2</span>{ backupUploadStatus(job.UploadStatus) }</td>
+								<td role="cell"><span class="backup-mobile-label">Remote storage</span>{ backupUploadStatus(job.UploadStatus) }</td>
 								<td role="cell" class="backup-job-actions">
 									if job.Status == "complete" {
 										<div class="action-row">
@@ -159,7 +159,7 @@ templ backupHistory(jobs []store.BackupJob, b2 bool, csrf string) {
 												<input type="hidden" name="csrf_token" value={ csrf }/>
 												<button class="button button-secondary button-small" type="submit">Review restore</button>
 											</form>
-											if b2 && (job.UploadStatus == "retry" || job.UploadStatus == "failed") {
+											if s3 && (job.UploadStatus == "retry" || job.UploadStatus == "failed") {
 												<form method="post" action={ templ.SafeURL(backupJobURL(job.ID) + "/retry") } class="inline-form">
 													<input type="hidden" name="csrf_token" value={ csrf }/>
 													<button class="button button-secondary button-small" type="submit">Retry upload</button>
@@ -210,60 +210,115 @@ templ backupDiskSettings(disks []backup.DiskUsage, p backup.DiskPolicy, csrf str
 	</section>
 }
 
-templ backupB2Settings(c backup.B2Config, csrf string) {
-	<section class="panel settings-panel" id="backblaze">
+templ backupS3SettingsErrorPage(c backup.S3Config, csrf, message, field string) {
+	@Layout("S3 backup storage settings", "Backups", csrf, backupS3SettingsErrorContent(c, csrf, message, field))
+}
+
+templ backupS3SettingsErrorContent(c backup.S3Config, csrf, message, field string) {
+	<div class="breadcrumb"><a href="/backups#s3-storage">← Backups</a></div>
+	<div class="backup-screen">
+		@backupS3Settings(c, csrf, false, message, field)
+	</div>
+}
+
+templ backupS3Settings(c backup.S3Config, csrf string, saved bool, message, errorField string) {
+	<section class="panel settings-panel" id="s3-storage">
 		<div class="panel-heading">
 			<div class="help-heading">
-				<h2>Backblaze B2</h2>
-				@sectionHelp("help-b2", "How do I connect a bucket?", "Enter your private bucket’s name, S3 region and a bucket-scoped application key ID and key. The object prefix groups these archives inside the bucket. For imports only, use a key with list and read access and select the imports-only option. Set remote retention in the bucket’s lifecycle rules.")
+				<h2>S3 backup storage</h2>
+				@sectionHelp("help-s3", "How do I connect a bucket?", "Use your provider’s S3 service endpoint, signing region and bucket credentials. The key needs permission to list and read objects for imports, and write objects for uploads. Set remote retention in your provider’s bucket lifecycle rules.")
 			</div>
 		</div>
-		<form method="post" action="/backups/b2" class="panel-body">
+		<form method="post" action="/backups/s3" class="panel-body" id="s3-settings-form" autocomplete="off">
 			<input type="hidden" name="csrf_token" value={ csrf }/>
+			<div class="alert alert-error s3-feedback" id="s3-save-error" role="alert" tabindex="-1" hidden?={ message == "" } autofocus?={ message != "" && errorField == "" }>{ message }</div>
+			if saved {
+				<div class="alert alert-success s3-feedback" id="s3-save-success" role="status">
+					S3 settings saved.
+					if c.Enabled() {
+						<a class="panel-link" href="/backups/s3">Check access by browsing backups →</a>
+					}
+				</div>
+			}
 			<div class="form-grid">
-				<div class="field"><label for="b2-bucket">Private bucket</label><input id="b2-bucket" name="bucket" value={ c.Bucket }/></div>
-				<div class="field"><label for="b2-region">S3 region</label><input id="b2-region" name="region" value={ c.Region } placeholder="eu-central-003"/></div>
-				<div class="field"><label for="b2-prefix">Object prefix</label><input id="b2-prefix" name="prefix" value={ c.Prefix }/></div>
-				<div class="field"><label for="b2-key-id">Application key ID</label><input id="b2-key-id" name="key_id" value={ c.KeyID } autocomplete="off"/></div>
-				<div class="field field-wide"><label for="b2-app-key">Application key</label><input id="b2-app-key" type="password" name="app_key" autocomplete="new-password"/><span class="field-help">Leave blank to keep the saved key.</span></div>
+				<div class="field field-wide">
+					<label for="s3-endpoint">S3 endpoint URL</label>
+					<input id="s3-endpoint" name="endpoint" inputmode="url" value={ c.Endpoint } placeholder="https://s3.us-west-2.amazonaws.com" spellcheck="false" { s3FieldAttributes("endpoint", errorField)... }/>
+					<span class="field-help" id="s3-help-endpoint">Use your provider’s S3 service URL. Nori adds the bucket name using the addressing option below.</span>
+				</div>
+				<div class="field">
+					<label for="s3-bucket">Bucket name</label>
+					<input id="s3-bucket" name="bucket" value={ c.Bucket } placeholder="my-private-backups" spellcheck="false" { s3FieldAttributes("bucket", errorField)... }/>
+					<span class="field-help" id="s3-help-bucket">Copy the bucket name from your storage provider. Leave blank to turn off remote storage.</span>
+				</div>
+				<div class="field">
+					<label for="s3-region">S3 signing region</label>
+					<input id="s3-region" name="region" value={ c.Region } placeholder="us-west-2" spellcheck="false" { s3FieldAttributes("region", errorField)... }/>
+					<span class="field-help" id="s3-help-region">Use the signing region listed by your storage provider.</span>
+				</div>
+				<div class="field field-wide">
+					<label for="s3-prefix">Backup object prefix</label>
+					<input id="s3-prefix" name="prefix" value={ c.Prefix } placeholder="nori" spellcheck="false" { s3FieldAttributes("prefix", errorField)... }/>
+					<span class="field-help" id="s3-help-prefix">Choose a folder-like path inside the bucket, such as <code>nori</code>. To browse existing backups, use the prefix they were saved under.</span>
+				</div>
+				<div class="field">
+					<label for="s3-key-id">Access key ID</label>
+					<input id="s3-key-id" name="access_key_id" value={ c.AccessKeyID } spellcheck="false" { s3FieldAttributes("access_key_id", errorField)... }/>
+					<span class="field-help" id="s3-help-access_key_id">Use the key ID for a credential with access to the bucket.</span>
+				</div>
+				<div class="field">
+					<label for="s3-secret-key">Secret access key</label>
+					<input id="s3-secret-key" type="password" name="secret_access_key" autocomplete="new-password" { s3FieldAttributes("secret_access_key", errorField)... }/>
+					<span class="field-help" id="s3-help-secret_access_key">Leave blank to reuse the secret for the same destination and access key ID.</span>
+				</div>
 			</div>
 			<div class="check-options">
-				<label><input name="disabled" type="checkbox" checked?={ c.Disabled }/> Pause Backblaze B2 access</label>
-				<label><input name="read_only" type="checkbox" checked?={ c.ReadOnly }/> Use Backblaze B2 for imports only</label>
+				<div>
+					<label><input name="virtual_hosted" type="checkbox" aria-describedby="s3-addressing-help" checked?={ c.VirtualHosted }/> Prefer bucket name in hostname</label>
+					<span class="field-help" id="s3-addressing-help">Enable for virtual-hosted-style URLs like <code>bucket.s3.example.com</code>. Leave off for path-style URLs like <code>s3.example.com/bucket</code>.</span>
+				</div>
+				<label><input name="disabled" type="checkbox" checked?={ c.Disabled }/> Pause remote storage access</label>
+				<label><input name="read_only" type="checkbox" checked?={ c.ReadOnly }/> Use remote storage for imports only</label>
 			</div>
-			<div class="panel-actions"><button class="button button-primary" type="submit">Save Backblaze settings</button></div>
+			<div class="panel-actions"><button class="button button-primary" type="submit">Save S3 settings</button></div>
 		</form>
 	</section>
+	<script src="/static/backup-s3-settings.js" type="module"></script>
 }
 
-templ backupB2Page(objects []string, next, csrf string) {
-	@Layout("Backblaze backups", "Backups", csrf, backupB2Content(objects, next, csrf))
+templ backupS3Page(objects []string, next, csrf, message string) {
+	@Layout("Remote backups", "Backups", csrf, backupS3Content(objects, next, csrf, message))
 }
 
-templ backupB2Content(objects []string, next, csrf string) {
+templ backupS3Content(objects []string, next, csrf, message string) {
 	<div class="breadcrumb"><a href="/backups">← Backups</a></div>
-	<section class="page-heading"><h1>Backblaze backups</h1></section>
+	<section class="page-heading"><h1>Remote backups</h1></section>
 	<section class="panel archive-picker">
 		<div class="panel-heading"><h2>Select an archive</h2></div>
 		<div class="panel-body">
-			if len(objects) > 0 {
-				<form method="post" action="/backups/b2/import" class="service-form">
+			if message != "" {
+				<div class="alert alert-error s3-feedback" role="alert">{ message }</div>
+				<div class="panel-actions">
+					<a class="button button-secondary" href="/backups#s3-storage">Edit S3 settings</a>
+				</div>
+			} else if len(objects) > 0 {
+				<form method="post" action="/backups/s3/import" class="service-form">
 					<input type="hidden" name="csrf_token" value={ csrf }/>
-					<div class="field"><label for="b2-object">Backup object</label>
-						<select id="b2-object" name="key" required>
+					<div class="field"><label for="s3-object">Backup object</label>
+						<select id="s3-object" name="key" required>
 							for _, object := range objects {
 								<option value={ object }>{ object }</option>
 							}
 						</select>
 					</div>
-					<div class="field"><label for="b2-identity">Recovery key for a different instance</label><input id="b2-identity" type="password" name="identity" autocomplete="off"/></div>
+					<div class="field"><label for="s3-identity">Recovery key for a different instance</label><input id="s3-identity" type="password" name="identity" autocomplete="off"/></div>
 					<div class="panel-actions"><button class="button button-primary" type="submit">Review import</button></div>
 				</form>
 			} else {
-				<p>No backup files on this page.</p>
+				<p>No backup archives on this page under the configured object prefix.</p>
 			}
 			if next != "" {
-				<a href={ templ.SafeURL("/backups/b2?cursor=" + url.QueryEscape(next)) }>Next page →</a>
+				<a href={ templ.SafeURL("/backups/s3?cursor=" + url.QueryEscape(next)) }>Next page →</a>
 			}
 		</div>
 	</section>

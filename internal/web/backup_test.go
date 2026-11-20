@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -18,6 +19,145 @@ import (
 	"nori/internal/backup"
 	"nori/internal/store"
 )
+
+func TestS3SettingsSaveAndRetry(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("NORI_BACKUP_DIR", "")
+	t.Setenv("NORI_BACKUP_RECIPIENT", "")
+	path := filepath.Join(t.TempDir(), "nori.db")
+	key := make([]byte, 32)
+	st, err := store.Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	hash, err := auth.HashPassword("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := auth.New(hash, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := backup.New(ctx, st, nil, nil, path, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(st, nil, nil, nil, a, Channels{})
+	srv.SetBackups(manager)
+	cookies := loginCookies(t, srv)
+	page := getAuthed(t, srv, cookies, "/backups")
+	form := url.Values{
+		"csrf_token":        {csrfFromBody(page)},
+		"bucket":            {"private-archives"},
+		"region":            {"us-west-2"},
+		"prefix":            {"backups/server"},
+		"access_key_id":     {"example-key-id"},
+		"secret_access_key": {"private-access-key"},
+		"read_only":         {"on"},
+	}
+	submit := func(accept string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/backups/s3", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", accept)
+		for _, cookie := range cookies {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		if secret := form.Get("secret_access_key"); secret != "" && strings.Contains(rr.Body.String(), secret) {
+			t.Fatal("save response exposed the secret access key")
+		}
+		return rr
+	}
+
+	if res := submit("application/json"); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"field":"endpoint"`) {
+		t.Fatalf("configuring a bucket without an endpoint should flag the endpoint field, got %d", res.Code)
+	}
+	const initialEndpoint = "https://s3.us-west-2.amazonaws.com"
+	form.Set("endpoint", initialEndpoint)
+	form.Set("region", initialEndpoint)
+	rejected := submit("application/json")
+	var feedback struct {
+		Field   string
+		Message string
+	}
+	if rejected.Code != http.StatusBadRequest || json.Unmarshal(rejected.Body.Bytes(), &feedback) != nil ||
+		feedback.Field != "region" || !strings.Contains(feedback.Message, "us-west-2") ||
+		rejected.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("expected actionable inline region error, got status %d", rejected.Code)
+	}
+	if saved, err := manager.S3(ctx); err != nil || saved.Bucket != "" {
+		t.Fatal("invalid settings changed the saved bucket")
+	}
+
+	fallback := submit("text/html")
+	if fallback.Code != http.StatusBadRequest || !strings.HasPrefix(fallback.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("expected styled failure page, got status %d and type %q", fallback.Code, fallback.Header().Get("Content-Type"))
+	}
+	for _, want := range []string{"alert-error", "private-archives", "backups/server", "example-key-id",
+		initialEndpoint, `name="read_only" type="checkbox" checked`, "Re-enter the secret access key"} {
+		if !strings.Contains(fallback.Body.String(), want) {
+			t.Errorf("failure page missing %q", want)
+		}
+	}
+
+	form.Set("region", "us-west-2")
+	success := submit("application/json")
+	const savedURL = "/backups?s3_saved=1#s3-storage"
+	var savedFeedback struct{ Location string }
+	if success.Code != http.StatusOK || json.Unmarshal(success.Body.Bytes(), &savedFeedback) != nil || savedFeedback.Location != savedURL {
+		t.Fatalf("expected save confirmation URL, got status %d", success.Code)
+	}
+	confirmation := getAuthed(t, srv, cookies, "/backups?s3_saved=1")
+	if !strings.Contains(confirmation, "S3 settings saved") || strings.Contains(confirmation, form.Get("secret_access_key")) {
+		t.Fatal("save confirmation missing or exposed the secret access key")
+	}
+	form.Del("secret_access_key")
+	form.Set("region", "eu-central-1")
+	if res := submit("application/json"); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"field":"secret_access_key"`) {
+		t.Fatalf("changing region without a matching secret should flag the secret field, got %d", res.Code)
+	}
+	form.Set("region", "us-west-2")
+	form.Set("endpoint", "https://s3.example.test")
+	if res := submit("application/json"); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"field":"secret_access_key"`) {
+		t.Fatalf("changing endpoint should require the secret before saving, got %d", res.Code)
+	}
+	form.Set("endpoint", "/")
+	if res := submit("application/json"); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"field":"endpoint"`) {
+		t.Fatalf("invalid custom endpoint should flag the URL field, got %d", res.Code)
+	}
+	form.Set("endpoint", initialEndpoint)
+	form.Set("disabled", "on")
+	if res := submit("text/html"); res.Code != http.StatusSeeOther || res.Header().Get("Location") != savedURL {
+		t.Fatalf("expected successful redirect after pausing, got %d", res.Code)
+	}
+	saved, err := manager.S3(ctx)
+	if err != nil || !saved.Disabled || !saved.ReadOnly || saved.SecretAccessKey != "private-access-key" {
+		t.Fatal("saving unchanged credentials did not preserve the stored secret")
+	}
+
+	form.Set("endpoint", "https://s3.example.test")
+	form.Set("virtual_hosted", "on")
+	form.Set("secret_access_key", "private-s3-key")
+	if res := submit("application/json"); res.Code != http.StatusOK {
+		t.Fatalf("expected custom endpoint save, got %d", res.Code)
+	}
+	saved, err = manager.S3(ctx)
+	if err != nil || saved.Endpoint != form.Get("endpoint") || !saved.VirtualHosted || saved.SecretAccessKey != "private-s3-key" {
+		t.Fatal("custom endpoint settings were not stored")
+	}
+	settings := getAuthed(t, srv, cookies, "/backups")
+	if !strings.Contains(settings, `value="https://s3.example.test"`) || strings.Contains(settings, form.Get("secret_access_key")) {
+		t.Fatal("custom S3 settings did not render correctly")
+	}
+
+	browse := backupTestRequest(srv, cookies, http.MethodGet, "/backups/s3", "", nil)
+	if browse.Code != http.StatusBadGateway || !strings.HasPrefix(browse.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(browse.Body.String(), "Edit S3 settings") {
+		t.Fatalf("expected styled browse error with a way back to settings, got %d", browse.Code)
+	}
+}
 
 func TestBackupDownloadAndUploadToAnotherInstance(t *testing.T) {
 	ctx := context.Background()
