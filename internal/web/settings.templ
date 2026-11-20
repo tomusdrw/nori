@@ -6,13 +6,12 @@ import (
 )
 
 templ SettingsPage(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, mcpView mcpSettingsView, channels Channels, routing notify.Routing) {
-	@Layout("Settings", csrf, settingsContent(botName, csrf, errMsg, saved, mcpConfig, mcpView, channels, routing))
+	@Layout("Settings", "Settings", csrf, settingsContent(botName, csrf, errMsg, saved, mcpConfig, mcpView, channels, routing))
 }
 
 templ settingsContent(botName string, csrf string, errMsg string, saved bool, mcpConfig store.MCPConfig, mcpView mcpSettingsView, channels Channels, routing notify.Routing) {
 	<section class="page-heading form-heading">
 		<div>
-			<p class="eyebrow">Instance</p>
 			<h1>Settings</h1>
 			<p class="page-subtitle">Manage this instance’s name, notifications and agent access.</p>
 		</div>
@@ -49,12 +48,11 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 					<h2>Display name</h2>
 					<p>Shown in the top bar and page title so you can tell instances apart across browser tabs.</p>
 				</div>
-				<span class="step-number">01</span>
 			</div>
 			<div class="form-grid">
 				<div class="field">
 					<label for="bot-name">Bot name</label>
-					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Nori" autofocus/>
+					<input id="bot-name" name="bot_name" value={ botName } required maxlength="64" placeholder="Nori"/>
 					<span class="field-help">Up to 64 characters. Does not change the internal <code>nori</code> service name.</span>
 				</div>
 			</div>
@@ -65,31 +63,32 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 					<h2>Notifications</h2>
 					<p>Choose which events each channel receives. Changes apply to the next event; no restart needed.</p>
 				</div>
-				<span class="step-number">02</span>
 			</div>
-			<div class="channel-status">
-				@channelStatusRow("Twilio SMS", "NORI_TWILIO_ACCOUNT_SID, NORI_TWILIO_AUTH_TOKEN, NORI_TWILIO_FROM, NORI_TWILIO_TO", channels.Twilio)
-				@channelStatusRow("Telegram", "NORI_TELEGRAM_BOT_TOKEN, NORI_TELEGRAM_CHAT_ID", channels.Telegram)
-			</div>
-			<div class="table-wrap notify-matrix-wrap">
-				<table class="notify-matrix">
-					<thead>
-						<tr>
-							<th scope="col">Event</th>
-							<th scope="col">Twilio SMS</th>
-							<th scope="col">Telegram</th>
-						</tr>
-					</thead>
-					<tbody>
-						@notifyMatrixRow("Deploy failed", notify.KindDeployFailed, routing, channels)
-						@notifyMatrixRow("Service down or unhealthy", notify.KindDown, routing, channels)
-						@notifyMatrixRow("Service recovered", notify.KindRecovered, routing, channels)
-						@notifyMatrixRow("Deploy succeeded", notify.KindSuccess, routing, channels)
-					</tbody>
-				</table>
-			</div>
-			<div class="form-notes notify-notes">
-				<p class="field-help">Channels are configured through environment variables at startup and cannot be changed here. A channel that is configured later starts with all events enabled.</p>
+			<div class="panel-body notification-options">
+				<div class="channel-status">
+					@channelStatusRow("Twilio SMS", "NORI_TWILIO_ACCOUNT_SID, NORI_TWILIO_AUTH_TOKEN, NORI_TWILIO_FROM, NORI_TWILIO_TO", channels.Twilio)
+					@channelStatusRow("Telegram", "NORI_TELEGRAM_BOT_TOKEN, NORI_TELEGRAM_CHAT_ID", channels.Telegram)
+				</div>
+				<div class="table-wrap notify-matrix-wrap">
+					<table class="notify-matrix">
+						<thead>
+							<tr>
+								<th scope="col">Event</th>
+								<th scope="col">Twilio SMS</th>
+								<th scope="col">Telegram</th>
+							</tr>
+						</thead>
+						<tbody>
+							@notifyMatrixRow("Deploy failed", notify.KindDeployFailed, routing, channels)
+							@notifyMatrixRow("Service down or unhealthy", notify.KindDown, routing, channels)
+							@notifyMatrixRow("Service recovered", notify.KindRecovered, routing, channels)
+							@notifyMatrixRow("Deploy succeeded", notify.KindSuccess, routing, channels)
+						</tbody>
+					</table>
+				</div>
+				<div class="form-notes notify-notes">
+					<p class="field-help">Channels are configured through environment variables at startup and cannot be changed here. A channel that is configured later starts with all events enabled.</p>
+				</div>
 			</div>
 		</section>
 		<section class="panel form-panel">
@@ -98,7 +97,6 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 					<h2>Agent access (MCP)</h2>
 					<p>Connect agents to manage services through OAuth. Disabled by default.</p>
 				</div>
-				<span class="step-number">03</span>
 			</div>
 			<div class="form-grid">
 				<div class="field">
@@ -212,13 +210,12 @@ templ settingsContent(botName string, csrf string, errMsg string, saved bool, mc
 }
 
 templ MCPGrantRevokeConfirmPage(botName string, csrf string, grant store.OAuthGrant) {
-	@Layout("Revoke OAuth connection", csrf, mcpGrantRevokeConfirmContent(botName, csrf, grant))
+	@Layout("Revoke OAuth connection", "Settings", csrf, mcpGrantRevokeConfirmContent(botName, csrf, grant))
 }
 
 templ mcpGrantRevokeConfirmContent(botName string, csrf string, grant store.OAuthGrant) {
 	<section class="page-heading form-heading">
 		<div>
-			<p class="eyebrow">Agent access (MCP)</p>
 			<h1>Revoke connection</h1>
 			<p class="page-subtitle">Confirm that this one OAuth connection should lose access. Other clients and grants stay connected.</p>
 		</div>

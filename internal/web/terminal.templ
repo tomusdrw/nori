@@ -1,14 +1,13 @@
 package web
 
 templ TerminalPage(csrf string, unavailable string) {
-	@Layout("Terminal", csrf, TerminalContent(unavailable))
+	@Layout("Terminal", "Terminal", csrf, TerminalContent(unavailable))
 }
 
 templ TerminalContent(unavailable string) {
 	<section class="terminal-page" data-terminal-page>
 		<div class="page-heading terminal-heading">
 			<div>
-				<p class="eyebrow">Persistent workspace</p>
 				<h1>Terminal</h1>
 				<p class="page-subtitle">A full Bash shell that keeps running after you close this browser.</p>
 			</div>
@@ -37,8 +36,10 @@ templ TerminalContent(unavailable string) {
 		<div class="panel terminal-panel">
 			<div class="terminal-chrome">
 				<div class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-				<span class="terminal-title">nori · tmux</span>
-				<button class="terminal-clear" type="button" data-terminal-clear>Clear display</button>
+				<span class="terminal-title">Persistent workspace · tmux</span>
+				if unavailable == "" {
+					<button class="terminal-clear" type="button" data-terminal-clear>Clear display</button>
+				}
 			</div>
 			if unavailable != "" {
 				<div class="terminal-unavailable">
@@ -49,6 +50,5 @@ templ TerminalContent(unavailable string) {
 				<div id="terminal" class="terminal-host" data-terminal tabindex="0" aria-label="Interactive terminal"></div>
 			}
 		</div>
-		<p class="terminal-footnote">Closing this page only detaches your browser. Long-running commands continue in the server-side tmux session.</p>
 	</section>
 }

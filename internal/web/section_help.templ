@@ -1,0 +1,14 @@
+package web
+
+templ sectionHelp(id, title, explanation string) {
+	<button class="help-trigger" type="button" popovertarget={ id } aria-label={ title }>
+		<span aria-hidden="true">?</span>
+	</button>
+	<div class="help-popover" id={ id } popover="auto" role="region" aria-labelledby={ id + "-title" }>
+		<div class="help-title">
+			<strong id={ id + "-title" }>{ title }</strong>
+			<button type="button" popovertarget={ id } popovertargetaction="hide" aria-label="Close help">×</button>
+		</div>
+		<p>{ explanation }</p>
+	</div>
+}

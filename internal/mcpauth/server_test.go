@@ -108,6 +108,9 @@ func TestOAuthFlowAndAttacks(t *testing.T) {
 	if consent.Code != 200 || !strings.Contains(consent.Body.String(), "Docker host") {
 		t.Fatalf("consent %d %s", consent.Code, consent.Body)
 	}
+	if strings.Contains(consent.Body.String(), ScopeSecrets) {
+		t.Error("consent screen shows a permission the client did not request")
+	}
 	// HTML form POSTs under no-referrer carry Origin: null and are rejected
 	// by the same-origin consent guard. Preserve Origin without forwarding the
 	// authorization query to the client's callback.
