@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -241,6 +242,17 @@ func (e *Executor) runDeploy(svc *store.Service, deploy *store.Deployment, env [
 	// needs it, whichever way this deploy ends (including the self handoff).
 	defer removeEnvFile(envFile)
 	ctx := context.Background()
+	if svc.IsSelf {
+		var notice string
+		if deploy.Trigger == store.TriggerAuto {
+			raw, _ := json.Marshal(notify.AutoUpdateNotice{
+				BotName: e.store.BotName(ctx),
+				Routing: notify.EffectiveRouting(e.store.NotifyRoutingRaw(ctx), e.store.NotifyMode(ctx)),
+			})
+			notice = string(raw)
+		}
+		env = append(env, notify.AutoUpdateNoticeEnv+"="+notice)
+	}
 
 	var logBuf bytes.Buffer
 	var err error

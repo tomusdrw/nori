@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -1190,5 +1191,50 @@ echo finished`}
 	got := waitForDeployment(t, st, id)
 	if got.Status != store.DeploySuccess || got.TargetDigest != "" || !strings.Contains(got.Log, "finished") {
 		t.Fatalf("unexpected deployment: %+v", got)
+	}
+}
+
+func TestAutomaticSelfHandoffPassesNotificationRoutingToLauncher(t *testing.T) {
+	t.Setenv("NORI_CONFIG_VOLUME", "nori-config")
+	t.Setenv("NORI_SELF_IMAGE", "image")
+	st := openTestStore(t)
+	ctx := context.Background()
+	self, err := st.EnsureSelfService(ctx, "image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting(ctx, store.SettingNotifyMode, "never"); err != nil {
+		t.Fatal(err)
+	}
+	called := make(chan string, 1)
+	ex := New(st, runnerFunc(func(_ context.Context, _ string, env []string, _, _ io.Writer) error {
+		called <- deploymentEnvironment(env)["NORI_AUTO_UPDATE_NOTICE"]
+		return nil
+	}), func(context.Context, string) (string, error) {
+		return "sha256:new", nil
+	}, 0)
+	id, err := ex.Deploy(ctx, self.ID, store.TriggerAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case raw := <-called:
+		var notice notify.AutoUpdateNotice
+		if err := json.Unmarshal([]byte(raw), &notice); err != nil {
+			t.Fatalf("expected routing in the launcher handoff, got %q: %v", raw, err)
+		}
+		for _, kind := range []notify.EventKind{notify.KindDown, notify.KindSuccess, notify.KindDeployFailed} {
+			if notice.Routing.Allowed(notify.ChannelTwilio, kind) {
+				t.Errorf("expected muted SMS routing for %s in the handoff", kind)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("self handoff did not execute")
+	}
+	for deadline := time.Now().Add(time.Second); ex.DeploymentActive(id); {
+		if time.Now().After(deadline) {
+			t.Fatal("self handoff did not finish")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

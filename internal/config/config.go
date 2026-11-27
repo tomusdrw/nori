@@ -104,17 +104,10 @@ func Load() (Config, error) {
 		}
 	}
 
-	tw, err := loadTwilio(os.Getenv)
+	c.Twilio, c.Telegram, err = LoadNotificationChannels(os.Getenv)
 	if err != nil {
 		return Config{}, err
 	}
-	c.Twilio = tw
-
-	tg, err := loadTelegram(os.Getenv)
-	if err != nil {
-		return Config{}, err
-	}
-	c.Telegram = tg
 	return c, nil
 }
 
@@ -129,12 +122,19 @@ func ValidateEnvironment(values map[string]string) error {
 			}
 		}
 	}
-	_, err := loadTwilio(func(name string) string { return values[name] })
-	if err != nil {
-		return err
-	}
-	_, err = loadTelegram(func(name string) string { return values[name] })
+	_, _, err := LoadNotificationChannels(func(name string) string { return values[name] })
 	return err
+}
+
+// LoadNotificationChannels validates notification credentials independently
+// of application startup, including for the detached update launcher.
+func LoadNotificationChannels(get func(string) string) (TwilioConfig, TelegramConfig, error) {
+	tw, err := loadTwilio(get)
+	if err != nil {
+		return TwilioConfig{}, TelegramConfig{}, err
+	}
+	tg, err := loadTelegram(get)
+	return tw, tg, err
 }
 
 func parsePositiveDuration(name, value string) (time.Duration, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"nori/internal/launcher"
+	"nori/internal/notify"
 )
 
 func runLauncherCommand(ctx context.Context, args []string) error {
@@ -96,6 +98,13 @@ func runUpdate(ctx context.Context, l *launcher.Launcher, args []string) error {
 	}
 	if *digest == "" {
 		return errors.New("--target-digest is required")
+	}
+	if raw := os.Getenv(notify.AutoUpdateNoticeEnv); raw != "" {
+		var notice notify.AutoUpdateNotice
+		if err := json.Unmarshal([]byte(raw), &notice); err != nil {
+			return fmt.Errorf("invalid automatic update notice: %w", err)
+		}
+		return l.UpdateWithNotice(ctx, *digest, notice)
 	}
 	return l.Update(ctx, *digest)
 }

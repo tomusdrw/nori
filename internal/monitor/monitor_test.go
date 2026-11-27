@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -438,5 +439,71 @@ func TestMonitor_DockerErrorDoesNotAffectState(t *testing.T) {
 	m.Tick(ctx)
 	if len(n.events) != 0 {
 		t.Fatalf("docker error should not emit events; got %+v", n.events)
+	}
+}
+
+func TestCheckAfterRestartSummarizesDownServicesOnce(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	for _, name := range []string{"api", "worker"} {
+		if err := st.CreateService(ctx, &store.Service{Name: name, WatchedImage: "img", Policy: store.PolicyManual}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dk := &docker.Fake{Containers: map[string][]docker.Container{}}
+	n := &capturingNotifier{}
+	m := New(st, dk, n, time.Millisecond)
+
+	check, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	summary := m.CheckAfterRestart(check)
+	if !strings.Contains(summary, "api") || !strings.Contains(summary, "worker") {
+		t.Fatalf("summary must identify both down services, got %q", summary)
+	}
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if len(n.events) != 0 {
+		t.Fatalf("startup outages should send no additional alerts: %+v", n.events)
+	}
+
+	dk.Containers["api"] = []docker.Container{{Name: "api", State: "running"}}
+	m.Tick(ctx)
+	delete(dk.Containers, "api")
+	m.Tick(ctx)
+	m.Tick(ctx)
+	if len(n.events) != 1 || n.events[0].Kind != "down" || n.events[0].E.ServiceName != "api" {
+		t.Fatalf("a later outage should alert normally: %+v", n.events)
+	}
+}
+
+func TestCheckAfterRestartWaitsForServiceHealth(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	svc := &store.Service{Name: "api", WatchedImage: "img", Policy: store.PolicyManual, HealthURL: server.URL}
+	if err := st.CreateService(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	dk := &docker.Fake{Containers: map[string][]docker.Container{
+		svc.Name: {{Name: "api", State: "running"}},
+	}}
+	n := &capturingNotifier{}
+	m := New(st, dk, n, time.Millisecond)
+
+	check, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if summary := m.CheckAfterRestart(check); summary != "" {
+		t.Fatalf("expected startup to wait for recovery, got %q", summary)
+	}
+	if len(n.events) != 0 {
+		t.Fatalf("temporary startup outage should send no alert: %+v", n.events)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"golang.org/x/term"
 	"nori/internal/auth"
 	"nori/internal/config"
+	"nori/internal/notify"
 )
 
 const (
@@ -184,6 +185,18 @@ func (l *Launcher) Up(ctx context.Context, opts UpOptions) error {
 // state for a future rollback. It is run by a detached launcher container, so
 // stopping nori cannot terminate this process.
 func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
+	return l.update(ctx, targetDigest, nil)
+}
+
+func (l *Launcher) update(ctx context.Context, targetDigest string, send updateNoticeSender) (updateErr error) {
+	failureKinds := []notify.EventKind{notify.KindDeployFailed}
+	if send != nil {
+		defer func() {
+			if updateErr != nil {
+				sendUpdateNotice(ctx, send, "Automatic Nori update failed: "+updateErr.Error(), failureKinds...)
+			}
+		}()
+	}
 	if !validDigest(targetDigest) {
 		return fmt.Errorf("invalid target digest %q", targetDigest)
 	}
@@ -203,6 +216,17 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 			return fmt.Errorf("read current image digest: %w", err)
 		}
 	}
+	var environment []string
+	var reportDir string
+	if send != nil {
+		reportDir, err = os.MkdirTemp(l.configDir(), "update-")
+		if err != nil {
+			return fmt.Errorf("prepare startup check: %w", err)
+		}
+		defer os.RemoveAll(reportDir)
+		environment = append(environment, updateReportEnv+"="+filepath.Base(reportDir))
+		sendUpdateNotice(ctx, send, "Nori is restarting for an automatic update. Services may be temporarily unavailable.", notify.KindDown)
+	}
 	// Docker CLI 27 uses --time and newer clients use --timeout. Both accept -t.
 	if err := l.runner().Run(ctx, "docker", "stop", "-t", "645", spec.ContainerName); err != nil {
 		return fmt.Errorf("stop %s: %w", spec.ContainerName, err)
@@ -210,7 +234,7 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 	if err := l.runner().Run(ctx, "docker", "rm", spec.ContainerName); err != nil {
 		return fmt.Errorf("remove %s: %w", spec.ContainerName, err)
 	}
-	if err := l.runContainer(ctx, spec, targetImage); err != nil {
+	if err := l.runContainer(ctx, spec, targetImage, environment...); err != nil {
 		return err
 	}
 
@@ -218,6 +242,17 @@ func (l *Launcher) Update(ctx context.Context, targetDigest string) error {
 	spec.CurrentImageDigest = targetDigest
 	if err := l.writeSpec(spec); err != nil {
 		return fmt.Errorf("save launcher state: %w", err)
+	}
+	if reportDir != "" {
+		report, err := waitForUpdateReport(ctx, reportDir)
+		if err != nil {
+			return err
+		}
+		if report != "" {
+			failureKinds = append(failureKinds, notify.KindDown)
+			return errors.New(report)
+		}
+		sendUpdateNotice(ctx, send, "Nori updated successfully. All monitored services are up.", notify.KindSuccess)
 	}
 	return nil
 }
@@ -364,7 +399,7 @@ func (l *Launcher) bootstrap(opts UpOptions) (RunSpec, error) {
 	return spec, nil
 }
 
-func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string) error {
+func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string, environment ...string) error {
 	args := []string{"run", "-d", "--name", spec.ContainerName, "--restart", spec.Restart, "--stop-timeout", "645", "--env-file", l.envPath()}
 	for _, port := range spec.Ports {
 		args = append(args, "-p", port)
@@ -387,8 +422,11 @@ func (l *Launcher) runContainer(ctx context.Context, spec RunSpec, image string)
 		"-e", "NORI_CONFIG_VOLUME="+spec.ConfigVolume,
 		"-e", "NORI_SELF_CONTAINER="+spec.ContainerName,
 		"-e", "NORI_SELF_IMAGE="+spec.Image,
-		image,
 	)
+	for _, entry := range environment {
+		args = append(args, "-e", entry)
+	}
+	args = append(args, image)
 	if err := l.runner().Run(ctx, "docker", args...); err != nil {
 		return fmt.Errorf("start %s: %w", spec.ContainerName, err)
 	}
@@ -673,7 +711,7 @@ func validateEnvironmentValue(value string) error {
 
 func isProtectedEnvironmentKey(key string) bool {
 	switch key {
-	case "NORI_KEY", "NORI_SESSION_KEY", "NORI_ADMIN_HASH", "NORI_CONFIG_VOLUME", "NORI_SELF_CONTAINER", "NORI_SELF_IMAGE":
+	case "NORI_KEY", "NORI_SESSION_KEY", "NORI_ADMIN_HASH", "NORI_CONFIG_VOLUME", "NORI_SELF_CONTAINER", "NORI_SELF_IMAGE", updateReportEnv:
 		return true
 	default:
 		return false
@@ -755,6 +793,11 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	return writeAtomicInExistingDir(path, data, mode)
+}
+
+func writeAtomicInExistingDir(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".nori-")
 	if err != nil {
 		return err

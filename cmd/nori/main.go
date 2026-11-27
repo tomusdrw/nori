@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"nori/internal/config"
 	"nori/internal/docker"
 	"nori/internal/executor"
+	"nori/internal/launcher"
 	monitorpkg "nori/internal/monitor"
 	"nori/internal/notify"
 	"nori/internal/poller"
@@ -70,8 +72,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
-	if err := initializeSelfService(context.Background(), st, dk); err != nil {
-		log.Printf("self-update: %v", err)
+	selfErr := initializeSelfService(context.Background(), st, dk)
+	if selfErr != nil {
+		log.Printf("self-update: %v", selfErr)
 	}
 
 	latest := func(ctx context.Context, image string) (string, error) {
@@ -97,7 +100,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go pl.Run(ctx)
-	go mon.Run(ctx)
 	if err := sched.Start(ctx); err != nil {
 		log.Fatalf("scheduler: %v", err)
 	}
@@ -131,16 +133,35 @@ func main() {
 		}()
 	}
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv}
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		log.Fatalf("server: %v", err)
+	}
 
 	go func() {
 		log.Printf("listening on %s", cfg.ListenAddr)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}
 	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		if err := launcher.New().ReportUpdateStartup(ctx, func(ctx context.Context) string {
+			problems := mon.CheckAfterRestart(ctx)
+			if selfErr != nil {
+				if problems != "" {
+					problems = ". " + problems
+				}
+				return "Nori startup could not verify the update: " + selfErr.Error() + problems
+			}
+			return problems
+		}); err != nil && ctx.Err() == nil {
+			log.Printf("self-update: report startup: %v", err)
+		}
+		mon.Run(ctx)
+	}()
 	<-sig
 	cancel()
 	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
