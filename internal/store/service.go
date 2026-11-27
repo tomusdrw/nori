@@ -17,6 +17,7 @@ const (
 	SelfDeployScript = `docker run --rm -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$NORI_CONFIG_VOLUME:/config" \
+  -e NORI_AUTO_UPDATE_NOTICE \
   "$NORI_SELF_IMAGE@$TARGET_DIGEST" \
   update --target-digest "$TARGET_DIGEST"`
 )

@@ -776,6 +776,16 @@ any browser terminal session. Wait for Nori to return at the same address,
 then refresh its deployment history; that is when the handoff is resolved to
 `success` or `failed`.
 
+For automatic updates, the launcher sends one restart warning before stopping
+Nori and one outcome after the replacement starts and checks monitored services.
+It gives services up to one minute to recover and names any services still down
+or unverified in the summary. If the replacement cannot start or report back,
+the detached launcher sends the failure. The warning follows the **Service
+down or unhealthy** routing setting, and the outcome follows **Deploy
+succeeded** or **Deploy failed**. Channels with service-down alerts enabled
+also receive a failed service health summary. Normal outage alerts resume
+after startup.
+
 ### Launcher configuration
 
 The `nori-config` volume is the source of truth for a launcher-managed
@@ -790,8 +800,8 @@ Do not replace the managed self-service script or its launcher identity
 variables. The launcher must remain outside Nori's container so it can
 survive the container swap.
 
-There is intentionally no health check or automatic rollback. If a self-update
-leaves Nori unavailable, run a detached launcher manually with the saved
+The startup check is used for notifications. Recovery from a self-update that
+leaves Nori unavailable is manual. Run a detached launcher with the saved
 config volume, for example:
 
 ```bash

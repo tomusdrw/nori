@@ -12,6 +12,15 @@ import (
 // EventKind identifies the operational event a notification reports.
 type EventKind string
 
+// AutoUpdateNoticeEnv passes routing and the instance name to the detached
+// launcher. Notification credentials stay in the launcher's env file.
+const AutoUpdateNoticeEnv = "NORI_AUTO_UPDATE_NOTICE"
+
+type AutoUpdateNotice struct {
+	BotName string
+	Routing Routing
+}
+
 const (
 	// KindDeployFailed covers failed manual, automatic, and scheduled
 	// deployments.

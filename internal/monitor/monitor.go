@@ -63,6 +63,92 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 }
 
+// CheckAfterRestart gives services time to recover and returns one summary of
+// any remaining problems. Call it before Run starts using the same monitor
+// so an outage already counted here does not trigger an individual alert.
+func (m *Monitor) CheckAfterRestart(ctx context.Context) string {
+	svcs, err := m.store.ListServices(ctx)
+	if err != nil {
+		return "Nori restarted, but the service list could not be loaded: " + err.Error()
+	}
+	issues := make([]string, len(svcs))
+	for i, svc := range svcs {
+		issues[i] = svc.Name + " (health check did not finish)"
+	}
+
+	ticker := time.NewTicker(min(m.interval, 5*time.Second))
+	defer ticker.Stop()
+	for {
+		for i, svc := range svcs {
+			if ctx.Err() != nil {
+				break
+			}
+			health, err := m.observe(ctx, svc, true)
+			if ctx.Err() != nil {
+				break
+			}
+			switch {
+			case err != nil:
+				log.Printf("monitor: list containers for %q: %v", svc.Name, err)
+				issues[i] = svc.Name + " (container status unavailable)"
+			case health.up:
+				issues[i] = ""
+			default:
+				issues[i] = svc.Name
+			}
+		}
+		var problems []string
+		for _, issue := range issues {
+			if issue != "" {
+				problems = append(problems, issue)
+			}
+		}
+		if len(problems) == 0 {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			for i, issue := range issues {
+				if issue != "" {
+					// A healthy observation resets the episode and permits
+					// an individual alert for a later outage.
+					m.states[svcs[i].ID] = serviceState{consecutiveDown: 2}
+				}
+			}
+			return "Nori restarted, but these services did not pass startup checks: " + strings.Join(problems, ", ")
+		case <-ticker.C:
+		}
+	}
+}
+
+type serviceHealth struct {
+	containers   []docker.Container
+	up           bool
+	probeFailure string
+}
+
+func (m *Monitor) observe(ctx context.Context, svc *store.Service, starting bool) (serviceHealth, error) {
+	containers, err := m.docker.ListByService(ctx, svc.Name)
+	if err != nil {
+		return serviceHealth{}, err
+	}
+	health := serviceHealth{containers: containers}
+	for _, c := range containers {
+		if c.State == "running" && c.Health != "unhealthy" && (!starting || c.Health != "starting") {
+			health.up = true
+			break
+		}
+	}
+	if health.up && svc.HealthURL != "" {
+		probeUp, detail := m.probe(ctx, svc.HealthURL)
+		health.up = probeUp
+		if !probeUp {
+			health.probeFailure = "health probe GET " + svc.HealthURL + ": " + detail
+		}
+	}
+	return health, nil
+}
+
 // Tick performs a single observation pass. It is callable from tests.
 func (m *Monitor) Tick(ctx context.Context) {
 	svcs, err := m.store.ListServices(ctx)
@@ -71,22 +157,18 @@ func (m *Monitor) Tick(ctx context.Context) {
 		return
 	}
 	for _, svc := range svcs {
-		containers, err := m.docker.ListByService(ctx, svc.Name)
+		if ctx.Err() != nil {
+			return
+		}
+		health, err := m.observe(ctx, svc, false)
 		if err != nil {
 			log.Printf("monitor: list containers for %q: %v", svc.Name, err)
 			continue
 		}
-		containerUp := false
-		for _, c := range containers {
-			if c.State == "running" && c.Health != "unhealthy" {
-				containerUp = true
-				break
-			}
+		if ctx.Err() != nil {
+			return
 		}
-		probeUp, probeDetail := true, ""
-		if svc.HealthURL != "" {
-			probeUp, probeDetail = m.probe(ctx, svc.HealthURL)
-		}
+		containers := health.containers
 		var firstDigest string
 		if len(containers) > 0 {
 			firstDigest = containers[0].Digest
@@ -96,8 +178,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 		st := m.states[svc.ID]
 		now := time.Now().UTC()
 
-		up := containerUp && probeUp
-		if up {
+		if health.up {
 			if !st.up && st.downAlertSent {
 				m.maybeSendRecovery(ctx, svc, firstDigest)
 			}
@@ -132,8 +213,8 @@ func (m *Monitor) Tick(ctx context.Context) {
 			reason = "no containers"
 		}
 
-		if containerUp && !probeUp {
-			reason = "health probe GET " + svc.HealthURL + ": " + probeDetail
+		if health.probeFailure != "" {
+			reason = health.probeFailure
 		}
 
 		// Alert only on the second consecutive down observation, at most once
